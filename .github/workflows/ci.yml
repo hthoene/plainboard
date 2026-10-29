@@ -17,7 +17,7 @@ jobs:
     name: Backend tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build backend image
         run: docker build -f app/Dockerfile --target backend -t plainboard-app:ci .
       - name: Run tests
@@ -27,7 +27,7 @@ jobs:
     name: Runner tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build runner image
         run: docker build -f runner/Dockerfile -t plainboard-runner:ci .
       - name: Run tests
@@ -40,7 +40,7 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -54,5 +54,5 @@ jobs:
     name: Compose config
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: docker compose config --quiet

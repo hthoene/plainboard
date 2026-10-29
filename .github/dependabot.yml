@@ -20,6 +20,12 @@ updates:
     directories: ["/app", "/runner"]
     schedule:
       interval: weekly
+    ignore:
+      # Stay on Node.js LTS; major Node/Python base image upgrades are done deliberately.
+      - dependency-name: node
+        update-types: [version-update:semver-major]
+      - dependency-name: python
+        update-types: [version-update:semver-minor, version-update:semver-major]
 
   - package-ecosystem: github-actions
     directory: /

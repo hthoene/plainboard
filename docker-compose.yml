@@ -1,0 +1,47 @@
+# PlainBoard - start with:  docker compose up -d --build   then open http://localhost:8080
+# Optional configuration: copy .env.example to .env
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    image: plainboard-app
+    restart: unless-stopped
+    ports:
+      - "${PLAINBOARD_BIND:-127.0.0.1}:${PLAINBOARD_PORT:-8080}:8080"
+    environment:
+      PLAINBOARD_PASSWORD: ${PLAINBOARD_PASSWORD:-}
+      PLAINBOARD_RUNNER_URL: http://runner:8090
+      PLAINBOARD_INTERNAL_URL: http://app:8080
+      # Optional credential fallbacks (usually entered in the UI under Settings). Prefixed on
+      # purpose, so keys that happen to be exported in your shell are never picked up silently.
+      CLAUDE_CODE_OAUTH_TOKEN: ${PLAINBOARD_CLAUDE_CODE_OAUTH_TOKEN:-}
+      ANTHROPIC_API_KEY: ${PLAINBOARD_ANTHROPIC_API_KEY:-}
+      GITHUB_TOKEN: ${PLAINBOARD_GITHUB_TOKEN:-}
+    volumes:
+      - data:/data
+      - uploads:/uploads
+    depends_on:
+      runner:
+        condition: service_healthy
+
+  runner:
+    build:
+      context: .
+      dockerfile: runner/Dockerfile
+    image: plainboard-runner
+    restart: unless-stopped
+    # Not published: only the app talks to the runner.
+    volumes:
+      # Named volume by default. Set PLAINBOARD_WORKSPACES_DIR to a host folder (e.g. D:/Code)
+      # to let agents work directly on local project folders.
+      - ${PLAINBOARD_WORKSPACES_DIR:-workspaces}:/workspaces
+      - uploads:/uploads:ro
+      - agent-home:/home/agent
+
+volumes:
+  data:
+  uploads:
+  workspaces:
+  agent-home:

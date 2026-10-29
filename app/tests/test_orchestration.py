@@ -1,0 +1,319 @@
+import json
+from datetime import datetime, timedelta
+
+from conftest import FakeRunner, agents_by_slug, idle, runs_of, wait_for
+
+
+def chat(client, agent_id: int, text: str) -> dict:
+    resp = client.post(f"/api/agents/{agent_id}/messages", json={"text": text})
+    assert resp.status_code == 202, resp.text
+    return resp.json()
+
+
+def conversation(client, agent_id: int) -> dict:
+    return client.get(f"/api/agents/{agent_id}/conversation").json()
+
+
+def make_dev(client, pid: int, **extra) -> dict:
+    body = {"name": "Dev", "role": "Developer", "description": "Backend API", **extra}
+    resp = client.post(f"/api/projects/{pid}/agents", json=body)
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
+def runner(client) -> FakeRunner:
+    return client.app_ref.state.runner
+
+
+def test_chat_run_persists_messages_and_usage(client, project):
+    pid = project["id"]
+    manager = agents_by_slug(client, pid)["manager"]
+    chat(client, manager["id"], "SAY hello there")
+    wait_for(lambda: idle(client, pid))
+    conv = conversation(client, manager["id"])
+    kinds = [(m["role"], m["kind"]) for m in conv["messages"]]
+    assert kinds == [("user", "text"), ("assistant", "text")]
+    assert conv["messages"][1]["content"] == "hello there"
+    assert conv["provider_session_id"] and conv["context_tokens"] == 1000
+    spec = runner(client).specs[-1]
+    assert spec.toolset == "board" and "delegate" in {t.name for t in spec.bridge.tools}
+    assert "Current time:" in spec.prompt
+
+
+def test_worker_tools_are_restricted(client, project):
+    pid = project["id"]
+    dev = make_dev(client, pid)
+    chat(client, dev["id"], 'TOOL create_agent {"name": "X", "role": "r", "description": "d"}')
+    wait_for(lambda: idle(client, pid))
+    tool_msg = next(m for m in conversation(client, dev["id"])["messages"] if m["kind"] == "tool")
+    assert tool_msg["meta"]["is_error"] and "not available" in tool_msg["meta"]["result"]
+    names = {t.name for t in runner(client).specs[-1].bridge.tools}
+    assert "delegate" not in names and "update_task" not in names and "ask_agent" in names
+    assert len(agents_by_slug(client, pid)) == 2
+
+
+def test_ticket_handoff_and_delegation_flow(client, project):
+    pid = project["id"]
+    make_dev(client, pid)
+    manager = agents_by_slug(client, pid)["manager"]
+    ticket = client.post(f"/api/projects/{pid}/tasks", json={"title": "Build the API", "description": "REST endpoints", "status": "todo"}).json()
+
+    # Moving the ticket to In Progress hands it to the manager.
+    client.patch(f"/api/tasks/{ticket['id']}", json={"status": "in_progress"})
+    wait_for(lambda: idle(client, pid))
+    handoff = next(r for r in runs_of(client, pid) if r["trigger"] == "ticket")
+    assert handoff["task_id"] == ticket["id"] and "Build the API" in handoff["input_text"]
+
+    # The manager delegates a clear assignment; the worker's report comes back.
+    args = {"agent": "dev", "title": "Implement endpoints", "instructions": "SAY API done on branch feat/api", "ticket_number": 1}
+    chat(client, manager["id"], "TOOL delegate " + json.dumps(args))
+    wait_for(lambda: any(r["trigger"] == "wake" and r["status"] == "succeeded" for r in runs_of(client, pid)))
+
+    (assignment,) = client.get(f"/api/projects/{pid}/assignments").json()
+    assert assignment["result"] == "API done on branch feat/api" and assignment["task_id"] == ticket["id"]
+    detail = client.get(f"/api/tasks/{ticket['id']}").json()
+    assert any("Assignment #1" in c["body"] for c in detail["comments"])
+    assert detail["assignments"][0]["status"] == "done"
+
+    # Manager was woken up with the report in its inbox.
+    wake_msg = next(m for m in conversation(client, manager["id"])["messages"] if m["meta"].get("trigger") == "wake")
+    assert "Assignment #1" in wake_msg["meta"]["inbox"][0]
+
+
+def test_effort_per_assignment(client, project):
+    pid = project["id"]
+    make_dev(client, pid, effort="low")
+    manager = agents_by_slug(client, pid)["manager"]
+    args = {"agent": "dev", "title": "Hard bug", "instructions": "SAY fixed", "effort": "high"}
+    chat(client, manager["id"], "TOOL delegate " + json.dumps(args))
+    wait_for(lambda: any(r["trigger"] == "wake" and r["status"] == "succeeded" for r in runs_of(client, pid)))
+    (assignment,) = client.get(f"/api/projects/{pid}/assignments").json()
+    assert assignment["effort"] == "high"
+    dev_specs = [s for s in runner(client).specs if s.workspace.path.endswith("/dev")]
+    assert dev_specs[-1].effort == "high"
+    # The agent's own setting is untouched for normal runs.
+    dev = agents_by_slug(client, pid)["dev"]
+    assert dev["effort"] == "low"
+    chat(client, dev["id"], "SAY hi")
+    wait_for(lambda: idle(client, pid))
+    assert [s for s in runner(client).specs if s.workspace.path.endswith("/dev")][-1].effort == "low"
+
+
+def test_ask_agent_returns_answer(client, project):
+    pid = project["id"]
+    make_dev(client, pid)
+    manager = agents_by_slug(client, pid)["manager"]
+    chat(client, manager["id"], 'TOOL ask_agent {"agent": "dev", "question": "SAY 42"}')
+    wait_for(lambda: idle(client, pid))
+    texts = [m["content"] for m in conversation(client, manager["id"])["messages"] if m["role"] == "assistant" and m["kind"] == "text"]
+    assert texts[-1] == "Dev: 42"
+    ask_run = next(r for r in runs_of(client, pid) if r["trigger"] == "ask")
+    assert ask_run["parent_run_id"] is not None
+
+
+def test_message_agent_reply_wakes_sender(client, project):
+    pid = project["id"]
+    make_dev(client, pid)
+    manager = agents_by_slug(client, pid)["manager"]
+    chat(client, manager["id"], 'TOOL message_agent {"agent": "dev", "message": "SAY pong"}')
+    wait_for(lambda: any(r["trigger"] == "wake" and r["status"] == "succeeded" for r in runs_of(client, pid)))
+    wake_msg = next(m for m in conversation(client, manager["id"])["messages"] if m["meta"].get("trigger") == "wake")
+    assert wake_msg["meta"]["inbox"] == ["Reply from Dev: pong"]
+
+
+def test_compression_resets_session_and_carries_memory(client, project):
+    pid = project["id"]
+    dev = make_dev(client, pid, context_limit_tokens=5000, keep_recent_messages=2)
+    chat(client, dev["id"], "SAY first answer")  # fresh session: base context 1000
+    wait_for(lambda: idle(client, pid))
+    assert conversation(client, dev["id"])["session_base_tokens"] == 1000
+    chat(client, dev["id"], "SAY grown\nCONTEXT 9000")  # same session grew by 8000
+    wait_for(lambda: idle(client, pid))
+    conv = conversation(client, dev["id"])
+    assert conv["compressions"] == 1 and conv["provider_session_id"] is None
+    assert conv["messages"][-1]["kind"] == "summary" and conv["messages"][-1]["content"] == "SUMMARY #1"
+    assert runner(client).completions[-1].model == "claude-haiku-5-5"
+
+    chat(client, dev["id"], "SAY second")
+    wait_for(lambda: idle(client, pid))
+    spec = runner(client).specs[-1]
+    assert spec.resume_session_id is None
+    assert "## Memory" in spec.system_prompt and "SUMMARY #1" in spec.system_prompt
+
+    chat(client, dev["id"], "SAY third")
+    wait_for(lambda: idle(client, pid))
+    assert runner(client).specs[-1].resume_session_id is not None
+
+
+def test_no_compression_below_base_context(client, project):
+    """A limit below the fixed base context must not compress (and reset the session) every turn."""
+    pid = project["id"]
+    dev = make_dev(client, pid, context_limit_tokens=5000, keep_recent_messages=0)
+    for _ in range(2):
+        chat(client, dev["id"], "SAY hi\nCONTEXT 9000")
+        wait_for(lambda: idle(client, pid))
+    conv = conversation(client, dev["id"])
+    assert conv["compressions"] == 0 and conv["provider_session_id"] is not None
+    assert conv["session_base_tokens"] == 9000
+
+
+def test_should_compress_rule():
+    from plainboard.orchestration.context import should_compress
+
+    assert should_compress(70_000, 18_000, 60_000)
+    assert not should_compress(50_000, 18_000, 60_000)  # below limit
+    assert not should_compress(20_000, 18_000, 15_000)  # limit below base: needs real growth
+    assert should_compress(23_000, 18_000, 15_000)
+
+
+def test_system_prompt_frozen_per_session(client, project):
+    """Briefing changes mid-session arrive as an update; the system prompt (cache prefix) stays identical."""
+    pid = project["id"]
+    dev = make_dev(client, pid, context_limit_tokens=5000, keep_recent_messages=1)
+    chat(client, dev["id"], "SAY one")
+    wait_for(lambda: idle(client, pid))
+    first = runner(client).specs[-1].system_prompt
+
+    client.post(f"/api/projects/{pid}/notes", json={"title": "Stack", "content": "Use FastAPI", "pinned": True})
+    chat(client, dev["id"], "SAY two")
+    wait_for(lambda: idle(client, pid))
+    spec = runner(client).specs[-1]
+    assert spec.resume_session_id and spec.system_prompt == first
+    assert spec.prompt.startswith("[Briefing update]") and "Use FastAPI" in spec.prompt and "### Pinned notes" in spec.prompt
+    msg = [m for m in conversation(client, dev["id"])["messages"] if m["role"] == "user"][-1]
+    assert msg["meta"]["briefing_update"] == ["pinned_notes"]
+
+    chat(client, dev["id"], "SAY three")  # already delivered: no repeated update
+    wait_for(lambda: idle(client, pid))
+    assert "[Briefing update]" not in runner(client).specs[-1].prompt
+
+    # After compression the new session gets a fresh system prompt with everything current.
+    chat(client, dev["id"], "SAY four\nCONTEXT 9000")
+    wait_for(lambda: idle(client, pid))
+    assert conversation(client, dev["id"])["compressions"] == 1
+    chat(client, dev["id"], "SAY five")
+    wait_for(lambda: idle(client, pid))
+    spec = runner(client).specs[-1]
+    assert spec.resume_session_id is None and "Use FastAPI" in spec.system_prompt and "[Briefing update]" not in spec.prompt
+
+
+def test_session_without_frozen_prompt_is_kept(client, project):
+    """Sessions created before prompts were frozen continue (no forced new session)."""
+    from sqlalchemy import update
+
+    from plainboard.db import sessionmaker
+    from plainboard.models import Conversation
+
+    pid = project["id"]
+    dev = make_dev(client, pid)
+    chat(client, dev["id"], "SAY one")
+    wait_for(lambda: idle(client, pid))
+    session_id = runner(client).specs[-1].resume_session_id or conversation(client, dev["id"])["provider_session_id"]
+
+    async def forget_snapshot():
+        async with sessionmaker()() as s:
+            await s.execute(update(Conversation).where(Conversation.agent_id == dev["id"]).values(system_prompt=None, prompt_sections=None))
+            await s.commit()
+
+    client.portal.call(forget_snapshot)
+    chat(client, dev["id"], "SAY two")
+    wait_for(lambda: idle(client, pid))
+    assert runner(client).specs[-1].resume_session_id == session_id
+
+
+def test_queued_run_can_be_cancelled(client, project):
+    pid = project["id"]
+    client.put("/api/settings", json={"values": {"max_parallel_runs": 0}})
+    manager = agents_by_slug(client, pid)["manager"]
+    run = chat(client, manager["id"], "SAY never")
+    assert client.post(f"/api/runs/{run['id']}/cancel").json() == {"cancelled": True}
+    assert runs_of(client, pid)[0]["status"] == "cancelled"
+
+
+def test_schedule_fires_once(client, project):
+    pid = project["id"]
+    manager = agents_by_slug(client, pid)["manager"]
+    past = (datetime.now() - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%S")
+    sched = client.post(
+        f"/api/projects/{pid}/schedules",
+        json={"name": "Report", "agent_id": manager["id"], "prompt": "SAY weekly report", "kind": "once", "run_at": past},
+    ).json()
+    assert sched["next_run_at"] is not None
+    fired = client.portal.call(client.app_ref.state.scheduler.tick)
+    assert fired == 1
+    wait_for(lambda: idle(client, pid))
+    run = runs_of(client, pid)[0]
+    assert run["trigger"] == "schedule" and run["status"] == "succeeded"
+    sched = client.get(f"/api/projects/{pid}/schedules").json()[0]
+    assert sched["enabled"] is False and sched["next_run_at"] is None
+
+
+def test_cron_schedule_validation(client, project):
+    pid = project["id"]
+    manager = agents_by_slug(client, pid)["manager"]
+    bad = client.post(f"/api/projects/{pid}/schedules", json={"name": "x", "agent_id": manager["id"], "prompt": "p", "kind": "cron", "cron": "nope"})
+    assert bad.status_code == 400
+    good = client.post(
+        f"/api/projects/{pid}/schedules", json={"name": "x", "agent_id": manager["id"], "prompt": "p", "kind": "cron", "cron": "0 9 * * 1-5"}
+    ).json()
+    assert good["next_run_at"] and good["timezone"] == "Europe/Berlin"
+
+
+def test_manager_tools_manage_notes_schedules_agents(client, project):
+    pid = project["id"]
+    manager = agents_by_slug(client, pid)["manager"]
+    lines = [
+        'TOOL create_agent {"name": "QA", "role": "Tester", "description": "Testing", "model": "claude-haiku-5-5"}',
+        'TOOL create_note {"title": "Stack", "content": "FastAPI + React", "pinned": true}',
+        'TOOL create_schedule {"name": "Standup", "prompt": "Summarize progress", "cron": "0 9 * * 1-5"}',
+        'TOOL create_task {"title": "Follow-up", "status": "todo"}',
+        'TOOL update_task {"number": 1, "status": "review"}',
+    ]
+    chat(client, manager["id"], "\n".join(lines))
+    wait_for(lambda: idle(client, pid))
+    tool_msgs = [m for m in conversation(client, manager["id"])["messages"] if m["kind"] == "tool"]
+    assert len(tool_msgs) == 5 and not any(m["meta"]["is_error"] for m in tool_msgs), [m["meta"] for m in tool_msgs]
+    assert agents_by_slug(client, pid)["qa"]["model"] == "claude-haiku-5-5"
+    assert client.get(f"/api/projects/{pid}/notes").json()[0]["title"] == "Stack"
+    assert client.get(f"/api/projects/{pid}/schedules").json()[0]["cron"] == "0 9 * * 1-5"
+    assert client.get(f"/api/projects/{pid}/tasks").json()[0]["status"] == "review"
+
+    # Pinned notes reach the agent: as a briefing update now, in the system prompt of its next session.
+    chat(client, manager["id"], "SAY ok")
+    wait_for(lambda: idle(client, pid))
+    assert "FastAPI + React" in runner(client).specs[-1].prompt
+    client.post(f"/api/agents/{manager['id']}/reset-session")
+    chat(client, manager["id"], "SAY fresh")
+    wait_for(lambda: idle(client, pid))
+    assert "FastAPI + React" in runner(client).specs[-1].system_prompt
+
+
+def test_deadlock_detection():
+    from plainboard.orchestration.run_manager import RunManager
+
+    rm = RunManager.__new__(RunManager)
+    rm._waits_for = {}
+    rm._add_wait(1, 2)
+    rm._add_wait(2, 3)
+    assert rm._would_deadlock(3, 1)
+    assert not rm._would_deadlock(1, 3)
+    rm._remove_wait(2, 3)
+    assert not rm._would_deadlock(3, 1)
+
+
+def test_tool_schemas_are_compact():
+    from plainboard.tools import registry
+
+    def has_title_keyword(node, mapping=False) -> bool:
+        if isinstance(node, dict):
+            if not mapping and isinstance(node.get("title"), str):
+                return True
+            return any(has_title_keyword(v, mapping=(k in ("properties", "$defs") and not mapping)) for k, v in node.items())
+        if isinstance(node, list):
+            return any(has_title_keyword(v) for v in node)
+        return False
+
+    for tool in registry.all_tools():
+        schema = tool.definition().input_schema
+        assert not has_title_keyword(schema), tool.name
+        assert '"anyOf"' not in json.dumps(schema) and '"default": null' not in json.dumps(schema), tool.name

@@ -1,0 +1,60 @@
+"""Wire protocol shared by the PlainBoard app (orchestrator) and runner (executor).
+
+The app builds a :class:`RunSpec`, the runner executes it with a provider and streams
+back :data:`RunEvent` objects as NDJSON. Keep this package dependency-free (pydantic only)
+so new providers or services can reuse it.
+"""
+
+from .models import (
+    AssistantTextEvent,
+    CheckResult,
+    CompletionResult,
+    CompletionSpec,
+    Credentials,
+    ErrorEvent,
+    McpServerSpec,
+    ModelInfo,
+    ProviderInfo,
+    RepoSpec,
+    ResultEvent,
+    RunEvent,
+    RunSpec,
+    SessionEvent,
+    TextDeltaEvent,
+    ToolBridgeSpec,
+    ToolCallResult,
+    ToolDef,
+    ToolResultEvent,
+    ToolUseEvent,
+    Toolset,
+    UsageEvent,
+    WorkspaceSpec,
+    parse_event,
+)
+
+__all__ = [
+    "AssistantTextEvent",
+    "CheckResult",
+    "CompletionResult",
+    "CompletionSpec",
+    "Credentials",
+    "ErrorEvent",
+    "McpServerSpec",
+    "ModelInfo",
+    "ProviderInfo",
+    "RepoSpec",
+    "ResultEvent",
+    "RunEvent",
+    "RunSpec",
+    "SessionEvent",
+    "TextDeltaEvent",
+    "ToolBridgeSpec",
+    "ToolCallResult",
+    "ToolDef",
+    "ToolResultEvent",
+    "ToolUseEvent",
+    "Toolset",
+    "UsageEvent",
+    "WorkspaceSpec",
+    "parse_event",
+]

@@ -1,0 +1,201 @@
+import json
+
+import httpx
+import pytest
+from claude_agent_sdk import AssistantMessage, ResultMessage, SystemMessage, TextBlock, ToolResultBlock, ToolUseBlock, UserMessage
+from fastapi.testclient import TestClient
+from plainboard_protocol import Credentials, McpServerSpec, ToolBridgeSpec, ToolDef, parse_event
+
+from plainboard_runner import config
+from plainboard_runner.main import app
+from plainboard_runner.providers.claude_code import EventMapper, auth_env, external_mcp_config
+from plainboard_runner.tool_bridge import ToolBridge
+
+
+@pytest.fixture(autouse=True)
+def workspaces(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "WORKSPACES_ROOT", tmp_path)
+    monkeypatch.setattr("plainboard_runner.workspace.WORKSPACES_ROOT", tmp_path)
+    return tmp_path
+
+
+def run_spec(workspaces, prompt: str, tools=None) -> dict:
+    return {
+        "run_id": "r1",
+        "provider": "mock",
+        "model": "mock-large",
+        "system_prompt": "You are a test agent.",
+        "prompt": prompt,
+        "workspace": {"path": str(workspaces / "p" / "a")},
+        "credentials": {},
+        "bridge": {"base_url": "http://app", "run_id": "r1", "run_token": "t", "tools": tools or []},
+    }
+
+
+def test_providers_lists_builtin():
+    names = {p["name"] for p in TestClient(app).get("/providers").json()}
+    assert {"claude_code", "mock"} <= names
+
+
+def test_mock_run_streams_events(workspaces):
+    with TestClient(app).stream("POST", "/runs", json=run_spec(workspaces, "SAY hello world")) as resp:
+        events = [parse_event(line) for line in resp.iter_lines() if line]
+    types = [e.type for e in events]
+    assert types[0] == "session"
+    assert "assistant_text" in types and types[-1] == "result"
+    assert events[-1].text == "hello world"
+    assert (workspaces / "p" / "a").is_dir()
+
+
+def test_workspace_outside_root_is_rejected(workspaces):
+    spec = run_spec(workspaces, "SAY x")
+    spec["workspace"]["path"] = "/etc"
+    with TestClient(app).stream("POST", "/runs", json=spec) as resp:
+        events = [parse_event(line) for line in resp.iter_lines() if line]
+    assert events[-1].type == "error" and "outside" in events[-1].message
+
+
+async def test_bridge_proxies_remote_tools(tmp_path):
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["auth"] = request.headers["authorization"]
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"text": "ok", "is_error": False})
+
+    spec = ToolBridgeSpec(base_url="http://app", run_id="7", run_token="secret", tools=[ToolDef(name="list_tasks", description="", input_schema={})])
+    bridge = ToolBridge(spec, tmp_path)
+    bridge._client = httpx.AsyncClient(base_url="http://app", headers={"Authorization": "Bearer secret"}, transport=httpx.MockTransport(handler))
+    result = await bridge.call("list_tasks", {"status": "todo"})
+    assert result.text == "ok" and not result.is_error
+    assert seen == {"path": "/api/internal/runs/7/tools/list_tasks", "auth": "Bearer secret", "body": {"status": "todo"}}
+    assert (await bridge.call("nope", {})).is_error
+
+
+async def test_attach_file_uploads_from_workspace(tmp_path):
+    (tmp_path / "report.txt").write_text("hi")
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["body"] = request.content
+        return httpx.Response(200, json={"text": "Attached report.txt to ticket #3.", "is_error": False})
+
+    spec = ToolBridgeSpec(base_url="http://app", run_id="9", run_token="t", tools=[ToolDef(name="attach_file", description="", input_schema={}, local=True)])
+    bridge = ToolBridge(spec, tmp_path)
+    bridge._client = httpx.AsyncClient(base_url="http://app", transport=httpx.MockTransport(handler))
+    result = await bridge.call("attach_file", {"task_number": 3, "path": "report.txt"})
+    assert not result.is_error, result.text
+    assert seen["path"] == "/api/internal/runs/9/attachments"
+    assert b'name="task_number"' in seen["body"] and b"hi" in seen["body"]
+    assert (await bridge.call("attach_file", {"task_number": 3, "path": "missing.txt"})).is_error
+
+
+def _git_repo(path, content: str) -> str:
+    import subprocess
+
+    path.mkdir(parents=True)
+    run = lambda *a: subprocess.run(a, cwd=path, check=True, capture_output=True)  # noqa: E731
+    run("git", "init", "-q", "-b", "main")
+    (path / "README.md").write_text(content)
+    run("git", "add", ".")
+    run("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init")
+    return f"file://{path}"
+
+
+async def test_workspace_clones_each_repository(workspaces, tmp_path):
+    from plainboard_protocol import RepoSpec, WorkspaceSpec
+
+    from plainboard_runner.workspace import prepare_workspace
+
+    front = _git_repo(tmp_path / "src" / "front", "frontend")
+    back = _git_repo(tmp_path / "src" / "back", "backend")
+    spec = WorkspaceSpec(
+        path=str(workspaces / "proj" / "dev"),
+        repos=[RepoSpec(name="frontend", url=front), RepoSpec(name="backend", url=back, branch="main"), RepoSpec(name="broken", url="file:///nope")],
+    )
+    path, problems = await prepare_workspace(spec, Credentials())
+    assert (path / "frontend" / "README.md").read_text() == "frontend"
+    assert (path / "backend" / "README.md").read_text() == "backend"
+    assert len(problems) == 1 and "broken" in problems[0]
+    # Second run: existing clones are kept, nothing is re-cloned.
+    (path / "frontend" / "local.txt").write_text("work in progress")
+    _, problems = await prepare_workspace(spec, Credentials())
+    assert (path / "frontend" / "local.txt").exists() and len(problems) == 1
+
+
+def test_clone_problems_reach_the_agent(workspaces, monkeypatch):
+    from plainboard_runner.providers import get_provider
+
+    mock = get_provider("mock")
+    seen = {}
+    original = mock.run
+
+    def capture(spec, bridge):
+        seen["prompt"] = spec.prompt
+        return original(spec, bridge)
+
+    monkeypatch.setattr(mock, "run", capture)
+    spec = run_spec(workspaces, "SAY ok")
+    spec["workspace"]["repos"] = [{"name": "broken", "url": "file:///nope"}]
+    with TestClient(app).stream("POST", "/runs", json=spec) as resp:
+        events = [parse_event(line) for line in resp.iter_lines() if line]
+    assert events[-1].type == "result"  # the run still happens
+    assert seen["prompt"].startswith("[Workspace notice]") and "Could not clone 'broken'" in seen["prompt"]
+
+
+def test_github_repo_listing(monkeypatch):
+    calls = {}
+
+    async def fake_run_cmd(args, cwd, env, timeout=600):
+        calls["args"], calls["env"] = args, env
+        return "\n".join(
+            [
+                '{"full_name":"acme/api","name":"api","clone_url":"https://github.com/acme/api.git","description":"API","default_branch":"main","private":true}',
+                '{"full_name":"me/site","name":"site","clone_url":"https://github.com/me/site.git","description":null,"default_branch":"master","private":false}',
+            ]
+        )
+
+    monkeypatch.setattr("plainboard_runner.main.run_cmd", fake_run_cmd)
+    client = TestClient(app)
+    assert client.post("/github/repos", json={}).json()["ok"] is False  # no token
+    body = client.post("/github/repos", json={"github_token": "tok"}).json()
+    assert body["ok"] and [r["full_name"] for r in body["repos"]] == ["acme/api", "me/site"]
+    assert body["repos"][0]["private"] is True
+    assert calls["env"]["GH_TOKEN"] == "tok" and "--paginate" in calls["args"]
+
+
+def test_event_mapper_translates_sdk_messages():
+    mapper = EventMapper()
+    events = []
+    events += mapper.map(SystemMessage(subtype="init", data={"session_id": "s1"}))
+    events += mapper.map(
+        AssistantMessage(
+            content=[TextBlock(text="Working on it"), ToolUseBlock(id="t1", name="Bash", input={"command": "ls"})],
+            model="claude-sonnet-5-5",
+            usage={"input_tokens": 10, "cache_read_input_tokens": 1000, "cache_creation_input_tokens": 50, "output_tokens": 40},
+        )
+    )
+    events += mapper.map(UserMessage(content=[ToolResultBlock(tool_use_id="t1", content="file.txt", is_error=False)]))
+    events += mapper.map(
+        ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=2, session_id="s1",
+                      total_cost_usd=0.01, usage={"input_tokens": 20, "output_tokens": 80}, result="Done")
+    )
+    assert [e.type for e in events] == ["session", "assistant_text", "tool_use", "usage", "tool_result", "result"]
+    assert events[3].context_tokens == 1100
+    assert events[-1].context_tokens == 1100 and events[-1].text == "Done" and events[-1].cost_usd == 0.01
+
+
+def test_auth_env_modes():
+    assert auth_env(Credentials(claude_auth_mode="oauth_token", claude_oauth_token="tok"))["CLAUDE_CODE_OAUTH_TOKEN"] == "tok"
+    assert auth_env(Credentials(claude_auth_mode="api_key", anthropic_api_key="key"))["ANTHROPIC_API_KEY"] == "key"
+    assert "ANTHROPIC_API_KEY" not in auth_env(Credentials(claude_auth_mode="runner_login"))
+    with pytest.raises(RuntimeError):
+        auth_env(Credentials(claude_auth_mode="oauth_token"))
+
+
+def test_external_mcp_config():
+    assert external_mcp_config(McpServerSpec(name="fs", transport="stdio", command="npx", args=["-y", "x"]))["command"] == "npx"
+    http = external_mcp_config(McpServerSpec(name="api", transport="http", url="https://x/mcp", headers={"A": "b"}))
+    assert http == {"type": "http", "url": "https://x/mcp", "headers": {"A": "b"}}

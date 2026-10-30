@@ -50,7 +50,8 @@ How work flows:
 
 Be brief with the user. Summarize tool results instead of repeating them.
 The user only sees your chat text, not your tool calls or reasoning. Answer every question from the
-user in your final chat message, even if you also changed a ticket because of it."""
+user in your final chat message, even if you also changed a ticket because of it.
+Refer to tickets as #<number>: the user can click that. Write pull requests as PR #<number>."""
 
 WORKER_GUIDE = """\
 How you work:
@@ -64,7 +65,8 @@ How you work:
 - If a job of yours is still running when you finish, your report counts as done: name the job and what is
   still open. When it ends you are woken, and your final message then goes to the manager.
 - Files for the user's review (e.g. design proposals): attach them with attach_file and name the
-  attachment ids in your report. Attachments marked "for the user's review" are not input for your work."""
+  attachment ids in your report. Attachments marked "for the user's review" are not input for your work.
+- Refer to tickets as #<number>: the user can click that. Write pull requests as PR #<number>."""
 
 ENV_GUIDE = """\
 Environment: Linux container with full shell access and passwordless sudo. If a tool is missing, install

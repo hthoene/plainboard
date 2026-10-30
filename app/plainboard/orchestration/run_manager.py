@@ -418,7 +418,12 @@ class RunManager:
                 prompt=turn.prompt,
                 resume_session_id=turn.resume_session_id,
                 max_turns=agent.max_turns,
-                workspace=WorkspaceSpec(path=workspace_path(project, agent), repos=await repo_service.specs_for_agent(s, agent), shared=bool(project.workspace_path)),
+                workspace=WorkspaceSpec(
+                    path=workspace_path(project, agent),
+                    repos=await repo_service.specs_for_agent(s, agent),
+                    shared=bool(project.workspace_path),
+                    setup_script=project.setup_script,
+                ),
                 credentials=settings_service.credentials(values, project_service.github_token(project)),
                 bridge=ToolBridgeSpec(
                     base_url=get_config().internal_url, run_id=str(run.id), run_token=ctx.token, tools=registry.tool_defs_for(agent)

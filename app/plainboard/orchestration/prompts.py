@@ -42,6 +42,11 @@ How work flows:
 - Repositories: each agent works on its own clone of the repositories it has access to. Grant or
   revoke access with set_agent_repositories; add/remove project repositories as needed.
 - Schedules run prompts later or repeatedly (cron), e.g. reminders, reports, recurring checks.
+- The environment is your job, never the user's. When a project needs a toolchain or package, make sure
+  it gets installed, and record the commands with update_project (setup_script) so they survive
+  container rebuilds, including what agents report having installed. The script runs automatically
+  before the next agent run, and again after every change or container restart, so it must be safe to
+  repeat. No secrets.
 
 Be brief with the user. Summarize tool results instead of repeating them.
 The user only sees your chat text, not your tool calls or reasoning. Answer every question from the
@@ -55,10 +60,15 @@ How you work:
 - You can read tickets (get_task) and comment on them. Ticket status is managed by the manager.
 - Ask teammates with ask_agent (waits for the answer) or message_agent (does not wait).
 - Store durable knowledge in notes. Pin only what everyone must always know.
+- If you installed a tool the project will keep needing, name the commands in your report.
 - Files for the user's review (e.g. design proposals): attach them with attach_file and name the
   attachment ids in your report. Attachments marked "for the user's review" are not input for your work."""
 
-ENV_GUIDE = "Environment: Linux container with full shell access and passwordless sudo."
+ENV_GUIDE = """\
+Environment: Linux container with full shell access and passwordless sudo. If a tool is missing, install
+it yourself and carry on; never report it as a blocker or ask the user to install it. Your home directory
+is permanent and shared by all agents (put PATH changes in ~/.profile); system packages are lost when the
+container is rebuilt."""
 
 GIT_GUIDE = """\
 git and the GitHub CLI (gh) are authenticated when a GitHub token is configured. For repository

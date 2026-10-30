@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 from pathlib import Path
@@ -14,6 +15,12 @@ from .config import WORKSPACES_ROOT
 log = logging.getLogger(__name__)
 
 FETCH_TIMEOUT_SECONDS = 120
+SETUP_TIMEOUT_SECONDS = 1800
+
+# Scripts that succeeded since this container started. In memory on purpose: system packages are
+# gone after a rebuild, so every script has to run again.
+_setup_done: set[str] = set()
+_setup_lock = asyncio.Lock()  # parallel runs wait for the install instead of repeating it
 
 
 class WorkspaceError(RuntimeError):
@@ -54,7 +61,10 @@ async def run_cmd(args: list[str], cwd: Path | None, env: dict[str, str], timeou
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except TimeoutError:
         proc.kill()
-        raise WorkspaceError(f"Command timed out: {' '.join(args)}")
+        raise WorkspaceError(f"Command timed out: {' '.join(args[:2])}")
+    except asyncio.CancelledError:
+        proc.kill()
+        raise
     text = out.decode(errors="replace").strip()
     if proc.returncode != 0:
         raise WorkspaceError(f"{' '.join(args[:2])} failed: {text[-1000:]}")
@@ -79,12 +89,27 @@ async def _update_clone(name: str, target: Path, env: dict[str, str], *, shared:
     return None
 
 
-async def prepare_workspace(spec: WorkspaceSpec, creds: Credentials) -> tuple[Path, list[str]]:
-    """Create the agent's working directory, clone missing repositories into sub folders and update
-    existing clones.
+async def _run_setup(script: str, cwd: Path, env: dict[str, str]) -> str | None:
+    """Run the project's setup script once per container and version. Returns a problem, if any."""
+    key = hashlib.sha256(script.encode()).hexdigest()
+    async with _setup_lock:
+        if key in _setup_done:
+            return None
+        log.info("Running setup script %s", key[:12])
+        try:
+            await run_cmd(["bash", "-e", "-c", script], cwd=cwd, env=env, timeout=SETUP_TIMEOUT_SECONDS)
+        except WorkspaceError as exc:
+            return f"The project's setup script failed, so tools may be missing: {str(exc)[-600:]}"
+        _setup_done.add(key)
+    return None
 
-    Returns the workspace path and human-readable problems (a failing clone or update must not block
-    the agent; it is told about it instead).
+
+async def prepare_workspace(spec: WorkspaceSpec, creds: Credentials) -> tuple[Path, list[str]]:
+    """Create the agent's working directory, clone missing repositories into sub folders, update
+    existing clones and run the project's setup script.
+
+    Returns the workspace path and human-readable problems (a failing step must not block the agent;
+    it is told about it instead).
     """
     path = resolve_workspace(spec)
     path.mkdir(parents=True, exist_ok=True)
@@ -104,4 +129,6 @@ async def prepare_workspace(spec: WorkspaceSpec, creds: Credentials) -> tuple[Pa
             await run_cmd(args, cwd=None, env=git_env(creds))
         except WorkspaceError as exc:
             problems.append(f"Could not clone '{repo.name}' ({repo.url}): {str(exc)[-300:]}")
+    if spec.setup_script.strip() and (problem := await _run_setup(spec.setup_script, path, git_env(creds))):
+        problems.append(problem)
     return path, problems

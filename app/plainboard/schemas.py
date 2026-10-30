@@ -74,6 +74,7 @@ class ProjectUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = None
     workspace_path: WorkspacePath = None
+    setup_script: str | None = None
     github_token: str | None = None  # "" clears the override
     auto_wake_manager: bool | None = None
 

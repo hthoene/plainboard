@@ -16,6 +16,7 @@ from plainboard_runner.tool_bridge import ToolBridge
 def workspaces(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "WORKSPACES_ROOT", tmp_path)
     monkeypatch.setattr("plainboard_runner.workspace.WORKSPACES_ROOT", tmp_path)
+    monkeypatch.setattr("plainboard_runner.workspace._setup_done", set())
     return tmp_path
 
 
@@ -188,6 +189,36 @@ async def test_failed_update_is_reported(workspaces, tmp_path):
     _, problems = await prepare()
     assert len(problems) == 1 and "Could not update 'repo'" in problems[0]
     assert (clone / "README.md").read_text() == "v1"
+
+
+async def test_setup_script_runs_once_per_version(workspaces, tmp_path):
+    from plainboard_protocol import WorkspaceSpec
+
+    from plainboard_runner.workspace import prepare_workspace
+
+    log = tmp_path / "setup.log"
+    spec = WorkspaceSpec(path=str(workspaces / "p" / "a"), setup_script=f"echo v1 >> {log}")
+    other_agent = WorkspaceSpec(path=str(workspaces / "p" / "b"), setup_script=f"echo v1 >> {log}")
+    assert (await prepare_workspace(spec, Credentials()))[1] == []
+    assert (await prepare_workspace(other_agent, Credentials()))[1] == []
+    assert log.read_text().split() == ["v1"]  # the second agent does not repeat it
+
+    changed = WorkspaceSpec(path=str(workspaces / "p" / "a"), setup_script=f"echo v2 >> {log}")
+    await prepare_workspace(changed, Credentials())
+    assert log.read_text().split() == ["v1", "v2"]
+
+
+async def test_failed_setup_script_is_reported_and_retried(workspaces, tmp_path):
+    from plainboard_protocol import WorkspaceSpec
+
+    from plainboard_runner.workspace import prepare_workspace
+
+    marker = tmp_path / "fixed"
+    spec = WorkspaceSpec(path=str(workspaces / "p" / "a"), setup_script=f"echo broken; test -f {marker}; echo done")
+    _, problems = await prepare_workspace(spec, Credentials())
+    assert len(problems) == 1 and "setup script failed" in problems[0] and "broken" in problems[0]
+    marker.write_text("")
+    assert (await prepare_workspace(spec, Credentials()))[1] == []
 
 
 def test_clone_problems_reach_the_agent(workspaces, monkeypatch):

@@ -45,6 +45,7 @@ class WorkspaceSpec(BaseModel):
     path: str
     repos: list[RepoSpec] = Field(default_factory=list)
     shared: bool = False  # a folder also used by others (e.g. the user): checkouts are left alone
+    setup_script: str = ""  # runs before the run if the runner has not run this exact script yet
 
 
 class ToolDef(BaseModel):

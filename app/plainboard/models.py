@@ -91,6 +91,8 @@ class Project(Timestamps, Base):
     # Optional shared working directory (relative to the workspaces root, e.g. a bind-mounted
     # host folder). Unset = every agent gets its own directory/clone.
     workspace_path: Mapped[str | None] = mapped_column(String(500))
+    # Maintained by the manager: installs what this project needs, so it survives container rebuilds.
+    setup_script: Mapped[str] = mapped_column(Text, default="")
     github_token_enc: Mapped[str | None] = mapped_column(Text)
     auto_wake_manager: Mapped[bool] = mapped_column(Boolean, default=True)
     task_counter: Mapped[int] = mapped_column(Integer, default=0)

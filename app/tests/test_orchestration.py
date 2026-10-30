@@ -42,6 +42,22 @@ def test_chat_run_persists_messages_and_usage(client, project):
     assert "Current time:" in spec.prompt
 
 
+def test_manager_setup_script_reaches_the_runner(client, project):
+    pid = project["id"]
+    manager = agents_by_slug(client, pid)["manager"]
+    chat(client, manager["id"], 'TOOL update_project {"setup_script": "command -v cargo || install-rust"}\nTOOL get_project')
+    wait_for(lambda: idle(client, pid))
+    tool_msg = [m for m in conversation(client, manager["id"])["messages"] if m["kind"] == "tool"][-1]
+    assert "command -v cargo || install-rust" in tool_msg["meta"]["result"]
+    assert "never the user's" in runner(client).specs[-1].system_prompt
+    dev = make_dev(client, pid)
+    chat(client, dev["id"], "SAY ok")
+    wait_for(lambda: idle(client, pid))
+    spec = runner(client).specs[-1]
+    assert spec.workspace.setup_script == "command -v cargo || install-rust"
+    assert "install it yourself" in spec.system_prompt.replace("\n", " ")
+
+
 def test_worker_tools_are_restricted(client, project):
     pid = project["id"]
     dev = make_dev(client, pid)

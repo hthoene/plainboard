@@ -37,6 +37,11 @@ RUN python -m venv $VIRTUAL_ENV
 ENV PATH="/home/agent/.local/bin:/home/agent/.npm-global/bin:$VIRTUAL_ENV/bin:$PATH" \
     NPM_CONFIG_PREFIX=/home/agent/.npm-global
 
+# Agents run non-interactive shells, which skip ~/.profile. Load it anyway, so whatever an installer
+# adds there works for every agent, whatever the toolchain.
+RUN printf '%s\n' 'if [ -z "$PLAINBOARD_ENV_LOADING" ] && [ -f "$HOME/.profile" ]; then export PLAINBOARD_ENV_LOADING=1; . "$HOME/.profile"; unset PLAINBOARD_ENV_LOADING; fi' > /etc/plainboard-env.sh
+ENV BASH_ENV=/etc/plainboard-env.sh
+
 COPY protocol /src/protocol
 COPY runner/pyproject.toml /src/runner/pyproject.toml
 COPY runner/plainboard_runner /src/runner/plainboard_runner

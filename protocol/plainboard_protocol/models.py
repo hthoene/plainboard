@@ -44,6 +44,7 @@ class RepoSpec(BaseModel):
 class WorkspaceSpec(BaseModel):
     path: str
     repos: list[RepoSpec] = Field(default_factory=list)
+    shared: bool = False  # a folder also used by others (e.g. the user): checkouts are left alone
 
 
 class ToolDef(BaseModel):

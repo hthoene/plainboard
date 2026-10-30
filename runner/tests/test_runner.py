@@ -125,6 +125,71 @@ async def test_workspace_clones_each_repository(workspaces, tmp_path):
     assert (path / "frontend" / "local.txt").exists() and len(problems) == 1
 
 
+def _git(path, *args: str) -> str:
+    import subprocess
+
+    return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=path, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def _commit(path, content: str) -> None:
+    (path / "README.md").write_text(content)
+    _git(path, "commit", "-qam", content)
+
+
+async def _cloned(workspaces, tmp_path, **spec_args):
+    from plainboard_protocol import RepoSpec, WorkspaceSpec
+
+    from plainboard_runner.workspace import prepare_workspace
+
+    source = tmp_path / "src" / "repo"
+    url = _git_repo(source, "v1")
+    spec = WorkspaceSpec(path=str(workspaces / "proj" / "dev"), repos=[RepoSpec(name="repo", url=url)], **spec_args)
+    path, _ = await prepare_workspace(spec, Credentials())
+    return source, path / "repo", lambda: prepare_workspace(spec, Credentials())
+
+
+async def test_existing_clone_gets_new_commits_and_branches(workspaces, tmp_path):
+    source, clone, prepare = await _cloned(workspaces, tmp_path)
+    _commit(source, "v2")
+    _git(source, "branch", "feature")
+    _, problems = await prepare()
+    assert not problems
+    assert (clone / "README.md").read_text() == "v2"
+    assert _git(clone, "rev-parse", "origin/feature") == _git(source, "rev-parse", "feature")
+
+
+async def test_update_keeps_local_changes_and_commits(workspaces, tmp_path):
+    source, clone, prepare = await _cloned(workspaces, tmp_path)
+    (clone / "README.md").write_text("work in progress")
+    _commit(source, "v2")
+    _, problems = await prepare()
+    assert not problems and (clone / "README.md").read_text() == "work in progress"
+    assert _git(clone, "rev-parse", "origin/main") == _git(source, "rev-parse", "main")
+
+    _git(clone, "commit", "-qam", "my work")
+    mine = _git(clone, "rev-parse", "HEAD")
+    _, problems = await prepare()
+    assert not problems and _git(clone, "rev-parse", "HEAD") == mine
+
+
+async def test_shared_folder_is_only_fetched(workspaces, tmp_path):
+    source, clone, prepare = await _cloned(workspaces, tmp_path, shared=True)
+    _commit(source, "v2")
+    _, problems = await prepare()
+    assert not problems and (clone / "README.md").read_text() == "v1"
+    assert _git(clone, "rev-parse", "origin/main") == _git(source, "rev-parse", "main")
+
+
+async def test_failed_update_is_reported(workspaces, tmp_path):
+    import shutil
+
+    source, clone, prepare = await _cloned(workspaces, tmp_path)
+    shutil.rmtree(source)
+    _, problems = await prepare()
+    assert len(problems) == 1 and "Could not update 'repo'" in problems[0]
+    assert (clone / "README.md").read_text() == "v1"
+
+
 def test_clone_problems_reach_the_agent(workspaces, monkeypatch):
     from plainboard_runner.providers import get_provider
 

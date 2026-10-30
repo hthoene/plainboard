@@ -13,6 +13,8 @@ from .config import WORKSPACES_ROOT
 
 log = logging.getLogger(__name__)
 
+FETCH_TIMEOUT_SECONDS = 120
+
 
 class WorkspaceError(RuntimeError):
     pass
@@ -59,11 +61,30 @@ async def run_cmd(args: list[str], cwd: Path | None, env: dict[str, str], timeou
     return text
 
 
-async def prepare_workspace(spec: WorkspaceSpec, creds: Credentials) -> tuple[Path, list[str]]:
-    """Create the agent's working directory and clone missing repositories into sub folders.
+async def _update_clone(name: str, target: Path, env: dict[str, str], *, shared: bool) -> str | None:
+    """Bring an existing clone up to date without touching local work. Returns a problem, if any."""
+    if not (target / ".git").exists():
+        return None
+    try:
+        await run_cmd(["git", "fetch", "--all", "--prune"], cwd=target, env=env, timeout=FETCH_TIMEOUT_SECONDS)
+    except WorkspaceError as exc:
+        return f"Could not update '{name}', it may be out of date: {str(exc)[-300:]}"
+    if shared:  # the user's own folder: only refresh the remote branches
+        return None
+    try:
+        if not await run_cmd(["git", "status", "--porcelain", "--untracked-files=no"], cwd=target, env=env):
+            await run_cmd(["git", "merge", "--ff-only", "@{u}"], cwd=target, env=env)
+    except WorkspaceError as exc:  # no upstream or own commits: local work stays as it is
+        log.info("Not fast-forwarding %s: %s", name, exc)
+    return None
 
-    Returns the workspace path and human-readable problems (a failing clone must not block the
-    agent; it is told about it instead).
+
+async def prepare_workspace(spec: WorkspaceSpec, creds: Credentials) -> tuple[Path, list[str]]:
+    """Create the agent's working directory, clone missing repositories into sub folders and update
+    existing clones.
+
+    Returns the workspace path and human-readable problems (a failing clone or update must not block
+    the agent; it is told about it instead).
     """
     path = resolve_workspace(spec)
     path.mkdir(parents=True, exist_ok=True)
@@ -74,6 +95,8 @@ async def prepare_workspace(spec: WorkspaceSpec, creds: Credentials) -> tuple[Pa
             problems.append(f"Repository name '{repo.name}' is not a valid folder name")
             continue
         if target.exists() and any(target.iterdir()):
+            if problem := await _update_clone(repo.name, target, git_env(creds), shared=spec.shared):
+                problems.append(problem)
             continue
         args = ["git", "clone"] + (["--branch", repo.branch] if repo.branch else []) + [repo.url, str(target)]
         log.info("Cloning %s into %s", repo.url, target)

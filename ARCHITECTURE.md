@@ -34,7 +34,7 @@ token that is valid only while the run lasts and only for that run's project and
 | Run | `run_manager.py` | One agent turn. Triggers: chat, ticket, assignment, ask, message, schedule, wake. |
 | Conversation | `context.py` | One endless conversation per agent, with provider session, summary and token totals. |
 | Inbox | `orchestration/inbox.py` | Prepended to the agent's next turn. Manager wake-ups are coalesced. |
-| Repository | `services/repositories.py` | Many per project. Per agent: `all_repos` or an explicit selection. The runner clones them into `<workspace>/<name>`; a failed clone becomes a notice in the prompt instead of failing the run. |
+| Repository | `services/repositories.py` | Many per project. Per agent: `all_repos` or an explicit selection. The runner clones them into `<workspace>/<name>` and fetches existing clones before each run; a clean checkout is fast-forwarded (not in a shared folder). A failed clone or fetch becomes a notice in the prompt instead of failing the run. |
 | Note | `services/notes.py`, `tools/knowledge.py` | Durable knowledge, independent of chat compression. `create_note` rejects similar titles, pinned notes are capped by `prompts.PINNED_BUDGET_CHARS`, and the manager gets a tidy-up reminder every 30 notes. |
 
 ### Run lifecycle (`orchestration/run_manager.py`)

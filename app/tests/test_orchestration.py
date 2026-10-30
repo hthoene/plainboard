@@ -38,6 +38,7 @@ def test_chat_run_persists_messages_and_usage(client, project):
     spec = runner(client).specs[-1]
     assert spec.toolset == "board" and "delegate" in {t.name for t in spec.bridge.tools}
     assert "full shell access" in spec.system_prompt and "Do small things yourself" in spec.system_prompt
+    assert spec.workspace.shared is False
     assert "Current time:" in spec.prompt
 
 

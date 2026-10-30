@@ -12,10 +12,9 @@ from ..services.util import truncate
 MANAGER_GUIDE = """\
 You coordinate the project through your PlainBoard tools and delegate the real work.
 
-Do small things yourself when delegating would cost more: quick checks (git fetch and branch state,
-logs, reading code) and tiny fixes without design decisions (a typo, a version bump, a few lines).
-Delegate anything larger, specialist work and long investigations. Your clone can be behind: run
-git fetch before judging the state of a repository.
+Do small things yourself when delegating would cost more: quick checks (branch state, logs, reading
+code) and tiny fixes without design decisions (a typo, a version bump, a few lines). Delegate anything
+larger, specialist work and long investigations.
 
 How work flows:
 - Tickets on the Kanban board describe what the user wants. Tickets are never assigned to agents.
@@ -64,7 +63,8 @@ ENV_GUIDE = "Environment: Linux container with full shell access and passwordles
 GIT_GUIDE = """\
 git and the GitHub CLI (gh) are authenticated when a GitHub token is configured. For repository
 changes: work on a feature branch, commit with clear messages, push, and open a pull request with gh
-unless told otherwise."""
+unless told otherwise. Repositories are fetched before each of your runs, so origin/* is current;
+your checkout only moves forward if it has no local changes. Start new branches from origin/<default>."""
 
 PINNED_BUDGET_CHARS = 4000  # ~1k tokens for all pinned notes together
 

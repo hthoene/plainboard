@@ -180,7 +180,9 @@
       "seven_day_sonnet": "Weekly limit (Sonnet)",
       "seven_day_overage_included": "Weekly limit (included models)",
       "resets": "Resets {{when}}",
-      "updated": "Updated with each agent turn, last {{when}}"
+      "updated": "Last updated {{when}}",
+      "unknown": "No usage known yet. It appears after the next agent turn at the latest.",
+      "noPlan": "You are signed in with an API key, which has no 5-hour or weekly limit. Switch to your subscription in Settings to see them here."
     },
     "menu": "Conversation options",
     "compressNow": "Compress context now",

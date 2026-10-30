@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
-from plainboard_protocol import CheckResult, CompletionResult, CompletionSpec, Credentials, ErrorEvent, JobSpec, JobState, ProviderInfo, RunSpec
+from plainboard_protocol import CheckResult, CompletionResult, CompletionSpec, Credentials, ErrorEvent, JobSpec, JobState, LimitWindow, ProviderInfo, RunSpec
 from pydantic import BaseModel
 
 from . import jobs
@@ -118,6 +118,17 @@ async def notify_run(run_id: str, body: RunNotice) -> dict[str, bool]:
         return {"delivered": False}
     notices.push(run_id, body.text)
     return {"delivered": True}
+
+
+@app.post("/limits", response_model=list[LimitWindow])
+async def limits(credentials: Credentials) -> list[LimitWindow]:
+    windows: list[LimitWindow] = []
+    for provider in list_providers():
+        try:
+            windows += await provider.limits(credentials)
+        except Exception as exc:
+            log.warning("No limits from %s: %s", provider.name, exc)
+    return windows
 
 
 @app.post("/complete", response_model=CompletionResult)

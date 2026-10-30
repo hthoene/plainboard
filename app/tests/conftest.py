@@ -41,6 +41,7 @@ class FakeRunner:
         self.specs: list[RunSpec] = []
         self.completions: list[CompletionSpec] = []
         self.notices: list[tuple[int, str]] = []
+        self.limit_windows: list[LimitWindow] = []
         self.jobs: dict[str, JobState] = {}
         self.job_specs: list[JobSpec] = []
         self.reachable = True
@@ -81,6 +82,9 @@ class FakeRunner:
 
     async def cancel(self, run_id: int) -> None:
         pass
+
+    async def limits(self, credentials) -> list[LimitWindow]:
+        return self.limit_windows
 
     async def notify_run(self, run_id: int, text: str) -> bool:
         self.notices.append((run_id, text))

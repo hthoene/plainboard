@@ -281,6 +281,7 @@ export interface LimitWindow {
 }
 
 export interface Limits {
+  available: boolean;
   windows: LimitWindow[];
   updated_at: number | null;
 }

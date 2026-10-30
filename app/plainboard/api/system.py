@@ -15,7 +15,7 @@ from ..services import limits as limits_service
 from ..services import settings as settings_service
 from ..services.errors import ServiceError
 from ..orchestration.runner_client import RunnerError
-from .deps import Runner, Session
+from .deps import Runner, Runs, Session
 
 router = APIRouter(prefix="/api", tags=["system"])
 
@@ -41,7 +41,8 @@ async def meta(runner: Runner) -> dict[str, Any]:
 
 
 @router.get("/limits", response_model=LimitsOut)
-async def limits(session: Session) -> LimitsOut:
+async def limits(session: Session, runs: Runs) -> LimitsOut:
+    runs.refresh_limits()
     return await limits_service.current(session)
 
 

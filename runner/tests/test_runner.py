@@ -383,3 +383,14 @@ def test_rate_limit_events_become_limit_windows():
     assert [(w.name, w.utilization, w.status) for w in hit] == [("seven_day", 1.0, "rejected")]
     assert limit_windows(RateLimitInfo(status="allowed")) == []
     assert limit_windows(RateLimitInfo(status="rejected", rate_limit_type="overage")) == []
+
+
+def test_usage_answer_becomes_limit_windows():
+    from datetime import UTC, datetime
+
+    from plainboard_runner.providers.claude_code import usage_windows
+
+    answer = {"five_hour": {"utilization": 40.0, "resets_at": "2026-10-30T12:00:00+00:00"}, "seven_day": {"utilization": None, "resets_at": None}, "seven_day_opus": None}
+    (window,) = usage_windows(answer)
+    assert (window.name, window.utilization, window.resets_at) == ("five_hour", 0.4, int(datetime(2026, 10, 30, 12, tzinfo=UTC).timestamp()))
+    assert usage_windows(None) == []

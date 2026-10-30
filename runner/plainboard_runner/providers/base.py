@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 
-from plainboard_protocol import CheckResult, CompletionResult, CompletionSpec, ProviderInfo, RunEvent, RunSpec
+from plainboard_protocol import CheckResult, CompletionResult, CompletionSpec, Credentials, LimitWindow, ProviderInfo, RunEvent, RunSpec
 
 from ..tool_bridge import ToolBridge
 
@@ -28,6 +28,10 @@ class Provider(ABC):
     @abstractmethod
     async def complete(self, spec: CompletionSpec) -> CompletionResult:
         """Plain tool-less completion (used for summaries)."""
+
+    async def limits(self, credentials: Credentials) -> list[LimitWindow]:
+        """The account's plan limits, without using the model. Empty if it has none or they are unknown."""
+        return []
 
     async def check(self, spec: CompletionSpec) -> CheckResult:
         try:

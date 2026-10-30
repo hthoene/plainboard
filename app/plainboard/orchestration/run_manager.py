@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import secrets
+import time
 from dataclasses import dataclass, field
 
 from plainboard_protocol import JobSpec, JobState, ResultEvent, RunSpec, ToolBridgeSpec, ToolCallResult, WorkspaceSpec
@@ -95,6 +96,8 @@ class RunManager:
         self._orphan_asks: set[int] = set()
         self._waits_for: dict[int, dict[int, int]] = {}
         self._cancel_requested: set[int] = set()
+        self._limits_asked = 0.0
+        self._limits_task: asyncio.Task[None] | None = None
         self._wake = asyncio.Event()
         self._dispatcher: asyncio.Task[None] | None = None
 
@@ -304,6 +307,19 @@ class RunManager:
         await self.runner.cancel(run_id)
         asyncio.get_running_loop().call_later(CANCEL_GRACE_SECONDS, self._force_cancel, run_id)
         return True
+
+    def refresh_limits(self) -> None:
+        """Ask for the plan limits in the background, at most every five minutes. Uses no tokens."""
+        if self._limits_task and not self._limits_task.done() or (self._limits_asked and time.monotonic() - self._limits_asked < 300):
+            return
+        self._limits_asked = time.monotonic()
+        self._limits_task = asyncio.create_task(self._refresh_limits(), name="limits-refresh")
+
+    async def _refresh_limits(self) -> None:
+        async with self._sm() as s:
+            windows = await self.runner.limits(settings_service.credentials(await settings_service.get_all(s)))
+            if windows:
+                await limits_service.record(s, windows)
 
     async def wind_down(self, s: AsyncSession, agent: Agent, reason: str = "") -> bool:
         """Let an agent finish safely: drop what it has not started and tell its running turn to wrap up.

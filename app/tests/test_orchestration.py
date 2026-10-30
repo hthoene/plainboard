@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timedelta
 
 from conftest import FakeRunner, agents_by_slug, idle, runs_of, wait_for
-from plainboard_protocol import JobState
+from plainboard_protocol import JobState, LimitWindow
 
 
 def chat(client, agent_id: int, text: str) -> dict:
@@ -730,4 +730,12 @@ def test_runs_report_plan_limits(client, project):
     used = {w["name"]: w["utilization"] for w in body["windows"]}
     assert used == {"five_hour": 0.4, "seven_day": 0.0} and body["updated_at"]  # the weekly window has reset
     client.put("/api/settings", json={"values": {"claude_auth_mode": "api_key"}})
-    assert client.get("/api/limits").json()["windows"] == []
+    body = client.get("/api/limits").json()
+    assert body["windows"] == [] and body["available"] is False
+
+
+def test_limits_are_read_without_a_run(client, project):
+    client.put("/api/settings", json={"values": {"claude_auth_mode": "oauth_token"}})
+    runner(client).limit_windows = [LimitWindow(name="seven_day", utilization=0.2)]
+    wait_for(lambda: client.get("/api/limits").json()["windows"])
+    assert client.get("/api/limits").json()["windows"][0]["name"] == "seven_day"

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import collections
 import logging
+from datetime import datetime
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -155,6 +156,17 @@ def limit_windows(info: RateLimitInfo) -> list[LimitWindow]:
     return list(windows.values())
 
 
+def usage_windows(rate_limits: dict[str, Any] | None) -> list[LimitWindow]:
+    """Limit windows from Claude Code's usage answer, which has percentages and ISO dates."""
+    windows = []
+    for name in ("five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet"):
+        window = (rate_limits or {}).get(name) or {}
+        if window.get("utilization") is not None:
+            resets = window.get("resets_at")
+            windows.append(LimitWindow(name=name, utilization=window["utilization"] / 100, resets_at=int(datetime.fromisoformat(resets).timestamp()) if resets else None))
+    return windows
+
+
 class EventMapper:
     """Translates Agent SDK messages into protocol events (kept separate for unit tests)."""
 
@@ -283,6 +295,15 @@ class ClaudeCodeProvider(Provider):
             raise RuntimeError(f"{exc}\n{detail}".strip()) from exc
         if not got_result:
             yield ResultEvent(is_error=True, error="Claude Code ended without a result", context_tokens=mapper.context_tokens)
+
+    async def limits(self, credentials: Credentials) -> list[LimitWindow]:
+        if credentials.claude_auth_mode == "api_key":
+            return []
+        options = ClaudeAgentOptions(tools=[], setting_sources=[], cwd="/tmp", env=auth_env(credentials))
+        async with ClaudeSDKClient(options) as client:
+            # Claude Code's usage request has no public method in the SDK yet.
+            answer = await client._query._send_control_request({"subtype": "get_usage", "skip_behaviors": True}, timeout=20)
+        return usage_windows(answer.get("rate_limits"))
 
     async def complete(self, spec: CompletionSpec) -> CompletionResult:
         stderr_tail: collections.deque[str] = collections.deque(maxlen=30)

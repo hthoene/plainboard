@@ -27,7 +27,7 @@ async def record(session: AsyncSession, windows: list[LimitWindow]) -> None:
 async def current(session: AsyncSession) -> LimitsOut:
     # An API key has no plan limits, so what a subscription reported earlier no longer applies.
     if settings_service.effective_auth_mode(await settings_service.get_all(session)) == "api_key":
-        return LimitsOut()
+        return LimitsOut(available=False)
     row = await session.get(Setting, KEY)
     if not row or not row.value:
         return LimitsOut()

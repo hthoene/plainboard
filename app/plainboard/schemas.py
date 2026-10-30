@@ -47,6 +47,7 @@ class RepositoryUpdate(BaseModel):
 
 
 class LimitsOut(BaseModel):
+    available: bool = True  # False: this login has no plan limits at all
     windows: list[LimitWindow] = Field(default_factory=list)
     updated_at: int | None = None  # unix seconds, like the windows' resets_at
 

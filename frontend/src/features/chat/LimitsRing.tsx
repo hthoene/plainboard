@@ -11,7 +11,7 @@ const bar = { red: "bg-red-500", amber: "bg-amber-500", indigo: "bg-indigo-500" 
 const percent = (used: number) => Math.round(used * 100);
 const fromUnix = (seconds: number) => new Date(seconds * 1000).toISOString();
 
-/** Plan limits (5-hour, weekly) as a ring; click for details. Hidden when no run has reported any. */
+/** Plan limits (5-hour, weekly) as a ring; click for details. */
 export function LimitsRing() {
   const { t } = useTranslation();
   const { data } = useLimits();
@@ -25,8 +25,8 @@ export function LimitsRing() {
     return () => document.removeEventListener("mousedown", close);
   }, [open]);
 
-  if (!data?.windows.length) return null;
-  const highest = Math.max(...data.windows.map((w) => w.utilization));
+  if (!data) return null;
+  const highest = Math.max(0, ...data.windows.map((w) => w.utilization));
   const label = t("chat.limits.ring", { percent: percent(highest) });
 
   return (
@@ -42,7 +42,8 @@ export function LimitsRing() {
           {data.windows.map((window) => (
             <LimitRow key={window.name} window={window} />
           ))}
-          {data.updated_at && <p className="text-zinc-500">{t("chat.limits.updated", { when: timeAgo(fromUnix(data.updated_at)) })}</p>}
+          {!data.windows.length && <p className="text-zinc-500">{t(data.available ? "chat.limits.unknown" : "chat.limits.noPlan")}</p>}
+          {data.windows.length > 0 && data.updated_at && <p className="text-zinc-500">{t("chat.limits.updated", { when: timeAgo(fromUnix(data.updated_at)) })}</p>}
         </div>
       )}
     </div>

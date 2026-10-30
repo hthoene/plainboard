@@ -59,7 +59,7 @@ export function AgentEditor({ agent, onClose }: { agent?: Agent; onClose: () => 
     model: agent?.model ?? "",
     effort: agent?.effort ?? defaults.default_effort ?? "",
     toolset: agent?.toolset ?? "full",
-    context_limit_tokens: agent?.context_limit_tokens ?? defaults.default_context_limit ?? 60000,
+    context_limit_tokens: agent?.context_limit_tokens ?? defaults.default_context_limit ?? 400000,
     keep_recent_messages: agent?.keep_recent_messages ?? defaults.default_keep_recent ?? 6,
     summary_model: agent?.summary_model ?? "",
     max_turns: agent?.max_turns ?? "",

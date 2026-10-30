@@ -200,7 +200,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
               <ModelSelect provider={provider} value={values.default_summary_model ?? ""} onChange={(v) => set({ default_summary_model: v })} />
             </Field>
             <Field label={t("settings.contextLimit")} hint={t("team.contextLimitHint")}>
-              <Input type="number" min={5000} step={5000} value={values.default_context_limit ?? 60000} onChange={(e) => set({ default_context_limit: Number(e.target.value) })} />
+              <Input type="number" min={5000} step={5000} value={values.default_context_limit ?? 400000} onChange={(e) => set({ default_context_limit: Number(e.target.value) })} />
             </Field>
             <Field label={t("settings.keepRecent")}>
               <Input type="number" min={0} max={50} value={values.default_keep_recent ?? 6} onChange={(e) => set({ default_keep_recent: Number(e.target.value) })} />

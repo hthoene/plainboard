@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from plainboard_protocol import (
     AssistantTextEvent,
     CheckResult,
+    CompactionEvent,
     CompletionResult,
     CompletionSpec,
     ModelInfo,
@@ -25,7 +26,8 @@ from plainboard_protocol import (
 
 class FakeRunner:
     """Stands in for the runner service. Understands the same directives as the mock provider:
-    ``TOOL <name> <json>`` and ``SAY <text>``; ``CONTEXT <n>`` sets the reported context size."""
+    ``TOOL <name> <json>`` and ``SAY <text>``; ``CONTEXT <n>`` sets the reported context size,
+    ``COMPACT <n>`` reports a compaction by the provider."""
 
     app = None  # set by fixture; used to execute tools through the real RunManager
 
@@ -53,6 +55,8 @@ class FakeRunner:
                 said.append(line[4:])
             elif line.startswith("CONTEXT "):
                 context = int(line.split()[1])
+            elif line.startswith("COMPACT "):
+                yield CompactionEvent(tokens_before=int(line.split()[1]))
         text = " | ".join(said) or "ok"
         yield AssistantTextEvent(text=text)
         yield UsageEvent(context_tokens=context)

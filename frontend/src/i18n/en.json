@@ -159,6 +159,7 @@
     "showMore": "Show all ({{count}} characters)",
     "showLess": "Show less",
     "compressed": "Context compressed ({{tokens}} tokens → summary)",
+    "compactedByProvider": "Context compacted by the provider during the run ({{tokens}} tokens before)",
     "expand": "Open as full page",
     "conversations": "Conversations",
     "showDetails": "Show activity & details",

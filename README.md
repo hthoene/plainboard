@@ -93,7 +93,9 @@ You ──chat──▶ Manager ──delegate──▶ Agent A ─┐
 - **Session reuse**: turns resume the Claude Code session, so prompt caching applies.
 - **Compression**: when an agent's context exceeds *Compress at (tokens)*, older messages are
   summarised with the *summary model*. The session restarts with system prompt + summary + the last
-  *N* messages verbatim. Chats can grow without limit; the UI always shows the full history.
+  *N* messages verbatim. Chats can grow without limit; the UI always shows the full history. The
+  limit must be below the model's context window (default: 400,000); otherwise Claude Code compacts
+  first, using its own threshold.
 - **Coordinator toolset** for the manager: a short custom prompt instead of the full Claude Code
   prompt, plus board tools and read-only file access.
 - **Inbox instead of extra runs**: updates are prepended to an agent's next turn; manager wake-ups

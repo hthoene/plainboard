@@ -223,12 +223,13 @@ function ToolLine({ message }: { message: Message }) {
 function SummaryDivider({ message }: { message: Message }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const label = message.meta.provider ? "chat.compactedByProvider" : "chat.compressed";
   return (
     <div className="py-1">
-      <button onClick={() => setOpen(!open)} className="flex w-full items-center gap-2 text-[11px] text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">
+      <button onClick={() => setOpen(!open)} disabled={!message.content} className="flex w-full items-center gap-2 text-[11px] text-zinc-400 enabled:hover:text-zinc-600 dark:enabled:hover:text-zinc-300">
         <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
         <Archive className="size-3" />
-        {t("chat.compressed", { tokens: formatTokens(message.meta.tokens_before ?? 0) })}
+        {t(label, { tokens: formatTokens(message.meta.tokens_before ?? 0) })}
         <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
       </button>
       {open && (

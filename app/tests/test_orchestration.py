@@ -2,6 +2,7 @@ import json
 from datetime import datetime, timedelta
 
 from conftest import FakeRunner, agents_by_slug, idle, runs_of, wait_for
+from plainboard_protocol import JobState
 
 
 def chat(client, agent_id: int, text: str) -> dict:
@@ -555,3 +556,93 @@ def test_chat_files_stay_known_in_a_fresh_session(client, project):
     chat(client, manager["id"], "SAY again")
     wait_for(lambda: idle(client, project["id"]))
     assert "shot.png: /uploads/" in runner(client).specs[-1].prompt
+
+
+def start_job(client, agent_id: int, command: str = "cargo build") -> None:
+    chat(client, agent_id, f"TOOL start_job {json.dumps({'command': command})}")
+
+
+def job_tick(client) -> None:
+    client.portal.call(client.app_ref.state.job_watcher.tick)
+
+
+def test_finished_job_is_reported_to_its_agent_and_wakes_it(client, project):
+    pid = project["id"]
+    manager = agents_by_slug(client, pid)["manager"]
+    start_job(client, manager["id"])
+    wait_for(lambda: idle(client, pid))
+    spec = runner(client).job_specs[-1]
+    assert spec.command == "cargo build" and spec.workspace.endswith(f"/{project['slug']}/manager")
+    assert agents_by_slug(client, pid)["manager"]["running_jobs"] == 1
+
+    before = len(runner(client).specs)
+    job_tick(client)  # still running: nothing happens
+    assert len(runner(client).specs) == before and idle(client, pid)
+
+    runner(client).jobs[spec.id] = JobState(running=False, exit_code=2, log_path="/jobs/x.log", tail="error: boom")
+    job_tick(client)
+    wait_for(lambda: len(runner(client).specs) == before + 1 and idle(client, pid))
+    prompt = runner(client).specs[-1].prompt
+    assert "cargo build" in prompt and "exit code 2" in prompt and "error: boom" in prompt
+    assert agents_by_slug(client, pid)["manager"]["running_jobs"] == 0
+
+    job_tick(client)  # reported once only
+    wait_for(lambda: idle(client, pid))
+    assert len(runner(client).specs) == before + 1
+
+
+def test_job_unknown_to_the_runner_is_lost_but_unreachable_runner_decides_nothing(client, project):
+    pid = project["id"]
+    manager = agents_by_slug(client, pid)["manager"]
+    start_job(client, manager["id"])
+    wait_for(lambda: idle(client, pid))
+    before = len(runner(client).specs)
+    runner(client).jobs.clear()
+
+    runner(client).reachable = False
+    job_tick(client)
+    assert agents_by_slug(client, pid)["manager"]["running_jobs"] == 1 and len(runner(client).specs) == before
+
+    runner(client).reachable = True
+    job_tick(client)
+    wait_for(lambda: len(runner(client).specs) == before + 1 and idle(client, pid))
+    assert "was lost" in runner(client).specs[-1].prompt
+
+
+def test_agents_only_see_and_stop_their_own_jobs(client, project):
+    pid = project["id"]
+    dev = make_dev(client, pid)
+    manager = agents_by_slug(client, pid)["manager"]
+    start_job(client, manager["id"])
+    wait_for(lambda: idle(client, pid))
+
+    chat(client, dev["id"], 'TOOL stop_job {"id": 1}\nTOOL list_jobs')
+    wait_for(lambda: idle(client, pid))
+    assert agents_by_slug(client, pid)["manager"]["running_jobs"] == 1
+    text = runs_of(client, pid)[0]["result_text"]
+    assert "no job" in text and "No jobs." in text
+
+    fake = runner(client)
+    chat(client, manager["id"], 'TOOL list_jobs\nTOOL stop_job {"id": 1}')
+    wait_for(lambda: idle(client, pid))
+    text = runs_of(client, pid)[0]["result_text"]
+    assert "cargo build" in text and "stopped." in text
+    assert agents_by_slug(client, pid)["manager"]["running_jobs"] == 0
+
+    before = len(fake.specs)
+    next(iter(fake.jobs.values())).running = False
+    job_tick(client)  # a job stopped on purpose is not reported
+    wait_for(lambda: idle(client, pid))
+    assert len(fake.specs) == before
+
+
+def test_worker_wake_result_goes_to_the_manager(client, project):
+    pid = project["id"]
+    dev = make_dev(client, pid)
+    start_job(client, dev["id"])
+    wait_for(lambda: idle(client, pid))
+    spec = runner(client).job_specs[-1]
+    runner(client).jobs[spec.id] = JobState(running=False, exit_code=0, log_path="/jobs/x.log", tail="SAY Build is green")
+    job_tick(client)
+    wait_for(lambda: idle(client, pid) and "Update from Dev" in runner(client).specs[-1].prompt)
+    assert "delegate" in {t.name for t in runner(client).specs[-1].bridge.tools}

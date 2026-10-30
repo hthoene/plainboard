@@ -66,6 +66,14 @@ class DecisionStatus(StrEnum):
     WITHDRAWN = "withdrawn"
 
 
+class JobStatus(StrEnum):
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    STOPPED = "stopped"
+    LOST = "lost"  # the runner restarted while it was running
+
+
 ACTIVE_RUN_STATUSES = (RunStatus.QUEUED, RunStatus.RUNNING)
 
 
@@ -304,6 +312,22 @@ class Run(Base):
     context_tokens: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class Job(Base):
+    """A shell command running in the runner independently of the turn that started it."""
+
+    __tablename__ = "jobs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), index=True)
+    runner_id: Mapped[str] = mapped_column(String(32), unique=True)
+    command: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default=JobStatus.RUNNING, index=True)
+    exit_code: Mapped[int | None] = mapped_column(Integer)
+    log_path: Mapped[str] = mapped_column(String(500), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 

@@ -12,6 +12,8 @@ from plainboard_protocol import (
     CompactionEvent,
     CompletionResult,
     CompletionSpec,
+    JobSpec,
+    JobState,
     ModelInfo,
     ProviderInfo,
     ResultEvent,
@@ -22,6 +24,8 @@ from plainboard_protocol import (
     ToolUseEvent,
     UsageEvent,
 )
+
+from plainboard.orchestration.runner_client import RunnerError
 
 
 class FakeRunner:
@@ -34,6 +38,9 @@ class FakeRunner:
     def __init__(self, base_url: str):
         self.specs: list[RunSpec] = []
         self.completions: list[CompletionSpec] = []
+        self.jobs: dict[str, JobState] = {}
+        self.job_specs: list[JobSpec] = []
+        self.reachable = True
 
     async def stream_run(self, spec: RunSpec) -> AsyncIterator[RunEvent]:
         self.specs.append(spec)
@@ -69,6 +76,20 @@ class FakeRunner:
     async def cancel(self, run_id: int) -> None:
         pass
 
+    async def start_job(self, spec: JobSpec) -> JobState:
+        self.job_specs.append(spec)
+        self.jobs[spec.id] = JobState(running=True, log_path=f"/jobs/{spec.id}.log")
+        return self.jobs[spec.id]
+
+    async def job_status(self, ids: list[str]) -> dict[str, JobState]:
+        if not self.reachable:
+            raise RunnerError("Runner unreachable")
+        return {i: self.jobs[i] for i in ids if i in self.jobs}
+
+    async def stop_job(self, runner_id: str) -> bool:
+        job = self.jobs.get(runner_id)
+        return bool(job and job.running)
+
     async def providers(self) -> list[ProviderInfo]:
         return [ProviderInfo(name="claude_code", label="Claude Code", models=[ModelInfo(id="claude-sonnet-5-5", label="Sonnet")])]
 
@@ -94,6 +115,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("PLAINBOARD_UPLOADS_DIR", str(tmp_path / "uploads"))
     monkeypatch.setenv("PLAINBOARD_STATIC_DIR", str(tmp_path / "static"))
     monkeypatch.setenv("PLAINBOARD_SCHEDULER_INTERVAL_SECONDS", "3600")
+    monkeypatch.setenv("PLAINBOARD_JOB_WATCH_INTERVAL_SECONDS", "3600")
     for var in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "GITHUB_TOKEN", "PLAINBOARD_PASSWORD"):
         monkeypatch.delenv(var, raising=False)
     from plainboard import config, main

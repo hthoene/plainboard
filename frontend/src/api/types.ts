@@ -49,6 +49,7 @@ export interface Agent {
   all_repos: boolean;
   repository_ids: number[];
   status: "idle" | "queued" | "running";
+  running_jobs: number;
   context_tokens: number;
   base_context_tokens: number;
   total_cost_usd: number;

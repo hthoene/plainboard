@@ -18,6 +18,7 @@ class Config(BaseSettings):
     password: str | None = None
     max_upload_mb: int = 50
     scheduler_interval_seconds: float = 20.0
+    job_watch_interval_seconds: float = 10.0
     # Workspaces as seen by the runner container.
     workspaces_root: str = "/workspaces"
     runner_uploads_dir: str = "/uploads"

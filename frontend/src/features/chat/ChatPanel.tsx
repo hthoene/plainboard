@@ -183,7 +183,13 @@ export function ChatPanel({
         runningId={running?.id}
         disabled={!agent.enabled}
         className={column}
-        status={activeRuns.length > 0 ? t(running ? "chat.working" : "chat.waiting", { name: agent.name }) : undefined}
+        status={
+          activeRuns.length > 0
+            ? t(running ? "chat.working" : "chat.waiting", { name: agent.name })
+            : agent.running_jobs > 0
+              ? t("chat.jobsRunning", { count: agent.running_jobs })
+              : undefined
+        }
         files={files}
         onFilesChange={setFiles}
       />

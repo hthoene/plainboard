@@ -156,6 +156,7 @@ class AgentOut(ORM):
     repository_ids: list[int] = Field(default_factory=list)
     # live state
     status: Literal["idle", "queued", "running"] = "idle"
+    running_jobs: int = 0
     context_tokens: int = 0
     base_context_tokens: int = 0  # fixed part of the context (system prompt, tools, memory)
     total_cost_usd: float = 0.0

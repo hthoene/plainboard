@@ -11,9 +11,10 @@ from collections.abc import AsyncIterator
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
-from plainboard_protocol import CheckResult, CompletionResult, CompletionSpec, Credentials, ErrorEvent, ProviderInfo, RunSpec
+from plainboard_protocol import CheckResult, CompletionResult, CompletionSpec, Credentials, ErrorEvent, JobSpec, JobState, ProviderInfo, RunSpec
 from pydantic import BaseModel
 
+from . import jobs
 from .providers import get_provider, list_providers
 from .tool_bridge import ToolBridge
 from .workspace import WorkspaceError, git_env, prepare_workspace, run_cmd
@@ -85,6 +86,24 @@ async def cancel_run(run_id: str) -> dict[str, bool]:
         task.cancel()
         return {"cancelled": True}
     return {"cancelled": False}
+
+
+@app.post("/jobs", response_model=JobState)
+async def start_job(spec: JobSpec) -> JobState:
+    try:
+        return await jobs.start(spec)
+    except (ValueError, WorkspaceError, OSError) as exc:
+        raise HTTPException(400, str(exc)[:500]) from exc
+
+
+@app.post("/jobs/status", response_model=dict[str, JobState])
+async def job_status(ids: list[str]) -> dict[str, JobState]:
+    return jobs.status(ids)
+
+
+@app.post("/jobs/{job_id}/stop")
+async def stop_job(job_id: str) -> dict[str, bool]:
+    return {"stopped": jobs.stop(job_id)}
 
 
 @app.post("/complete", response_model=CompletionResult)

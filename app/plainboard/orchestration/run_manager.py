@@ -17,7 +17,7 @@ import logging
 import secrets
 from dataclasses import dataclass, field
 
-from plainboard_protocol import ResultEvent, RunSpec, ToolBridgeSpec, ToolCallResult, WorkspaceSpec
+from plainboard_protocol import JobSpec, JobState, ResultEvent, RunSpec, ToolBridgeSpec, ToolCallResult, WorkspaceSpec
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -29,6 +29,8 @@ from ..models import (
     AssignmentStatus,
     Conversation,
     Decision,
+    Job,
+    JobStatus,
     Message,
     Project,
     Run,
@@ -42,6 +44,7 @@ from ..schemas import AssignmentOut, MessageOut, RunOut, TaskUpdate
 from ..services import agents as agent_service
 from ..services import board as board_service
 from ..services import decisions as decision_service
+from ..services import jobs as job_service
 from ..services import mcp as mcp_service
 from ..services import projects as project_service
 from ..services import repositories as repo_service
@@ -51,7 +54,7 @@ from ..services.util import truncate
 from ..tools import registry
 from . import inbox, prompts
 from .context import ContextManager, workspace_path
-from .runner_client import RunnerClient
+from .runner_client import RunnerClient, RunnerError
 
 log = logging.getLogger(__name__)
 
@@ -622,6 +625,12 @@ class RunManager:
             if ticket:
                 await board_service.add_comment(s, ticket, f"Manager could not process the ticket: {run.error}", author_kind="system")
 
+        elif run.trigger == RunTrigger.WAKE and ok and text and not agent.is_manager:
+            # e.g. a worker's job finished after its assignment was reported: nobody else reads this.
+            manager = await agent_service.get_manager(s, project.id)
+            await inbox.push(s, manager.id, f"Update from {agent.name}: {truncate(text, 2000)}")
+            await self._maybe_wake(s, project, manager.id)
+
         await board_service.publish_task_id(s, run.task_id)
 
     async def decision_answered(self, s: AsyncSession, decision: Decision) -> None:
@@ -633,6 +642,47 @@ class RunManager:
         recipient = decision.requested_by_agent_id or (await agent_service.get_manager(s, project.id)).id
         await inbox.push(s, recipient, f'User decided on ticket #{task.number} ("{decision.question}"): {decision_service.answer_summary(decision)}')
         await self._maybe_wake(s, project, recipient)
+
+    # ------------------------------------------------------------------ background jobs
+
+    async def start_job(self, s: AsyncSession, project: Project, agent: Agent, command: str) -> Job:
+        values = await settings_service.get_all(s)
+        spec = JobSpec(
+            id=secrets.token_hex(8),
+            command=command,
+            workspace=workspace_path(project, agent),
+            credentials=settings_service.credentials(values, project_service.github_token(project)),
+        )
+        try:
+            state = await self.runner.start_job(spec)
+        except RunnerError as exc:
+            raise ServiceError(f"Could not start the job: {exc}") from exc
+        # Only now, so that the watcher never looks for a job the runner has not accepted yet.
+        return await job_service.add(s, project.id, agent.id, spec.id, command, state.log_path)
+
+    async def stop_job(self, s: AsyncSession, job: Job) -> bool:
+        try:
+            if not await self.runner.stop_job(job.runner_id):
+                return False  # already over: the watcher reports it
+        except RunnerError as exc:
+            raise ServiceError(f"Could not stop the job: {exc}") from exc
+        await s.refresh(job)
+        if job.status == JobStatus.RUNNING:
+            await job_service.finish(s, job, JobStatus.STOPPED)
+        return True
+
+    async def job_ended(self, s: AsyncSession, job: Job, state: JobState | None) -> None:
+        """Record the end of a job and tell the agent that started it. ``state`` None = job lost."""
+        project = await s.get(Project, job.project_id)
+        if state is None:
+            await job_service.finish(s, job, JobStatus.LOST)
+            text = f"{job_service.label(job)} was lost because its container restarted, and may be half done. Check its state and start it again if needed. Log: {job.log_path}"
+        else:
+            await job_service.finish(s, job, JobStatus.SUCCEEDED if state.exit_code == 0 else JobStatus.FAILED, state.exit_code)
+            text = f"{job_service.label(job)} finished with exit code {state.exit_code}. Log: {job.log_path}\nLast output:\n{state.tail}"
+        await inbox.push(s, job.agent_id, text)
+        if project:
+            await self._maybe_wake(s, project, job.agent_id)
 
     async def _maybe_wake(self, s: AsyncSession, project: Project, agent_id: int) -> None:
         if project.auto_wake_manager:

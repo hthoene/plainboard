@@ -61,6 +61,8 @@ How you work:
 - Ask teammates with ask_agent (waits for the answer) or message_agent (does not wait).
 - Store durable knowledge in notes. Pin only what everyone must always know.
 - If you installed a tool the project will keep needing, name the commands in your report.
+- If a job of yours is still running when you finish, your report counts as done: name the job and what is
+  still open. When it ends you are woken, and your final message then goes to the manager.
 - Files for the user's review (e.g. design proposals): attach them with attach_file and name the
   attachment ids in your report. Attachments marked "for the user's review" are not input for your work."""
 
@@ -70,8 +72,9 @@ it yourself and carry on; never report it as a blocker or ask the user to instal
 is permanent and shared by all agents (put PATH changes in ~/.profile); system packages are lost when the
 container is rebuilt. Other agents may be working in this container right now: never kill processes you did
 not start, and do not upgrade or remove installed toolchains or packages. Add what you need alongside them.
-Your turn ends with your final message and nothing wakes you when a background job finishes: stay in the turn
-until the jobs you depend on are done, or say plainly that you stopped waiting."""
+For anything that takes more than about a minute (builds, installs, long test runs) use start_job instead of
+waiting or `&`/nohup, which may die when your turn ends. Then finish your turn: the result arrives as an update
+and wakes you. Never say you are waiting for something unless a job for it is running."""
 
 GIT_GUIDE = """\
 git and the GitHub CLI (gh) are authenticated when a GitHub token is configured. For repository

@@ -13,6 +13,8 @@ from .models import (
     CompletionSpec,
     Credentials,
     ErrorEvent,
+    JobSpec,
+    JobState,
     McpServerSpec,
     ModelInfo,
     ProviderInfo,

@@ -150,6 +150,8 @@
     "loadOlder": "Load older messages",
     "working": "{{name}} is working…",
     "waiting": "{{name}} is waiting to start…",
+    "jobsRunning_one": "{{count}} background job running",
+    "jobsRunning_other": "{{count}} background jobs running",
     "placeholder": "Message {{name}}…",
     "agentDisabled": "This agent is disabled",
     "send": "Send",

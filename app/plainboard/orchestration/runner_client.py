@@ -6,7 +6,7 @@ import time
 from collections.abc import AsyncIterator
 
 import httpx
-from plainboard_protocol import CheckResult, CompletionResult, CompletionSpec, Credentials, ProviderInfo, RunEvent, RunSpec, parse_event
+from plainboard_protocol import CheckResult, CompletionResult, CompletionSpec, Credentials, JobSpec, JobState, ProviderInfo, RunEvent, RunSpec, parse_event
 
 
 class RunnerError(RuntimeError):
@@ -36,6 +36,25 @@ class RunnerClient:
             await self._client.post(f"/runs/{run_id}/cancel")
         except httpx.HTTPError:
             pass
+
+    async def _post_job(self, path: str, body: object) -> httpx.Response:
+        try:
+            resp = await self._client.post(path, json=body)
+        except httpx.HTTPError as exc:
+            raise RunnerError(f"Runner unreachable: {exc}") from exc
+        if resp.status_code >= 400:
+            raise RunnerError(resp.text[:500])
+        return resp
+
+    async def start_job(self, spec: JobSpec) -> JobState:
+        return JobState.model_validate((await self._post_job("/jobs", spec.model_dump(mode="json"))).json())
+
+    async def job_status(self, ids: list[str]) -> dict[str, JobState]:
+        """States of the jobs the runner knows; a missing id means it restarted in the meantime."""
+        return {k: JobState.model_validate(v) for k, v in (await self._post_job("/jobs/status", ids)).json().items()}
+
+    async def stop_job(self, runner_id: str) -> bool:
+        return (await self._post_job(f"/jobs/{runner_id}/stop", {})).json()["stopped"]
 
     async def complete(self, spec: CompletionSpec) -> CompletionResult:
         try:

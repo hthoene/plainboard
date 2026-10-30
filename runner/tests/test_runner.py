@@ -1,15 +1,17 @@
+import asyncio
 import json
 
 import httpx
 import pytest
 from claude_agent_sdk import AssistantMessage, ResultMessage, SystemMessage, TextBlock, ToolResultBlock, ToolUseBlock, UserMessage
 from fastapi.testclient import TestClient
-from plainboard_protocol import Credentials, McpServerSpec, ToolBridgeSpec, ToolDef, parse_event
+from plainboard_protocol import Credentials, JobSpec, McpServerSpec, ToolBridgeSpec, ToolDef, parse_event
 
-from plainboard_runner import config
+from plainboard_runner import config, jobs
 from plainboard_runner.main import app
 from plainboard_runner.providers.claude_code import EventMapper, auth_env, external_mcp_config
 from plainboard_runner.tool_bridge import ToolBridge
+from plainboard_runner.workspace import WorkspaceError
 
 
 @pytest.fixture(autouse=True)
@@ -301,3 +303,53 @@ def test_external_mcp_config():
     assert external_mcp_config(McpServerSpec(name="fs", transport="stdio", command="npx", args=["-y", "x"]))["command"] == "npx"
     http = external_mcp_config(McpServerSpec(name="api", transport="http", url="https://x/mcp", headers={"A": "b"}))
     assert http == {"type": "http", "url": "https://x/mcp", "headers": {"A": "b"}}
+
+
+def job_spec(workspaces, job_id: str, command: str) -> JobSpec:
+    return JobSpec(id=job_id, command=command, workspace=str(workspaces / "p" / "a"), credentials=Credentials())
+
+
+async def ended(job_id: str):
+    for _ in range(100):
+        state = jobs.status([job_id])[job_id]
+        if not state.running:
+            return state
+        await asyncio.sleep(0.05)
+    raise AssertionError("job did not end")
+
+
+@pytest.fixture
+def jobs_root(workspaces, monkeypatch):
+    monkeypatch.setattr(jobs, "JOBS_ROOT", workspaces / "jobs")
+    monkeypatch.setattr(jobs, "_jobs", {})
+
+
+async def test_job_runs_in_workspace_and_reports_exit_code_and_tail(workspaces, jobs_root):
+    state = await jobs.start(job_spec(workspaces, "a1", "pwd; echo oops >&2; exit 3"))
+    assert state.running and state.log_path.endswith("a1.log")
+    state = await ended("a1")
+    assert not state.running and state.exit_code == 3
+    assert str(workspaces / "p" / "a") in state.tail and "oops" in state.tail
+
+
+async def test_job_status_only_returns_known_jobs(workspaces, jobs_root):
+    await jobs.start(job_spec(workspaces, "a2", "true"))
+    assert set(jobs.status(["a2", "ffff"])) == {"a2"}
+    assert jobs.stop("ffff") is False
+    await ended("a2")
+    assert jobs.stop("a2") is False
+
+
+async def test_stopping_a_job_reaches_its_children(workspaces, jobs_root):
+    marker = workspaces / "child-alive"
+    await jobs.start(job_spec(workspaces, "a3", f"(sleep 1; touch {marker}) & sleep 30"))
+    await asyncio.sleep(0.2)
+    assert jobs.stop("a3") is True
+    assert (await ended("a3")).exit_code != 0
+    await asyncio.sleep(1.2)
+    assert not marker.exists()
+
+
+async def test_job_outside_workspaces_is_rejected(workspaces, jobs_root):
+    with pytest.raises(WorkspaceError):
+        await jobs.start(JobSpec(id="a4", command="true", workspace="/etc", credentials=Credentials()))

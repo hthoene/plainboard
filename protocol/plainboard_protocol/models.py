@@ -120,6 +120,22 @@ class ToolCallResult(BaseModel):
     is_error: bool = False
 
 
+class JobSpec(BaseModel):
+    """A shell command that runs in the runner independently of any agent turn."""
+
+    id: str = Field(pattern=r"^[0-9a-f]+$")
+    command: str
+    workspace: str
+    credentials: Credentials
+
+
+class JobState(BaseModel):
+    running: bool
+    exit_code: int | None = None
+    log_path: str = ""
+    tail: str = ""  # end of the output, once the job has finished
+
+
 # ---------------------------------------------------------------------------
 # Run events (runner -> app), streamed as NDJSON
 # ---------------------------------------------------------------------------

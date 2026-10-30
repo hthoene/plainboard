@@ -35,6 +35,7 @@ token that is valid only while the run lasts and only for that run's project and
 | Run | `run_manager.py` | One agent turn. Triggers: chat, ticket, assignment, ask, message, schedule, wake. |
 | Conversation | `context.py` | One endless conversation per agent, with provider session, summary and token totals. |
 | Inbox | `orchestration/inbox.py` | Prepended to the agent's next turn. Manager wake-ups are coalesced. |
+| Job | `services/jobs.py`, `tools/jobs.py`, `orchestration/job_watcher.py`, `runner/jobs.py` | A slow shell command that runs in the runner independently of the turn that started it, so the agent can finish its turn and answer the user. The watcher polls the runner and delivers the result as an inbox update with a wake-up. A runner restart loses running jobs, which is reported the same way. |
 | Setup script | `project.setup_script`, `runner/workspace.py` | Maintained by the manager (no user setup): agents install what they need, the manager records the commands. The runner runs each script once per container start, one at a time, before the agent starts, so installs survive rebuilds; a failure becomes a notice in the prompt. Home (`agent-home` volume) is permanent and shared by all agents; `BASH_ENV` loads `~/.profile` in their non-interactive shells. |
 | Repository | `services/repositories.py` | Many per project. Per agent: `all_repos` or an explicit selection. The runner clones them into `<workspace>/<name>` and fetches existing clones before each run; a clean checkout is fast-forwarded (not in a shared folder). A failed clone or fetch becomes a notice in the prompt instead of failing the run. |
 | Note | `services/notes.py`, `tools/knowledge.py` | Durable knowledge, independent of chat compression. `create_note` rejects similar titles, pinned notes are capped by `prompts.PINNED_BUDGET_CHARS`, and the manager gets a tidy-up reminder every 30 notes. |
@@ -52,6 +53,9 @@ token that is valid only while the run lasts and only for that run's project and
 
 A restart fails running runs. Nothing retries them, because they may be half done: the requester of an
 interrupted assignment (or the manager, for its own turn) gets an inbox update and a wake-up.
+
+A job outlives its run: the stop button of a run does not touch it. If it is still running when a worker
+reports, the assignment counts as done; a worker's wake-up result goes to the manager's inbox.
 
 `ask_agent` blocks on a future. A wait-for graph between agents rejects cycles, and depth and timeout
 limits apply. An answer that arrives after a timeout goes to the asker's inbox instead.

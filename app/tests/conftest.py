@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import AsyncIterator
@@ -45,6 +46,7 @@ class FakeRunner:
         self.jobs: dict[str, JobState] = {}
         self.job_specs: list[JobSpec] = []
         self.reachable = True
+        self.released = False
 
     async def stream_run(self, spec: RunSpec) -> AsyncIterator[RunEvent]:
         self.specs.append(spec)
@@ -66,6 +68,9 @@ class FakeRunner:
                 said.append(line[4:])
             elif line.startswith("CONTEXT "):
                 context = int(line.split()[1])
+            elif line == "HOLD":
+                while not self.released:
+                    await asyncio.sleep(0.01)
             elif line.startswith("LIMITS "):
                 _, name, used, resets_in = line.split()
                 yield LimitsEvent(windows=[LimitWindow(name=name, utilization=float(used), resets_at=int(time.time()) + int(resets_in))])

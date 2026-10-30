@@ -62,6 +62,7 @@ log = logging.getLogger(__name__)
 
 MAX_ASK_DEPTH = 3
 ASK_TIMEOUT_SECONDS = 900
+ASK_BUSY_TIMEOUT_SECONDS = 120  # the teammate is in a turn of unknown length, so don't block the asker for long
 CANCEL_GRACE_SECONDS = 15
 
 
@@ -291,14 +292,17 @@ class RunManager:
         if self._would_deadlock(caller.id, target.id):
             raise ServiceError(f"{target.name} is waiting on you (directly or indirectly). Use message_agent instead.")
         async with self._sm() as s:
+            busy_run = await s.scalar(select(Run.id).where(Run.agent_id == target.id, Run.status == RunStatus.RUNNING).limit(1))
             run = await self.enqueue(
                 s, target, RunTrigger.ASK, prompts.ask_prompt(caller, question), source_agent_id=caller.id, parent_run_id=ctx.run_id
             )
+        if busy_run:
+            await self.runner.notify_run(busy_run, prompts.ask_notice(caller, question))
         future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         self._waiters[run.id] = future
         self._add_wait(caller.id, target.id)
         try:
-            return await asyncio.wait_for(asyncio.shield(future), ASK_TIMEOUT_SECONDS)
+            return await asyncio.wait_for(asyncio.shield(future), ASK_BUSY_TIMEOUT_SECONDS if busy_run else ASK_TIMEOUT_SECONDS)
         except TimeoutError:
             self._orphan_asks.add(run.id)
             return f"{target.name} has not answered yet. The answer will reach you as an update in a later turn."

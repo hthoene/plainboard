@@ -20,12 +20,12 @@ class StopJobArgs(BaseModel):
 
 @tool(
     "start_job",
-    "Run a slow shell command (build, install, test suite) outside your turn, so you stay available. Finish your turn afterwards: the result arrives as an update when it ends.",
+    "Run a slow shell command (build, install, test suite) outside your turn, so you stay available. Then finish your turn, without waiting for it (no sleep, tail or Monitor): the result arrives as an update when it ends.",
     StartJobArgs,
 )
 async def start_job(ctx: ToolContext, args: StartJobArgs) -> str:
     job = await ctx.runs.start_job(ctx.session, ctx.project, ctx.agent, args.command)
-    return f"Job #{job.id} started. Log: {job.log_path}"
+    return f"Job #{job.id} started. Log: {job.log_path}. Don't wait for it: end your turn when nothing else is left, its result wakes you."
 
 
 @tool("list_jobs", "Your running and recent background jobs.")

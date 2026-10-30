@@ -755,3 +755,21 @@ def test_waiting_chat_messages_go_out_together(client, project):
     assert len(runs_of(client, pid, agent_id=dev["id"])) == 1
     texts = [m["content"] for m in conversation(client, dev["id"])["messages"] if m["role"] == "assistant"]
     assert texts == ["one | two | three"]
+
+
+def test_asking_a_busy_teammate_notifies_it_and_does_not_block_for_long(client, project, monkeypatch):
+    monkeypatch.setattr("plainboard.orchestration.run_manager.ASK_BUSY_TIMEOUT_SECONDS", 0.05)
+    pid = project["id"]
+    dev = make_dev(client, pid)
+    manager = agents_by_slug(client, pid)["manager"]
+    chat(client, dev["id"], "HOLD")
+    wait_for(lambda: runs_of(client, pid, agent_id=dev["id"])[0]["status"] == "running")
+    held = runs_of(client, pid, agent_id=dev["id"])[0]["id"]
+    chat(client, manager["id"], 'TOOL ask_agent {"agent": "dev", "question": "SAY the answer"}')
+    tool = wait_for(lambda: next((m for m in conversation(client, manager["id"])["messages"] if m["kind"] == "tool" and m["meta"].get("result")), None))
+    assert "has not answered yet" in tool["meta"]["result"]
+    (run_id, text), = runner(client).notices
+    assert run_id == held and "SAY the answer" in text
+    runner(client).released = True
+    wait_for(lambda: idle(client, pid))
+    assert any(r["trigger"] == "ask" and r["status"] == "succeeded" for r in runs_of(client, pid, agent_id=dev["id"]))

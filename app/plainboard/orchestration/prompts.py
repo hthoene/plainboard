@@ -90,7 +90,9 @@ container is rebuilt. Other agents may be working in this container right now: n
 not start, and do not upgrade or remove installed toolchains or packages. Add what you need alongside them.
 For anything that takes more than about a minute (builds, installs, long test runs) use start_job instead of
 waiting or `&`/nohup, which may die when your turn ends. Then finish your turn: the result arrives as an update
-and wakes you. Never say you are waiting for something unless a job for it is running."""
+and wakes you. Never wait for a job yourself with sleep, tail, Monitor or polling: that blocks your turn, and
+teammates' questions can't reach you until it ends. Never say you are waiting for something unless a job for it
+is running."""
 
 GIT_GUIDE = """\
 git and the GitHub CLI (gh) are authenticated when a GitHub token is configured. For repository
@@ -306,6 +308,14 @@ def assignment_prompt(assignment: Assignment, from_name: str, ticket: Task | Non
 
 def ask_prompt(from_agent: Agent, question: str) -> str:
     return f"Question from {from_agent.name} ({from_agent.role or 'agent'}) — they are waiting for your answer:\n\n{question.strip()}\n\nAnswer concisely."
+
+
+def ask_notice(from_agent: Agent, question: str) -> str:
+    return (
+        f"[PlainBoard] {from_agent.name} is waiting for your answer to: {truncate(question.strip(), 500)}\n"
+        "It is queued as your next turn, so answer it there. Finish your current step, then end your turn at the next "
+        "safe point. If you are only waiting for a job, stop waiting: its result wakes you."
+    )
 
 
 def message_prompt(from_agent: Agent, message: str) -> str:

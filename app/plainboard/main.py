@@ -86,10 +86,12 @@ def _mount_spa(app: FastAPI, static_dir: Path) -> None:
     async def spa(path: str) -> FileResponse:
         if path.startswith("api/"):
             raise ServiceError("Not found", 404)
+        # Revalidate: an installed app must pick up a new build, and must notice when the server is gone.
+        headers = {"Cache-Control": "no-cache"}
         candidate = (static_dir / path).resolve()
         if path and candidate.is_file() and static_dir.resolve() in candidate.parents:
-            return FileResponse(candidate)
-        return FileResponse(index)
+            return FileResponse(candidate, headers=headers)
+        return FileResponse(index, headers=headers)
 
 
 app = create_app()

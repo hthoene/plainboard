@@ -72,7 +72,8 @@ into sub folders there (e.g. `D:/Code/my-app/backend`) if they don't exist yet. 
 
 By default workspaces live in a Docker volume and every agent gets its own clones of the repositories
 it may use (branches + pull requests, no conflicts between parallel agents). To expose PlainBoard,
-set `PLAINBOARD_BIND=0.0.0.0` and `PLAINBOARD_PASSWORD`, ideally behind a reverse proxy with TLS.
+set `PLAINBOARD_BIND=0.0.0.0` and `PLAINBOARD_PASSWORD`, ideally behind a reverse proxy with TLS. Browsers offer to install PlainBoard as an app
+only over HTTPS or on `localhost`.
 
 ## How work flows
 

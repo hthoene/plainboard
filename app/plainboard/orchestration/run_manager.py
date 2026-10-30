@@ -457,6 +457,12 @@ class RunManager:
                     conv.context_tokens = event.context_tokens
                     await s.commit()
                     bus.publish(ctx.project_id, "conversation.updated", {"agent_id": ctx.agent_id, "context_tokens": event.context_tokens})
+                elif event.type == "compaction":
+                    marker = self.context.provider_compacted(conv, event.tokens_before)
+                    marker.run_id = ctx.run_id
+                    s.add(marker)
+                    await s.commit()
+                    bus.publish(ctx.project_id, "message.created", MessageOut.model_validate(marker))
                 elif event.type == "result":
                     outcome.result = event
                 elif event.type == "error":

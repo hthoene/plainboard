@@ -159,6 +159,13 @@ class UsageEvent(BaseModel):
     context_tokens: int
 
 
+class CompactionEvent(BaseModel):
+    """The provider compacted its session on its own; the session itself stays valid."""
+
+    type: Literal["compaction"] = "compaction"
+    tokens_before: int = 0
+
+
 class ResultEvent(BaseModel):
     type: Literal["result"] = "result"
     session_id: str | None = None
@@ -188,6 +195,7 @@ RunEvent = Annotated[
         ToolUseEvent,
         ToolResultEvent,
         UsageEvent,
+        CompactionEvent,
         ResultEvent,
         ErrorEvent,
     ],

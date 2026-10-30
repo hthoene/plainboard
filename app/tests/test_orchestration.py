@@ -197,6 +197,39 @@ def test_system_prompt_frozen_per_session(client, project):
     assert spec.resume_session_id is None and "Use FastAPI" in spec.system_prompt and "[Briefing update]" not in spec.prompt
 
 
+def test_provider_compaction_keeps_session_and_resends_briefing(client, project):
+    """Updates from before a provider compaction may be lost, so they are sent again; the session stays."""
+    pid = project["id"]
+    dev = make_dev(client, pid, context_limit_tokens=500_000)
+    chat(client, dev["id"], "SAY one")
+    wait_for(lambda: idle(client, pid))
+    first = runner(client).specs[-1].system_prompt
+
+    client.post(f"/api/projects/{pid}/notes", json={"title": "Stack", "content": "Use FastAPI", "pinned": True})
+    chat(client, dev["id"], "SAY two")
+    wait_for(lambda: idle(client, pid))
+    assert "Use FastAPI" in runner(client).specs[-1].prompt
+
+    chat(client, dev["id"], "SAY three\nCOMPACT 190000")
+    wait_for(lambda: idle(client, pid))
+    conv = conversation(client, dev["id"])
+    assert conv["compressions"] == 1 and conv["provider_session_id"]
+    marker = [m for m in conv["messages"] if m["kind"] == "summary"][-1]
+    assert marker["meta"]["provider"] and marker["meta"]["tokens_before"] == 190000
+    assert not runner(client).completions  # no extra summary with our own model
+
+    chat(client, dev["id"], "SAY four")
+    wait_for(lambda: idle(client, pid))
+    spec = runner(client).specs[-1]
+    assert spec.resume_session_id and spec.system_prompt == first
+    assert spec.prompt.startswith("[Briefing update]") and "Use FastAPI" in spec.prompt
+    assert "### Team" not in spec.prompt  # only what differs from the frozen prompt
+
+    chat(client, dev["id"], "SAY five")  # delivered again: no repeated update
+    wait_for(lambda: idle(client, pid))
+    assert "[Briefing update]" not in runner(client).specs[-1].prompt
+
+
 def test_session_without_frozen_prompt_is_kept(client, project):
     """Sessions created before prompts were frozen continue (no forced new session)."""
     from sqlalchemy import update

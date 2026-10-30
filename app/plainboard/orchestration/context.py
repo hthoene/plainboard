@@ -106,7 +106,7 @@ class ContextManager:
         if conv.provider_session_id and not conv.system_prompt:
             # Session from before prompts were frozen: adopt the current briefing and keep the session.
             current = sections()
-            conv.system_prompt, conv.prompt_sections = prompts.join_sections(current), current
+            conv.system_prompt, conv.prompt_sections, conv.session_sections = prompts.join_sections(current), current, current
             await session.commit()
         if conv.provider_session_id and conv.system_prompt:
             # Keep the frozen system prompt (prompt cache stays valid); send only what changed.
@@ -126,6 +126,7 @@ class ContextManager:
         current = sections()
         conv.system_prompt = prompts.join_sections(current)
         conv.prompt_sections = current
+        conv.session_sections = current
         await session.commit()
         return Turn(conv.system_prompt, prompts.fresh_session_prompt(recent, text), None)
 
@@ -133,6 +134,14 @@ class ContextManager:
         if not should_compress(conv.context_tokens, conv.session_base_tokens, agent.context_limit_tokens):
             return False
         return await self.compress(session, agent, conv)
+
+    @staticmethod
+    def provider_compacted(conv: Conversation, tokens_before: int) -> Message:
+        """Record a compaction done by the provider itself. The session continues, but briefing
+        updates from it may be lost: the next turn re-sends what differs from the frozen prompt."""
+        conv.prompt_sections = conv.session_sections
+        conv.compressions += 1
+        return Message(conversation_id=conv.id, role="system", kind="summary", content="", meta={"tokens_before": tokens_before, "provider": True})
 
     async def compress(self, session: AsyncSession, agent: Agent, conv: Conversation, *, before_id: int | None = None) -> bool:
         """Summarize everything except the last ``keep_recent_messages`` text messages and drop the session."""

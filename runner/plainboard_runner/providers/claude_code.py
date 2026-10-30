@@ -27,6 +27,7 @@ from claude_agent_sdk import (
 from claude_agent_sdk.types import StreamEvent
 from plainboard_protocol import (
     AssistantTextEvent,
+    CompactionEvent,
     CompletionResult,
     CompletionSpec,
     Credentials,
@@ -141,6 +142,9 @@ class EventMapper:
         elif isinstance(message, SystemMessage):
             if message.subtype == "init" and message.data.get("session_id"):
                 events.append(SessionEvent(session_id=message.data["session_id"]))
+            elif message.subtype == "compact_boundary":
+                metadata = message.data.get("compact_metadata") or {}
+                events.append(CompactionEvent(tokens_before=int(metadata.get("pre_tokens") or 0)))
         elif isinstance(message, AssistantMessage):
             if message.parent_tool_use_id:  # sub-agent chatter: keep out of the transcript
                 return events

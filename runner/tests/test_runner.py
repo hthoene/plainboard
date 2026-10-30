@@ -187,6 +187,12 @@ def test_event_mapper_translates_sdk_messages():
     assert events[-1].context_tokens == 1100 and events[-1].text == "Done" and events[-1].cost_usd == 0.01
 
 
+def test_event_mapper_reports_provider_compaction():
+    events = EventMapper().map(SystemMessage(subtype="compact_boundary", data={"compact_metadata": {"trigger": "auto", "pre_tokens": 190000}}))
+    assert [e.type for e in events] == ["compaction"]
+    assert events[0].tokens_before == 190000
+
+
 def test_auth_env_modes():
     assert auth_env(Credentials(claude_auth_mode="oauth_token", claude_oauth_token="tok"))["CLAUDE_CODE_OAUTH_TOKEN"] == "tok"
     assert auth_env(Credentials(claude_auth_mode="api_key", anthropic_api_key="key"))["ANTHROPIC_API_KEY"] == "key"

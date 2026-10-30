@@ -135,7 +135,7 @@ class Agent(Timestamps, Base):
     model: Mapped[str] = mapped_column(String(100))
     effort: Mapped[str | None] = mapped_column(String(20))
     toolset: Mapped[str] = mapped_column(String(20), default="full")
-    context_limit_tokens: Mapped[int] = mapped_column(Integer, default=60000)
+    context_limit_tokens: Mapped[int] = mapped_column(Integer, default=400000)
     keep_recent_messages: Mapped[int] = mapped_column(Integer, default=6)
     summary_model: Mapped[str] = mapped_column(String(100), default="claude-haiku-5-5")
     max_turns: Mapped[int | None] = mapped_column(Integer)
@@ -224,8 +224,11 @@ class Conversation(Base):
     session_base_tokens: Mapped[int] = mapped_column(Integer, default=0)
     # System prompt frozen at session start (keeps the prompt cache valid) and the latest
     # briefing sections the agent has seen (changes are sent as an update in the next turn).
+    # session_sections are the sections of the frozen prompt: if the provider compacts its session,
+    # earlier updates may be gone, so the agent's knowledge falls back to them.
     system_prompt: Mapped[str | None] = mapped_column(Text)
     prompt_sections: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    session_sections: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     summary: Mapped[str | None] = mapped_column(Text)
     summary_until_message_id: Mapped[int] = mapped_column(Integer, default=0)
     compressions: Mapped[int] = mapped_column(Integer, default=0)

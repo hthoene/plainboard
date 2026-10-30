@@ -61,6 +61,11 @@ limits apply. An answer that arrives after a timeout goes to the asker's inbox i
   transcripts are summarised in chunks. Then drop the session and record a `summary` message.
 - Fresh session: system prompt + `## Memory` (summary) + recent messages verbatim (truncated) + the new
   turn. This also works unchanged for stateless providers.
+- A provider may compact its own session, e.g. mid-run near the model's context limit (`compaction`
+  event). The session continues, a `summary` message without text is recorded, and the next turn
+  re-sends what differs from the frozen prompt (`conversation.session_sections`), because earlier
+  briefing updates may be lost. This also applies when `context_limit_tokens` is above the provider's
+  own threshold: then the provider compacts and PlainBoard's compression does not start.
 
 ### Prompts (`orchestration/prompts.py`)
 The system prompt is stable (cache-friendly): role, area, guide, workspace, instructions, team roster,

@@ -517,3 +517,41 @@ def test_tool_schemas_are_compact():
         schema = tool.definition().input_schema
         assert not has_title_keyword(schema), tool.name
         assert '"anyOf"' not in json.dumps(schema) and '"default": null' not in json.dumps(schema), tool.name
+
+
+def test_chat_message_with_files(client, project):
+    manager = agents_by_slug(client, project["id"])["manager"]
+    files = [("files", ("shot.png", b"png", "image/png")), ("files", ("notes.txt", b"text", "text/plain"))]
+    uploaded = client.post(f"/api/agents/{manager['id']}/attachments", files=files)
+    assert uploaded.status_code == 201, uploaded.text
+    ids = [a["id"] for a in uploaded.json()]
+
+    run = client.post(f"/api/agents/{manager['id']}/messages", json={"attachment_ids": ids})
+    assert run.status_code == 202, run.text
+    assert run.json()["attachment_ids"] == ids
+    wait_for(lambda: idle(client, project["id"]))
+
+    prompt = runner(client).specs[-1].prompt
+    assert "shot.png: /uploads/" in prompt and "notes.txt: /uploads/" in prompt
+    assert "Updates since" not in prompt
+    message = next(m for m in conversation(client, manager["id"])["messages"] if m["role"] == "user")
+    assert message["content"] == ""
+    assert [f["filename"] for f in message["meta"]["attachments"]] == ["shot.png", "notes.txt"]
+    assert client.get(f"/api/attachments/{ids[0]}").content == b"png"
+
+
+def test_chat_message_rejects_empty_and_unknown_files(client, project):
+    manager = agents_by_slug(client, project["id"])["manager"]
+    assert client.post(f"/api/agents/{manager['id']}/messages", json={"text": "  "}).status_code == 422
+    assert client.post(f"/api/agents/{manager['id']}/messages", json={"text": "x", "attachment_ids": [999]}).status_code == 400
+
+
+def test_chat_files_stay_known_in_a_fresh_session(client, project):
+    manager = agents_by_slug(client, project["id"])["manager"]
+    uploaded = client.post(f"/api/agents/{manager['id']}/attachments", files=[("files", ("shot.png", b"png", "image/png"))]).json()
+    client.post(f"/api/agents/{manager['id']}/messages", json={"text": "look", "attachment_ids": [uploaded[0]["id"]]})
+    wait_for(lambda: idle(client, project["id"]))
+    client.post(f"/api/agents/{manager['id']}/reset-session")
+    chat(client, manager["id"], "SAY again")
+    wait_for(lambda: idle(client, project["id"]))
+    assert "shot.png: /uploads/" in runner(client).specs[-1].prompt

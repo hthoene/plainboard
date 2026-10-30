@@ -207,16 +207,16 @@ def _remove_file(attachment: Attachment) -> None:
     storage_path(attachment).unlink(missing_ok=True)
 
 
-async def add_attachment(
-    session: AsyncSession, task: Task, filename: str, content_type: str, data: bytes, *, agent_id: int | None = None
+async def store_attachment(
+    session: AsyncSession, project_id: int, filename: str, content_type: str, data: bytes, *, task_id: int | None = None, agent_id: int | None = None
 ) -> Attachment:
     max_bytes = get_config().max_upload_mb * 1024 * 1024
     if len(data) > max_bytes:
         raise ServiceError(f"File too large (max {get_config().max_upload_mb} MB)", 413)
     suffix = Path(filename).suffix[:16]
     attachment = Attachment(
-        project_id=task.project_id,
-        task_id=task.id,
+        project_id=project_id,
+        task_id=task_id,
         filename=Path(filename).name[:300] or "file",
         content_type=content_type or "application/octet-stream",
         size=len(data),
@@ -228,6 +228,13 @@ async def add_attachment(
     path.write_bytes(data)
     session.add(attachment)
     await session.commit()
+    return attachment
+
+
+async def add_attachment(
+    session: AsyncSession, task: Task, filename: str, content_type: str, data: bytes, *, agent_id: int | None = None
+) -> Attachment:
+    attachment = await store_attachment(session, task.project_id, filename, content_type, data, task_id=task.id, agent_id=agent_id)
     bus.publish(task.project_id, "attachment.created", AttachmentOut.model_validate(attachment))
     await publish_task(session, task)
     return attachment
@@ -235,6 +242,12 @@ async def add_attachment(
 
 async def list_attachments(session: AsyncSession, task_id: int) -> list[Attachment]:
     return list((await session.scalars(select(Attachment).where(Attachment.task_id == task_id).order_by(Attachment.id))).all())
+
+
+async def chat_attachments(session: AsyncSession, project_id: int, ids: list[int]) -> list[Attachment]:
+    """Files of a chat message (they belong to the project, not to a ticket)."""
+    q = select(Attachment).where(Attachment.project_id == project_id, Attachment.task_id.is_(None), Attachment.id.in_(ids))
+    return list((await session.scalars(q.order_by(Attachment.id))).all())
 
 
 async def get_attachment(session: AsyncSession, attachment_id: int) -> Attachment:

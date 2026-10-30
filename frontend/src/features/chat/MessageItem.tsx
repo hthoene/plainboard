@@ -1,8 +1,9 @@
 import clsx from "clsx";
-import { AlertCircle, Archive, Bell, CalendarClock, ChevronRight, ClipboardList, HelpCircle, Mail, RefreshCw, Ticket, Wrench } from "lucide-react";
+import { AlertCircle, Archive, Bell, CalendarClock, ChevronRight, ClipboardList, HelpCircle, Mail, Paperclip, RefreshCw, Ticket, Wrench } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { Agent, Message } from "../../api/types";
+import { Lightbox } from "../../components/Lightbox";
 import { Markdown } from "../../components/Markdown";
 import { formatTokens } from "../../lib/format";
 import { useShell } from "../layout/shell-context";
@@ -72,8 +73,9 @@ function UserMessage({ message, details }: { message: Message; details: boolean 
       <>
         {briefingNote}
         {updates}
-        <div className="flex justify-end">
-          <UserBubble text={message.content} />
+        <div className="flex flex-col items-end gap-1.5">
+          {message.meta.attachments?.length > 0 && <MessageFiles files={message.meta.attachments} />}
+          {message.content && <UserBubble text={message.content} />}
         </div>
       </>
     );
@@ -155,6 +157,36 @@ function SystemNote({ icon, label, children, action }: { icon: ReactNode; label:
       </div>
       {open && children && <div className="w-full rounded-lg bg-zinc-50 px-3 py-2 text-xs text-zinc-700 dark:bg-zinc-800/40 dark:text-zinc-300">{children}</div>}
     </div>
+  );
+}
+
+function MessageFiles({ files }: { files: { id: number; filename: string; content_type: string }[] }) {
+  const [viewing, setViewing] = useState<number | null>(null);
+  const images = files.filter((f) => f.content_type.startsWith("image/"));
+  const others = files.filter((f) => !f.content_type.startsWith("image/"));
+  return (
+    <>
+      {images.length > 0 && (
+        <div className="flex max-w-[85%] flex-wrap justify-end gap-1.5">
+          {images.map((f, i) => (
+            <button key={f.id} onClick={() => setViewing(i)} className="overflow-hidden rounded-xl ring-1 ring-zinc-200 dark:ring-zinc-800">
+              <img src={`/api/attachments/${f.id}`} alt={f.filename} loading="lazy" className="h-40 max-w-full object-cover" />
+            </button>
+          ))}
+        </div>
+      )}
+      {others.map((f) => (
+        <a
+          key={f.id}
+          href={`/api/attachments/${f.id}?inline=false`}
+          className="flex max-w-[85%] items-center gap-1.5 rounded-lg bg-zinc-100 px-2.5 py-1.5 text-xs text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+        >
+          <Paperclip className="size-3.5 shrink-0" />
+          <span className="truncate">{f.filename}</span>
+        </a>
+      ))}
+      {viewing !== null && <Lightbox images={images.map((f) => ({ src: `/api/attachments/${f.id}`, alt: f.filename }))} start={viewing} onClose={() => setViewing(null)} />}
+    </>
   );
 }
 

@@ -295,6 +295,13 @@ def wake_prompt() -> str:
     return "Process the updates above: review results, delegate follow-ups if needed, update tickets. If nothing needs doing, reply briefly."
 
 
+def with_attachments(text: str, files: list[dict] | None) -> str:
+    if not files:
+        return text
+    note = "Files from the user (read them with your file tools, this also works for images):\n" + "\n".join(f"- {f['filename']}: {f['path']}" for f in files)
+    return f"{text}\n\n{note}" if text else note
+
+
 def with_preface(text: str, *, now: str, inbox: list[str]) -> str:
     preface = [now]
     if inbox:

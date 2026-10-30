@@ -287,6 +287,7 @@ class Run(Base):
     status: Mapped[str] = mapped_column(String(20), default=RunStatus.QUEUED, index=True)
     input_text: Mapped[str] = mapped_column(Text, default="")
     effort: Mapped[str | None] = mapped_column(String(20))  # per-run override of the agent's effort
+    attachment_ids: Mapped[list[int]] = mapped_column(JSON, default=list)  # files sent with a chat message
     task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id", ondelete="SET NULL"))
     assignment_id: Mapped[int | None] = mapped_column(ForeignKey("assignments.id", ondelete="SET NULL"))
     schedule_id: Mapped[int | None] = mapped_column(ForeignKey("schedules.id", ondelete="SET NULL"))

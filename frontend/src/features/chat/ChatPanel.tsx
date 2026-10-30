@@ -1,12 +1,12 @@
 import { useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { ArrowUp, ChevronDown, Eye, EyeOff, Loader2, Maximize2, MoreHorizontal, Square, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { ArrowUp, ChevronDown, Eye, EyeOff, Loader2, Maximize2, MoreHorizontal, Paperclip, Square, X } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { api, errorMessage } from "../../api/client";
 import { useStreamingText } from "../../api/events";
 import { qk, useConversation, useRuns } from "../../api/queries";
-import type { Conversation } from "../../api/types";
+import type { Attachment, Conversation } from "../../api/types";
 import { Markdown } from "../../components/Markdown";
 import { AgentDot, IconButton, Select, Spinner } from "../../components/ui";
 import { formatCost, formatTokens } from "../../lib/format";
@@ -38,6 +38,7 @@ export function ChatPanel({
   const stickToBottom = useRef(true);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [details, setDetails] = useStored<boolean>("plainboard.chatDetails", false);
+  const [files, setFiles] = useState<File[]>([]);
 
   const activeRuns = (runs.data ?? []).filter((r) => r.agent_id === agentId && (r.status === "queued" || r.status === "running"));
   const running = activeRuns.find((r) => r.status === "running");
@@ -75,9 +76,18 @@ export function ChatPanel({
   if (!agent) return null;
   // On the full page, keep a comfortable reading width.
   const column = variant === "page" ? "mx-auto w-full max-w-3xl" : "";
+  const hasFiles = (e: DragEvent) => e.dataTransfer.types.includes("Files");
+  const onDragOver = (e: DragEvent) => {
+    if (hasFiles(e)) e.preventDefault();
+  };
+  const onDrop = (e: DragEvent) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    if (agent.enabled) setFiles((cur) => [...cur, ...Array.from(e.dataTransfer.files)]);
+  };
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col" onDragOver={onDragOver} onDrop={onDrop}>
       <header className="flex items-center gap-2 border-b border-zinc-100 px-3 py-2 sm:px-4 dark:border-zinc-800">
         <div className="min-w-0 flex-1">
           <Select
@@ -148,7 +158,15 @@ export function ChatPanel({
         ))}
         {queued.map((r) => (
           <div key={r.id} className="flex justify-end">
-            <div className="max-w-[85%] rounded-2xl rounded-br-md bg-indigo-600/60 px-3.5 py-2 text-sm whitespace-pre-wrap text-white">{r.input_text}</div>
+            <div className="max-w-[85%] rounded-2xl rounded-br-md bg-indigo-600/60 px-3.5 py-2 text-sm whitespace-pre-wrap text-white">
+              {r.input_text}
+              {r.attachment_ids.length > 0 && (
+                <span className="flex items-center gap-1 text-xs text-indigo-100">
+                  <Paperclip className="size-3" />
+                  {t("chat.fileCount", { count: r.attachment_ids.length })}
+                </span>
+              )}
+            </div>
           </div>
         ))}
         {running && streaming && (
@@ -166,6 +184,8 @@ export function ChatPanel({
         disabled={!agent.enabled}
         className={column}
         status={activeRuns.length > 0 ? t(running ? "chat.working" : "chat.waiting", { name: agent.name }) : undefined}
+        files={files}
+        onFilesChange={setFiles}
       />
     </div>
   );
@@ -248,6 +268,38 @@ function MenuItem({ label, hint, onClick, busy, disabled }: { label: string; hin
   );
 }
 
+function PendingFile({ file, onRemove }: { file: File; onRemove: () => void }) {
+  const { t } = useTranslation();
+  const [preview, setPreview] = useState<string>();
+  useEffect(() => {
+    if (!file.type.startsWith("image/")) return;
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+  const name = file.name || "pasted.png";
+  return (
+    <div className="relative max-w-40" title={name}>
+      {preview ? (
+        <img src={preview} alt={name} className="size-16 rounded-lg object-cover ring-1 ring-zinc-200 dark:ring-zinc-800" />
+      ) : (
+        <div className="flex h-8 items-center gap-1.5 rounded-lg bg-zinc-100 pr-7 pl-2 text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+          <Paperclip className="size-3 shrink-0" />
+          <span className="truncate">{name}</span>
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={t("chat.removeFile", { name })}
+        className={clsx("absolute flex size-5 items-center justify-center rounded-full text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100", preview ? "top-0.5 right-0.5 bg-white/90 dark:bg-zinc-900/90" : "top-1.5 right-1")}
+      >
+        <X className="size-3" />
+      </button>
+    </div>
+  );
+}
+
 function Composer({
   agentId,
   agentName,
@@ -255,6 +307,8 @@ function Composer({
   disabled,
   className,
   status,
+  files,
+  onFilesChange,
 }: {
   agentId: number;
   agentName: string;
@@ -262,13 +316,17 @@ function Composer({
   disabled: boolean;
   className?: string;
   status?: string;
+  files: File[];
+  onFilesChange: (files: File[]) => void;
 }) {
   const { t } = useTranslation();
   const { project } = useShell();
   const qc = useQueryClient();
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
   const area = useRef<HTMLTextAreaElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
 
   useLayoutEffect(() => {
     const el = area.current;
@@ -279,15 +337,36 @@ function Composer({
 
   const send = async () => {
     const value = text.trim();
-    if (!value) return;
+    const pending = files;
+    if ((!value && !pending.length) || sending) return;
     setError(null);
     setText("");
+    onFilesChange([]);
+    setSending(true);
     try {
-      await api.post(`/agents/${agentId}/messages`, { text: value });
+      let attachment_ids: number[] = [];
+      if (pending.length) {
+        const form = new FormData();
+        for (const file of pending) form.append("files", file, file.name || "pasted.png");
+        attachment_ids = (await api.post<Attachment[]>(`/agents/${agentId}/attachments`, form)).map((a) => a.id);
+      }
+      await api.post(`/agents/${agentId}/messages`, { text: value, attachment_ids });
       qc.invalidateQueries({ queryKey: qk.runs(project.id) });
     } catch (err) {
       setText(value);
+      onFilesChange(pending);
       setError(errorMessage(err));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    // Office apps also put a picture of copied text on the clipboard: text wins.
+    const pasted = Array.from(e.clipboardData.files);
+    if (pasted.length && !e.clipboardData.getData("text/plain")) {
+      e.preventDefault();
+      onFilesChange([...files, ...pasted]);
     }
   };
 
@@ -310,7 +389,27 @@ function Composer({
           <span className="truncate">{status}</span>
         </div>
       )}
+      {files.length > 0 && (
+        <div className="mb-2 flex flex-wrap items-end gap-2">
+          {files.map((file, i) => (
+            <PendingFile key={`${file.name}-${file.lastModified}-${i}`} file={file} onRemove={() => onFilesChange(files.filter((_, j) => j !== i))} />
+          ))}
+        </div>
+      )}
       <div className="flex items-end gap-2 rounded-xl bg-zinc-50 p-1.5 ring-1 ring-zinc-200 focus-within:ring-2 focus-within:ring-indigo-500 dark:bg-zinc-950 dark:ring-zinc-800">
+        <input
+          ref={picker}
+          type="file"
+          multiple
+          hidden
+          onChange={(e) => {
+            onFilesChange([...files, ...Array.from(e.target.files ?? [])]);
+            e.target.value = "";
+          }}
+        />
+        <IconButton label={t("chat.attachFiles")} disabled={disabled} onClick={() => picker.current?.click()} className="size-8 shrink-0 rounded-lg">
+          <Paperclip className="size-4" />
+        </IconButton>
         <textarea
           ref={area}
           rows={1}
@@ -318,6 +417,7 @@ function Composer({
           disabled={disabled}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKey}
+          onPaste={onPaste}
           placeholder={disabled ? t("chat.agentDisabled") : t("chat.placeholder", { name: agentName })}
           className="scroll-thin max-h-[200px] min-h-8 flex-1 resize-none bg-transparent px-2 py-1.5 text-base outline-none placeholder:text-zinc-400 sm:text-sm"
         />
@@ -328,7 +428,7 @@ function Composer({
         ) : null}
         <button
           onClick={send}
-          disabled={!text.trim() || disabled}
+          disabled={(!text.trim() && !files.length) || disabled || sending}
           aria-label={t("chat.send")}
           className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-white transition-colors hover:bg-indigo-500 disabled:bg-zinc-300 dark:disabled:bg-zinc-800"
         >

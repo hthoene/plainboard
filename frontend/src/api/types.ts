@@ -174,6 +174,7 @@ export interface Run {
   trigger: "chat" | "ticket" | "assignment" | "ask" | "message" | "schedule" | "wake";
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   input_text: string;
+  attachment_ids: number[];
   effort: string | null;
   task_id: number | null;
   assignment_id: number | null;

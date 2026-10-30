@@ -164,6 +164,7 @@ class RunManager:
         source_agent_id: int | None = None,
         parent_run_id: int | None = None,
         effort: str | None = None,
+        attachment_ids: list[int] | None = None,
     ) -> Run:
         if not agent.enabled:
             raise ServiceError(f"Agent '{agent.name}' is disabled")
@@ -178,6 +179,7 @@ class RunManager:
             source_agent_id=source_agent_id,
             parent_run_id=parent_run_id,
             effort=effort,
+            attachment_ids=attachment_ids or [],
         )
         s.add(run)
         await s.commit()
@@ -186,8 +188,10 @@ class RunManager:
         self._wake.set()
         return run
 
-    async def chat(self, s: AsyncSession, agent: Agent, text: str) -> Run:
-        return await self.enqueue(s, agent, RunTrigger.CHAT, text)
+    async def chat(self, s: AsyncSession, agent: Agent, text: str, attachment_ids: list[int] | None = None) -> Run:
+        if attachment_ids and len(await board_service.chat_attachments(s, agent.project_id, attachment_ids)) != len(set(attachment_ids)):
+            raise ServiceError("Unknown attachment")
+        return await self.enqueue(s, agent, RunTrigger.CHAT, text, attachment_ids=attachment_ids)
 
     async def hand_ticket(self, s: AsyncSession, task: Task) -> Run:
         """Give a ticket to the project manager, who plans and delegates it."""
@@ -407,7 +411,8 @@ class RunManager:
             await s.commit()
 
             updates = await inbox.consume(s, agent.id)
-            text = run.input_text or prompts.wake_prompt()
+            files = await board_service.chat_attachments(s, project.id, run.attachment_ids) if run.attachment_ids else []
+            text = run.input_text or ("" if files else prompts.wake_prompt())
             meta: dict = {"trigger": run.trigger}
             if run.task_id:
                 meta["task_id"] = run.task_id
@@ -417,6 +422,8 @@ class RunManager:
                 meta["source_agent_id"] = run.source_agent_id
             if updates:
                 meta["inbox"] = updates
+            if files:
+                meta["attachments"] = [{"id": a.id, "filename": a.filename, "content_type": a.content_type, "path": board_service.runner_path(a)} for a in files]
             message = Message(conversation_id=conv.id, role="user", kind="text", content=text, meta=meta, run_id=run.id)
             s.add(message)
             if run.assignment_id and (assignment := await s.get(Assignment, run.assignment_id)):
@@ -430,7 +437,7 @@ class RunManager:
             await board_service.publish_task_id(s, run.task_id)
 
             values = await settings_service.get_all(s)
-            full_text = prompts.with_preface(text, now=prompts.now_line(values["timezone"]), inbox=updates)
+            full_text = prompts.with_preface(prompts.with_attachments(text, meta.get("attachments")), now=prompts.now_line(values["timezone"]), inbox=updates)
             turn = await self.context.build_turn(s, project=project, agent=agent, conv=conv, text=full_text, message_id=message.id)
             if turn.briefing_changes:
                 message.meta = {**message.meta, "briefing_update": turn.briefing_changes}

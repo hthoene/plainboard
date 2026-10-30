@@ -67,7 +67,7 @@ def render_message(message: Message) -> str:
         return f"[tool] {meta.get('name', message.content)} {args} -> {result}{flag}"
     inbox = (message.meta or {}).get("inbox")
     prefix = ("[updates] " + " | ".join(inbox) + "\n") if inbox else ""
-    return f"{prefix}[{message.role}] {message.content}"
+    return f"{prefix}[{message.role}] {prompts.with_attachments(message.content, (message.meta or {}).get('attachments'))}"
 
 
 class ContextManager:
@@ -121,7 +121,7 @@ class ContextManager:
         if len(uncovered) > agent.keep_recent_messages:
             await self.compress(session, agent, conv, before_id=message_id)
             uncovered = await self._uncovered(session, conv, before_id=message_id, text_only=True)
-        recent = [(m.role, m.content) for m in uncovered[-agent.keep_recent_messages :]] if agent.keep_recent_messages else []
+        recent = [(m.role, prompts.with_attachments(m.content, (m.meta or {}).get("attachments"))) for m in uncovered[-agent.keep_recent_messages :]] if agent.keep_recent_messages else []
         # New session (first turn or after compression): fresh briefing with the current state.
         current = sections()
         conv.system_prompt = prompts.join_sections(current)

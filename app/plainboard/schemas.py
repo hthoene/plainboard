@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, PlainSerializer
+from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, model_validator
 
 
 def _iso_utc(value: datetime | None) -> str | None:
@@ -280,7 +280,14 @@ class TaskDetail(TaskOut):
 
 
 class ChatMessageIn(BaseModel):
-    text: str = Field(min_length=1)
+    text: str = ""
+    attachment_ids: list[int] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def not_empty(self) -> ChatMessageIn:
+        if not self.text.strip() and not self.attachment_ids:
+            raise ValueError("Message is empty")
+        return self
 
 
 class MessageOut(ORM):
@@ -317,6 +324,7 @@ class RunOut(ORM):
     trigger: str
     status: str
     input_text: str
+    attachment_ids: list[int] = Field(default_factory=list)
     effort: str | None = None
     task_id: int | None
     assignment_id: int | None

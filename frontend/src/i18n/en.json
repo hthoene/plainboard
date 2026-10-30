@@ -172,6 +172,7 @@
     "fileCount_other": "{{count}} files",
     "stop": "Stop",
     "queueHint": "New messages are queued until the current turn finishes.",
+    "openQuestions": "Tickets with a question for you",
     "limits": {
       "ring": "Plan limit {{percent}}% used",
       "five_hour": "5-hour limit",

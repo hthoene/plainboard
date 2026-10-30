@@ -30,7 +30,7 @@ export function LimitsRing() {
   const label = t("chat.limits.ring", { percent: percent(highest) });
 
   return (
-    <div ref={ref} className="relative ml-auto shrink-0">
+    <div ref={ref} className="relative shrink-0">
       <button onClick={() => setOpen(!open)} aria-label={label} aria-expanded={open} title={label} className="flex size-6 items-center justify-center rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-800">
         <svg viewBox="0 0 20 20" className="size-4 -rotate-90" aria-hidden>
           <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="3" className="text-zinc-200 dark:text-zinc-700" />

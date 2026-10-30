@@ -14,6 +14,7 @@ import { useStored } from "../../lib/hooks";
 import { useShell } from "../layout/shell-context";
 import { LimitsRing } from "./LimitsRing";
 import { MessageItem } from "./MessageItem";
+import { OpenQuestions } from "./OpenQuestions";
 
 export function ChatPanel({
   agentId,
@@ -442,9 +443,12 @@ function Composer({
           <ArrowUp className="size-4" />
         </button>
       </div>
-      <div className="mt-1.5 flex items-center gap-2 empty:hidden">
-        {runningId && <p className="text-[11px] text-zinc-400">{t("chat.queueHint")}</p>}
-        <LimitsRing />
+      <div className="mt-1.5 flex items-center gap-2">
+        {runningId && <p className="min-w-0 text-[11px] text-zinc-400">{t("chat.queueHint")}</p>}
+        <div className="ml-auto flex items-center gap-2">
+          <OpenQuestions />
+          <LimitsRing />
+        </div>
       </div>
       </div>
     </div>

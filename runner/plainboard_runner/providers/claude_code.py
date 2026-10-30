@@ -15,6 +15,7 @@ from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
+    HookMatcher,
     ResultMessage,
     SystemMessage,
     TextBlock,
@@ -44,6 +45,7 @@ from plainboard_protocol import (
     UsageEvent,
 )
 
+from .. import notices
 from ..config import TOOL_RESULT_PREVIEW_CHARS
 from ..tool_bridge import ToolBridge
 from ..workspace import git_env
@@ -123,6 +125,18 @@ def build_mcp_server(bridge: ToolBridge):
 
         tools.append(tool(definition.name, definition.description, definition.input_schema)(make_handler(definition.name)))
     return create_sdk_mcp_server(name=MCP_SERVER_NAME, version="1.0.0", tools=tools)
+
+
+def notice_hook(run_id: str):
+    """Hands messages for the running turn to the agent after its current tool call."""
+
+    async def hook(_input: Any, _tool_use_id: str | None, _context: Any) -> dict[str, Any]:
+        pending = notices.drain(run_id)
+        if not pending:
+            return {}
+        return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "\n\n".join(pending)}}
+
+    return hook
 
 
 class EventMapper:
@@ -216,6 +230,7 @@ class ClaudeCodeProvider(Provider):
             disallowed_tools=DISALLOWED_TOOLS,
             include_partial_messages=True,
             stderr=stderr_tail.append,
+            hooks={"PostToolUse": [HookMatcher(hooks=[notice_hook(spec.run_id)])]},
         )
         if spec.effort:
             common["effort"] = spec.effort

@@ -15,6 +15,7 @@ from plainboard_protocol import CheckResult, CompletionResult, CompletionSpec, C
 from pydantic import BaseModel
 
 from . import jobs
+from . import notices
 from .providers import get_provider, list_providers
 from .tool_bridge import ToolBridge
 from .workspace import WorkspaceError, git_env, prepare_workspace, run_cmd
@@ -73,6 +74,7 @@ async def start_run(spec: RunSpec) -> StreamingResponse:
                 yield line + "\n"
         finally:
             _active.pop(spec.run_id, None)
+            notices.drain(spec.run_id)
             if not task.done():  # client went away -> stop the agent
                 task.cancel()
 
@@ -104,6 +106,18 @@ async def job_status(ids: list[str]) -> dict[str, JobState]:
 @app.post("/jobs/{job_id}/stop")
 async def stop_job(job_id: str) -> dict[str, bool]:
     return {"stopped": jobs.stop(job_id)}
+
+
+class RunNotice(BaseModel):
+    text: str
+
+
+@app.post("/runs/{run_id}/notify")
+async def notify_run(run_id: str, body: RunNotice) -> dict[str, bool]:
+    if run_id not in _active:
+        return {"delivered": False}
+    notices.push(run_id, body.text)
+    return {"delivered": True}
 
 
 @app.post("/complete", response_model=CompletionResult)

@@ -666,3 +666,54 @@ def test_session_cost_totals_are_not_counted_twice(client, project, monkeypatch)
     costs = [r["cost_usd"] for r in runs_of(client, project["id"])]
     assert sorted(round(c, 2) for c in costs) == [0.10, 0.15]
     assert round(agents_by_slug(client, project["id"])["manager"]["total_cost_usd"], 2) == 0.25
+
+
+def test_disabling_an_agent_cancels_its_waiting_work(client, project):
+    pid = project["id"]
+    client.put("/api/settings", json={"values": {"max_parallel_runs": 0}})
+    dev = make_dev(client, pid)
+    chat(client, dev["id"], "SAY hi")
+    assert client.patch(f"/api/agents/{dev['id']}", json={"enabled": False}).status_code == 200
+    client.put("/api/settings", json={"values": {"max_parallel_runs": 3}})
+    wait_for(lambda: idle(client, pid))
+    assert [r["status"] for r in runs_of(client, pid, agent_id=dev["id"])] == ["cancelled"]
+
+
+def test_manager_pauses_a_teammate_and_drops_its_queue(client, project):
+    pid = project["id"]
+    client.put("/api/settings", json={"values": {"max_parallel_runs": 1}})
+    dev = make_dev(client, pid)
+    manager = agents_by_slug(client, pid)["manager"]
+    # The manager's own run takes the only slot, so the message to Dev stays queued.
+    chat(client, manager["id"], 'TOOL message_agent {"agent": "dev", "message": "hi"}\nTOOL stop_agent {"agent": "dev"}\nTOOL stop_agent {"agent": "manager"}')
+    wait_for(lambda: idle(client, pid))
+    assert [r["status"] for r in runs_of(client, pid, agent_id=dev["id"])] == ["cancelled"]
+    assert agents_by_slug(client, pid)["dev"]["enabled"] is False
+    tools = [m for m in conversation(client, manager["id"])["messages"] if m["kind"] == "tool"]
+    assert tools[2]["meta"]["is_error"] is True
+
+
+def test_working_teammate_is_told_to_wrap_up_not_aborted(client, project):
+    pid = project["id"]
+    dev = make_dev(client, pid)
+    # Dev's run stays active while it waits for the manager, who stops it meanwhile.
+    question = json.dumps({"agent": "manager", "question": chr(10) + 'TOOL stop_agent {"agent": "dev", "reason": "release"}' + chr(10)})
+    chat(client, dev["id"], f"TOOL ask_agent {question}")
+    wait_for(lambda: idle(client, pid))
+    (run_id, text), = runner(client).notices
+    assert run_id == runs_of(client, pid, agent_id=dev["id"])[0]["id"]
+    assert "safe point" in text and "release" in text
+    assert runs_of(client, pid, agent_id=dev["id"])[0]["status"] == "succeeded"
+    assert agents_by_slug(client, pid)["dev"]["enabled"] is False
+
+
+def test_agents_can_read_each_others_chat(client, project):
+    pid = project["id"]
+    dev = make_dev(client, pid)
+    manager = agents_by_slug(client, pid)["manager"]
+    chat(client, dev["id"], "SAY the build is green")
+    wait_for(lambda: idle(client, pid))
+    chat(client, manager["id"], 'TOOL read_chat {"agent": "dev"}')
+    wait_for(lambda: idle(client, pid))
+    tool = next(m for m in conversation(client, manager["id"])["messages"] if m["kind"] == "tool")
+    assert "the build is green" in tool["meta"]["result"] and not tool["meta"]["is_error"]

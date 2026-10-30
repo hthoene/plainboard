@@ -94,9 +94,11 @@ async def create_agent(project_id: int, body: AgentCreate, session: Session, run
 
 
 @router.patch("/agents/{agent_id}", response_model=AgentOut)
-async def update_agent(agent_id: int, body: AgentUpdate, session: Session, runner: Runner) -> AgentOut:
+async def update_agent(agent_id: int, body: AgentUpdate, session: Session, runner: Runner, runs: Runs) -> AgentOut:
     await _validate_model(runner, body.provider, body.model)
     agent = await agent_service.update(session, await agent_service.get(session, agent_id), body)
+    if body.enabled is False:
+        await runs.wind_down(session, agent)
     (out,) = await agent_service.to_out(session, [agent])
     return out
 

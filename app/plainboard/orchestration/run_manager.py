@@ -304,6 +304,29 @@ class RunManager:
         asyncio.get_running_loop().call_later(CANCEL_GRACE_SECONDS, self._force_cancel, run_id)
         return True
 
+    async def wind_down(self, s: AsyncSession, agent: Agent, reason: str = "") -> bool:
+        """Let an agent finish safely: drop what it has not started and tell its running turn to wrap up.
+        Returns whether a turn is still running."""
+        rows = (await s.execute(select(Run.id, Run.status).where(Run.agent_id == agent.id, Run.status.in_((RunStatus.QUEUED, RunStatus.RUNNING))))).all()
+        running = False
+        for run_id, status in rows:
+            if status == RunStatus.QUEUED:
+                await self.cancel_run(run_id)
+            else:
+                running = await self.runner.notify_run(run_id, prompts.wind_down_notice(reason)) or running
+        return running
+
+    async def stop_agent(self, s: AsyncSession, agent: Agent) -> int:
+        """Stop everything an agent is doing or about to do, at once: runs and background jobs."""
+        run_ids = (await s.scalars(select(Run.id).where(Run.agent_id == agent.id, Run.status.in_((RunStatus.QUEUED, RunStatus.RUNNING))))).all()
+        stopped = 0
+        for run_id in run_ids:
+            stopped += await self.cancel_run(run_id)
+        for job in await job_service.running(s):
+            if job.agent_id == agent.id:
+                stopped += await self.stop_job(s, job)
+        return stopped
+
     def _force_cancel(self, run_id: int) -> None:
         task = self._running.get(run_id)
         if task and not task.done():
@@ -410,6 +433,12 @@ class RunManager:
             agent = await s.get(Agent, run.agent_id)
             project = await s.get(Project, run.project_id)
             assert agent and project
+            if not agent.enabled:  # disabled while the run was waiting
+                run.status, run.finished_at, run.error = RunStatus.CANCELLED, utcnow(), "Agent is disabled"
+                await s.commit()
+                await self._after_run(s, run)
+                bus.publish(run.project_id, "run.upserted", RunOut.model_validate(run))
+                return None
             conv = await agent_service.conversation_for(s, agent.id)
             run.status, run.started_at = RunStatus.RUNNING, utcnow()
             await s.commit()

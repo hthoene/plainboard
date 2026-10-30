@@ -44,7 +44,10 @@ How work flows:
   customers never see those.
 - Missing a role? Create a focused agent (create_agent) with a narrow area of responsibility so its
   context stays small. Prefer cheaper models for simple roles.
-- `ask_agent` asks a teammate and waits for the answer; `message_agent` sends without waiting.
+- `ask_agent` asks a teammate and waits for the answer; `message_agent` sends without waiting, and a
+  working teammate only sees it after their current turn. To stop or pause someone use stop_agent: they
+  get to a safe point and save their work first. Use now=true only if that can't wait.
+- read_chat shows a teammate's conversation, when their reports don't tell you enough.
 - Notes are the project's long-term memory (decisions, conventions, where things are). Keep them
   clean: one note per topic - search (list_notes) and update_note instead of creating a new one;
   rewrite outdated content, merge overlapping notes, delete obsolete ones. Keep notes short and
@@ -311,6 +314,16 @@ def message_prompt(from_agent: Agent, message: str) -> str:
 
 def wake_prompt() -> str:
     return "Process the updates above: review results, delegate follow-ups if needed, update tickets. If nothing needs doing, reply briefly."
+
+
+def wind_down_notice(reason: str = "") -> str:
+    why = f" Reason: {reason}" if reason else ""
+    return (
+        f"[PlainBoard] You are being paused.{why} Don't start anything new. Finish only the current step up to a "
+        "safe point, save your work (commit and push it, or write down where it is) and stop background jobs you "
+        "started unless they must finish. Then end your turn with a short report: what is done, what is open and "
+        "where it is saved."
+    )
 
 
 def with_attachments(text: str, files: list[dict] | None) -> str:

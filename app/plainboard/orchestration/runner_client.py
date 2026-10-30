@@ -56,6 +56,14 @@ class RunnerClient:
     async def stop_job(self, runner_id: str) -> bool:
         return (await self._post_job(f"/jobs/{runner_id}/stop", {})).json()["stopped"]
 
+    async def notify_run(self, run_id: int, text: str) -> bool:
+        """Give a running turn a message it sees after the agent's current step."""
+        try:
+            resp = await self._client.post(f"/runs/{run_id}/notify", json={"text": text})
+            return bool(resp.json().get("delivered"))
+        except (httpx.HTTPError, ValueError):
+            return False
+
     async def complete(self, spec: CompletionSpec) -> CompletionResult:
         try:
             resp = await self._client.post("/complete", json=spec.model_dump(mode="json"), timeout=600)

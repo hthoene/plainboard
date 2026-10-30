@@ -353,3 +353,19 @@ async def test_stopping_a_job_reaches_its_children(workspaces, jobs_root):
 async def test_job_outside_workspaces_is_rejected(workspaces, jobs_root):
     with pytest.raises(WorkspaceError):
         await jobs.start(JobSpec(id="a4", command="true", workspace="/etc", credentials=Credentials()))
+
+
+async def test_notice_reaches_the_agent_once_after_a_tool_call():
+    from plainboard_runner import notices
+    from plainboard_runner.providers.claude_code import notice_hook
+
+    hook = notice_hook("r9")
+    assert await hook({}, None, None) == {}
+    notices.push("r9", "Please wrap up")
+    output = (await hook({}, None, None))["hookSpecificOutput"]
+    assert output["hookEventName"] == "PostToolUse" and output["additionalContext"] == "Please wrap up"
+    assert await hook({}, None, None) == {}
+
+
+def test_notify_only_reaches_active_runs():
+    assert TestClient(app).post("/runs/nope/notify", json={"text": "x"}).json() == {"delivered": False}

@@ -13,8 +13,9 @@ from ..services import agents as agent_service
 from ..services import board as board_service
 from ..services import repositories as repo_service
 from ..services.errors import NotFound
+from ..orchestration.context import render_message
 from ..services.util import truncate
-from .registry import ALL, MANAGER, ToolContext, tool
+from .registry import ALL, MANAGER, ToolContext, ToolError, tool
 from .repos import apply_repo_access
 
 
@@ -80,6 +81,20 @@ class MessageArgs(BaseModel):
     message: str
 
 
+class StopAgentArgs(BaseModel):
+    agent: str
+    reason: str = Field(default="", description="Why, in a few words; they see it")
+    now: bool = Field(default=False, description="Abort at once, without a chance to save anything")
+    pause: bool = Field(default=True, description="They take no new work until update_agent enabled=true")
+
+
+class ReadChatArgs(BaseModel):
+    agent: str
+    limit: int = Field(default=20, ge=1, le=100)
+    before_id: int | None = Field(default=None, description="Older messages: the id of the oldest one you have")
+    include_tools: bool = False
+
+
 class ListRunsArgs(BaseModel):
     agent: str | None = None
     limit: int = Field(default=10, ge=1, le=50)
@@ -118,6 +133,8 @@ async def update_agent(ctx: ToolContext, args: UpdateAgentArgs) -> str:
     agent = await agent_service.update(ctx.session, agent, AgentUpdate(**args.model_dump(exclude_unset=True, exclude={"agent", "repositories"})))
     if args.repositories is not None:
         await apply_repo_access(ctx, agent, args.repositories)
+    if args.enabled is False and agent.id != ctx.agent.id:
+        await ctx.runs.wind_down(ctx.session, agent)
     return f"Updated agent {agent.slug}."
 
 
@@ -182,11 +199,36 @@ async def ask_agent(ctx: ToolContext, args: AskArgs) -> str:
     return f"{target.name}: {answer}"
 
 
-@tool("message_agent", "Send a teammate a message without waiting; their reply arrives as an update later.", MessageArgs, roles=ALL)
+@tool("message_agent", "Send a teammate a message without waiting. It only reaches them after their current turn; their reply arrives as an update.", MessageArgs, roles=ALL)
 async def message_agent(ctx: ToolContext, args: MessageArgs) -> str:
     target = await agent_service.resolve(ctx.session, ctx.project.id, args.agent)
     await ctx.runs.message(ctx.session, ctx.agent, target, args.message)
     return f"Message sent to {target.slug}."
+
+
+@tool("stop_agent", "Stop or pause a teammate. They finish to a safe point, save their work and report to you. Queued work is dropped.", StopAgentArgs, roles=(MANAGER,))
+async def stop_agent(ctx: ToolContext, args: StopAgentArgs) -> str:
+    target = await agent_service.resolve(ctx.session, ctx.project.id, args.agent)
+    if target.id == ctx.agent.id:
+        raise ToolError("You cannot stop yourself")
+    if args.pause:
+        await agent_service.update(ctx.session, target, AgentUpdate(enabled=False))
+    paused = " Paused until enabled again." if args.pause else ""
+    if args.now:
+        stopped = await ctx.runs.stop_agent(ctx.session, target)
+        return f"Aborted {stopped} run(s) and job(s) of {target.slug}.{paused}"
+    if await ctx.runs.wind_down(ctx.session, target, args.reason):
+        return f"{target.slug} was told to wrap up after its current step; its report comes as an update.{paused}"
+    return f"{target.slug} is not working.{paused}"
+
+
+@tool("read_chat", "Read a teammate's conversation, newest messages last.", ReadChatArgs, roles=ALL)
+async def read_chat(ctx: ToolContext, args: ReadChatArgs) -> str:
+    target = await agent_service.resolve(ctx.session, ctx.project.id, args.agent)
+    conv = await agent_service.conversation_for(ctx.session, target.id)
+    kinds = ("text", "tool") if args.include_tools else ("text",)
+    rows = await agent_service.messages(ctx.session, conv, before_id=args.before_id, limit=args.limit, kinds=kinds)
+    return chr(10).join(f"#{m.id} {truncate(render_message(m), 1500)}" for m in reversed(rows)) or "No messages."
 
 
 @tool("list_runs", "Recent or active agent runs (who is working on what).", ListRunsArgs, roles=(MANAGER,))

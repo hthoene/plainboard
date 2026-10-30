@@ -38,6 +38,7 @@ class FakeRunner:
     def __init__(self, base_url: str):
         self.specs: list[RunSpec] = []
         self.completions: list[CompletionSpec] = []
+        self.notices: list[tuple[int, str]] = []
         self.jobs: dict[str, JobState] = {}
         self.job_specs: list[JobSpec] = []
         self.reachable = True
@@ -75,6 +76,10 @@ class FakeRunner:
 
     async def cancel(self, run_id: int) -> None:
         pass
+
+    async def notify_run(self, run_id: int, text: str) -> bool:
+        self.notices.append((run_id, text))
+        return True
 
     async def start_job(self, spec: JobSpec) -> JobState:
         self.job_specs.append(spec)

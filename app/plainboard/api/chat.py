@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, File, UploadFile
 from sqlalchemy import select
 
-from ..models import Message, Run, RunStatus
+from ..models import Run, RunStatus
 from ..schemas import AttachmentOut, ChatMessageIn, ConversationOut, MessageOut, RunOut
 from ..services import agents as agent_service
 from ..services import board as board_service
@@ -19,11 +19,8 @@ router = APIRouter(prefix="/api", tags=["chat"])
 async def get_conversation(agent_id: int, session: Session, before_id: int | None = None, limit: int = 60) -> ConversationOut:
     agent = await agent_service.get(session, agent_id)
     conv = await agent_service.conversation_for(session, agent_id)
-    q = select(Message).where(Message.conversation_id == conv.id)
-    if before_id:
-        q = q.where(Message.id < before_id)
     limit = max(1, min(limit, 200))
-    rows = list((await session.scalars(q.order_by(Message.id.desc()).limit(limit + 1))).all())
+    rows = await agent_service.messages(session, conv, before_id=before_id, limit=limit + 1)
     out = ConversationOut.model_validate(conv)
     out.context_limit_tokens = agent.context_limit_tokens
     out.has_summary = bool(conv.summary)

@@ -4,7 +4,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..events import bus
-from ..models import ACTIVE_RUN_STATUSES, Agent, Conversation, Job, JobStatus, McpServer, Repository, Run, RunStatus
+from ..models import ACTIVE_RUN_STATUSES, Agent, Conversation, Job, JobStatus, McpServer, Message, Repository, Run, RunStatus
 from ..schemas import AgentCreate, AgentOut, AgentUpdate
 from . import settings as settings_service
 from .errors import NotFound, ServiceError
@@ -146,6 +146,16 @@ async def conversation_for(session: AsyncSession, agent_id: int) -> Conversation
         session.add(conv)
         await session.commit()
     return conv
+
+
+async def messages(session: AsyncSession, conv: Conversation, *, before_id: int | None = None, limit: int = 60, kinds: tuple[str, ...] | None = None) -> list[Message]:
+    """The latest messages of a conversation, newest first."""
+    q = select(Message).where(Message.conversation_id == conv.id)
+    if before_id:
+        q = q.where(Message.id < before_id)
+    if kinds:
+        q = q.where(Message.kind.in_(kinds))
+    return list((await session.scalars(q.order_by(Message.id.desc()).limit(limit))).all())
 
 
 async def to_out(session: AsyncSession, agents: list[Agent]) -> list[AgentOut]:

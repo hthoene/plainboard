@@ -10,7 +10,8 @@ from pydantic import BaseModel
 
 from ..models import TaskStatus
 from ..orchestration.prompts import PINNED_BUDGET_CHARS
-from ..schemas import CheckOut, SettingsOut, SettingsUpdate
+from ..schemas import CheckOut, LimitsOut, SettingsOut, SettingsUpdate
+from ..services import limits as limits_service
 from ..services import settings as settings_service
 from ..services.errors import ServiceError
 from ..orchestration.runner_client import RunnerError
@@ -37,6 +38,11 @@ async def meta(runner: Runner) -> dict[str, Any]:
         "statuses": [s.value for s in TaskStatus],
         "pinned_note_budget_chars": PINNED_BUDGET_CHARS,
     }
+
+
+@router.get("/limits", response_model=LimitsOut)
+async def limits(session: Session) -> LimitsOut:
+    return await limits_service.current(session)
 
 
 @router.get("/settings", response_model=SettingsOut)

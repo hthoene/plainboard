@@ -369,3 +369,17 @@ async def test_notice_reaches_the_agent_once_after_a_tool_call():
 
 def test_notify_only_reaches_active_runs():
     assert TestClient(app).post("/runs/nope/notify", json={"text": "x"}).json() == {"delivered": False}
+
+
+def test_rate_limit_events_become_limit_windows():
+    from claude_agent_sdk.types import RateLimitInfo
+
+    from plainboard_runner.providers.claude_code import limit_windows
+
+    raw = {"unifiedWindows": {"five_hour": {"utilization": 0.4, "resetsAt": 100}, "seven_day": {"utilization": 0.1, "resetsAt": 200}}}
+    windows = limit_windows(RateLimitInfo(status="allowed", raw=raw))
+    assert [(w.name, w.utilization, w.resets_at) for w in windows] == [("five_hour", 0.4, 100), ("seven_day", 0.1, 200)]
+    hit = limit_windows(RateLimitInfo(status="rejected", rate_limit_type="seven_day", resets_at=5))
+    assert [(w.name, w.utilization, w.status) for w in hit] == [("seven_day", 1.0, "rejected")]
+    assert limit_windows(RateLimitInfo(status="allowed")) == []
+    assert limit_windows(RateLimitInfo(status="rejected", rate_limit_type="overage")) == []

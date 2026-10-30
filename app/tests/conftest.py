@@ -7,6 +7,8 @@ from collections.abc import AsyncIterator
 import pytest
 from fastapi.testclient import TestClient
 from plainboard_protocol import (
+    LimitsEvent,
+    LimitWindow,
     AssistantTextEvent,
     CheckResult,
     CompactionEvent,
@@ -63,6 +65,9 @@ class FakeRunner:
                 said.append(line[4:])
             elif line.startswith("CONTEXT "):
                 context = int(line.split()[1])
+            elif line.startswith("LIMITS "):
+                _, name, used, resets_in = line.split()
+                yield LimitsEvent(windows=[LimitWindow(name=name, utilization=float(used), resets_at=int(time.time()) + int(resets_in))])
             elif line.startswith("COMPACT "):
                 yield CompactionEvent(tokens_before=int(line.split()[1]))
         text = " | ".join(said) or "ok"

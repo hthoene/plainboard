@@ -48,6 +48,7 @@ from ..services import jobs as job_service
 from ..services import mcp as mcp_service
 from ..services import projects as project_service
 from ..services import repositories as repo_service
+from ..services import limits as limits_service
 from ..services import settings as settings_service
 from ..services.errors import ServiceError
 from ..services.util import truncate
@@ -534,6 +535,8 @@ class RunManager:
                     conv.context_tokens = event.context_tokens
                     await s.commit()
                     bus.publish(ctx.project_id, "conversation.updated", {"agent_id": ctx.agent_id, "context_tokens": event.context_tokens})
+                elif event.type == "limits":
+                    await limits_service.record(s, event.windows)
                 elif event.type == "compaction":
                     marker = self.context.provider_compacted(conv, event.tokens_before)
                     marker.run_id = ctx.run_id

@@ -717,3 +717,17 @@ def test_agents_can_read_each_others_chat(client, project):
     wait_for(lambda: idle(client, pid))
     tool = next(m for m in conversation(client, manager["id"])["messages"] if m["kind"] == "tool")
     assert "the build is green" in tool["meta"]["result"] and not tool["meta"]["is_error"]
+
+
+def test_runs_report_plan_limits(client, project):
+    pid = project["id"]
+    client.put("/api/settings", json={"values": {"claude_auth_mode": "oauth_token"}})
+    dev = make_dev(client, pid)
+    assert client.get("/api/limits").json()["windows"] == []
+    chat(client, dev["id"], "LIMITS five_hour 0.4 3600\nLIMITS seven_day 0.7 -10")
+    wait_for(lambda: idle(client, pid))
+    body = client.get("/api/limits").json()
+    used = {w["name"]: w["utilization"] for w in body["windows"]}
+    assert used == {"five_hour": 0.4, "seven_day": 0.0} and body["updated_at"]  # the weekly window has reset
+    client.put("/api/settings", json={"values": {"claude_auth_mode": "api_key"}})
+    assert client.get("/api/limits").json()["windows"] == []

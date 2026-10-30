@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import type {
+  Limits,
   Agent,
   Assignment,
   CheckResult,
@@ -21,6 +22,7 @@ export const qk = {
   auth: ["auth"] as const,
   meta: ["meta"] as const,
   settings: ["settings"] as const,
+  limits: ["limits"] as const,
   projects: ["projects"] as const,
   agents: (pid: number) => ["agents", pid] as const,
   tasks: (pid: number) => ["tasks", pid] as const,
@@ -88,3 +90,7 @@ export const checks = {
   github: (token?: string) => api.post<CheckResult>("/settings/check/github", token ? { token } : {}),
   projectGithub: (pid: number) => api.post<CheckResult>(`/projects/${pid}/check-github`),
 };
+
+export function useLimits() {
+  return useQuery({ queryKey: qk.limits, queryFn: () => api.get<Limits>("/limits"), refetchInterval: 30_000 });
+}

@@ -12,6 +12,7 @@ import { AgentDot, IconButton, Select, Spinner } from "../../components/ui";
 import { formatCost, formatTokens } from "../../lib/format";
 import { useStored } from "../../lib/hooks";
 import { useShell } from "../layout/shell-context";
+import { LimitsRing } from "./LimitsRing";
 import { MessageItem } from "./MessageItem";
 
 export function ChatPanel({
@@ -441,7 +442,10 @@ function Composer({
           <ArrowUp className="size-4" />
         </button>
       </div>
-      {runningId && <p className="mt-1.5 text-[11px] text-zinc-400">{t("chat.queueHint")}</p>}
+      <div className="mt-1.5 flex items-center gap-2 empty:hidden">
+        {runningId && <p className="text-[11px] text-zinc-400">{t("chat.queueHint")}</p>}
+        <LimitsRing />
+      </div>
       </div>
     </div>
   );

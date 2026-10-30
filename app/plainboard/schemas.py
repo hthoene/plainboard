@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
+from plainboard_protocol import LimitWindow
 from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, model_validator
 
 
@@ -43,6 +44,11 @@ class RepositoryUpdate(BaseModel):
     default_branch: str | None = None
     description: str | None = None
     agent_ids: list[int] | None = None
+
+
+class LimitsOut(BaseModel):
+    windows: list[LimitWindow] = Field(default_factory=list)
+    updated_at: int | None = None  # unix seconds, like the windows' resets_at
 
 
 class RepositoryOut(ORM):

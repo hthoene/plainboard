@@ -177,6 +177,20 @@ class UsageEvent(BaseModel):
     context_tokens: int
 
 
+class LimitWindow(BaseModel):
+    name: str  # e.g. five_hour, seven_day
+    utilization: float  # fraction used; can pass 1
+    resets_at: int | None = None  # unix seconds
+    status: str | None = None
+
+
+class LimitsEvent(BaseModel):
+    """Current state of the account's plan limits, for providers that have them."""
+
+    type: Literal["limits"] = "limits"
+    windows: list[LimitWindow] = Field(default_factory=list)
+
+
 class CompactionEvent(BaseModel):
     """The provider compacted its session on its own; the session itself stays valid."""
 
@@ -214,6 +228,7 @@ RunEvent = Annotated[
         ToolUseEvent,
         ToolResultEvent,
         UsageEvent,
+        LimitsEvent,
         CompactionEvent,
         ResultEvent,
         ErrorEvent,

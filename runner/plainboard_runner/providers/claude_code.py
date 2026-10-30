@@ -25,13 +25,15 @@ from claude_agent_sdk import (
     create_sdk_mcp_server,
     tool,
 )
-from claude_agent_sdk.types import StreamEvent
+from claude_agent_sdk.types import RateLimitEvent, RateLimitInfo, StreamEvent
 from plainboard_protocol import (
     AssistantTextEvent,
     CompactionEvent,
     CompletionResult,
     CompletionSpec,
     Credentials,
+    LimitsEvent,
+    LimitWindow,
     McpServerSpec,
     ModelInfo,
     ProviderInfo,
@@ -139,6 +141,20 @@ def notice_hook(run_id: str):
     return hook
 
 
+def limit_windows(info: RateLimitInfo) -> list[LimitWindow]:
+    """The plan's limit windows. Only the window that changed may be known, usually the one getting tight."""
+    windows = {
+        name: LimitWindow(name=name, utilization=window["utilization"], resets_at=window.get("resetsAt"), status=window.get("status"))
+        for name, window in (info.raw.get("unifiedWindows") or {}).items()
+    }
+    kind = info.rate_limit_type
+    known = info.utilization is not None or info.status == "rejected"
+    if kind and kind != "overage" and kind not in windows and known:
+        used = info.utilization if info.utilization is not None else 1.0
+        windows[kind] = LimitWindow(name=kind, utilization=used, resets_at=info.resets_at, status=info.status)
+    return list(windows.values())
+
+
 class EventMapper:
     """Translates Agent SDK messages into protocol events (kept separate for unit tests)."""
 
@@ -153,6 +169,9 @@ class EventMapper:
             delta = event.get("delta") or {}
             if event.get("type") == "content_block_delta" and delta.get("type") == "text_delta":
                 events.append(TextDeltaEvent(text=delta.get("text", "")))
+        elif isinstance(message, RateLimitEvent):
+            if windows := limit_windows(message.rate_limit_info):
+                events.append(LimitsEvent(windows=windows))
         elif isinstance(message, SystemMessage):
             if message.subtype == "init" and message.data.get("session_id"):
                 events.append(SessionEvent(session_id=message.data["session_id"]))

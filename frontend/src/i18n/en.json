@@ -172,6 +172,16 @@
     "fileCount_other": "{{count}} files",
     "stop": "Stop",
     "queueHint": "New messages are queued until the current turn finishes.",
+    "limits": {
+      "ring": "Plan limit {{percent}}% used",
+      "five_hour": "5-hour limit",
+      "seven_day": "Weekly limit",
+      "seven_day_opus": "Weekly limit (Opus)",
+      "seven_day_sonnet": "Weekly limit (Sonnet)",
+      "seven_day_overage_included": "Weekly limit (included models)",
+      "resets": "Resets {{when}}",
+      "updated": "Updated with each agent turn, last {{when}}"
+    },
     "menu": "Conversation options",
     "compressNow": "Compress context now",
     "compressHint": "Summarize older messages with the summary model.",

@@ -272,3 +272,15 @@ export interface CheckResult {
   ok: boolean;
   detail: string;
 }
+
+export interface LimitWindow {
+  name: string;
+  utilization: number;
+  resets_at: number | null;
+  status: string | null;
+}
+
+export interface Limits {
+  windows: LimitWindow[];
+  updated_at: number | null;
+}

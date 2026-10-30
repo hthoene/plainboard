@@ -85,7 +85,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<H
   { className, ...rest },
   ref,
 ) {
-  return <textarea ref={ref} className={clsx(fieldBase, "py-1.5 leading-relaxed", className)} {...rest} />;
+  return <textarea ref={ref} className={clsx(fieldBase, "scroll-thin py-1.5 leading-relaxed", className)} {...rest} />;
 });
 
 const LIST_GUTTER = 8;

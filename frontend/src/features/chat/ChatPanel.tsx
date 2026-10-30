@@ -310,7 +310,7 @@ function Composer({
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKey}
           placeholder={disabled ? t("chat.agentDisabled") : t("chat.placeholder", { name: agentName })}
-          className="max-h-[200px] min-h-8 flex-1 resize-none bg-transparent px-2 py-1.5 text-base outline-none placeholder:text-zinc-400 sm:text-sm"
+          className="scroll-thin max-h-[200px] min-h-8 flex-1 resize-none bg-transparent px-2 py-1.5 text-base outline-none placeholder:text-zinc-400 sm:text-sm"
         />
         {runningId ? (
           <IconButton label={t("chat.stop")} onClick={() => api.post(`/runs/${runningId}/cancel`)} className="size-8 rounded-lg bg-zinc-200 dark:bg-zinc-800">

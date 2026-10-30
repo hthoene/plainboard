@@ -49,6 +49,9 @@ token that is valid only while the run lasts and only for that run's project and
 4. `_finish` → `_after_run`: route results (answer to the asker, report to the requester's inbox plus a
    ticket comment, wake the manager), then `maybe_compress`.
 
+A restart fails running runs. Nothing retries them, because they may be half done: the requester of an
+interrupted assignment (or the manager, for its own turn) gets an inbox update and a wake-up.
+
 `ask_agent` blocks on a future. A wait-for graph between agents rejects cycles, and depth and timeout
 limits apply. An answer that arrives after a timeout goes to the asker's inbox instead.
 

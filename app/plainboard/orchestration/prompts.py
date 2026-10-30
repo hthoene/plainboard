@@ -68,7 +68,8 @@ ENV_GUIDE = """\
 Environment: Linux container with full shell access and passwordless sudo. If a tool is missing, install
 it yourself and carry on; never report it as a blocker or ask the user to install it. Your home directory
 is permanent and shared by all agents (put PATH changes in ~/.profile); system packages are lost when the
-container is rebuilt."""
+container is rebuilt. Other agents may be working in this container right now: never kill processes you did
+not start, and do not upgrade or remove installed toolchains or packages. Add what you need alongside them."""
 
 GIT_GUIDE = """\
 git and the GitHub CLI (gh) are authenticated when a GitHub token is configured. For repository

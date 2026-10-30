@@ -58,6 +58,52 @@ def test_manager_setup_script_reaches_the_runner(client, project):
     assert "install it yourself" in spec.system_prompt.replace("\n", " ")
 
 
+def test_restart_reports_interrupted_assignment_to_the_manager(client, project):
+    from plainboard.db import sessionmaker
+    from plainboard.models import Assignment, Run
+
+    pid = project["id"]
+    dev = make_dev(client, pid)
+    manager = agents_by_slug(client, pid)["manager"]
+    ticket = client.post(f"/api/projects/{pid}/tasks", json={"title": "Build it", "status": "in_progress"}).json()
+
+    async def interrupt_and_restart():
+        async with sessionmaker()() as s:
+            assignment = Assignment(project_id=pid, task_id=ticket["id"], agent_id=dev["id"], created_by_agent_id=manager["id"], title="Do the work", instructions="x", status="running")
+            s.add(assignment)
+            await s.commit()
+            s.add(Run(project_id=pid, agent_id=dev["id"], trigger="assignment", input_text="x", status="running", assignment_id=assignment.id, task_id=ticket["id"]))
+            await s.commit()
+        await client.app_ref.state.runs._recover_interrupted()
+
+    client.portal.call(interrupt_and_restart)
+    wait_for(lambda: idle(client, pid))
+    spec = runner(client).specs[-1]
+    assert spec.bridge.tools and "Do the work" in spec.prompt and "interrupted by a restart" in spec.prompt
+    assert "delegate" in {t.name for t in spec.bridge.tools}  # it went to the manager
+    detail = client.get(f"/api/tasks/{ticket['id']}").json()
+    assert detail["assignments"][0]["status"] == "failed"
+    assert "interrupted by a restart" in detail["comments"][-1]["body"]
+
+
+def test_interrupted_manager_turn_is_reported_to_itself(client, project):
+    from plainboard.db import sessionmaker
+    from plainboard.models import Run
+
+    pid = project["id"]
+    manager = agents_by_slug(client, pid)["manager"]
+
+    async def interrupt_and_restart():
+        async with sessionmaker()() as s:
+            s.add(Run(project_id=pid, agent_id=manager["id"], trigger="chat", input_text="Plan the release", status="running"))
+            await s.commit()
+        await client.app_ref.state.runs._recover_interrupted()
+
+    client.portal.call(interrupt_and_restart)
+    wait_for(lambda: idle(client, pid))
+    assert "interrupted by a restart" in runner(client).specs[-1].prompt and "Plan the release" in runner(client).specs[-1].prompt
+
+
 def test_worker_tools_are_restricted(client, project):
     pid = project["id"]
     dev = make_dev(client, pid)

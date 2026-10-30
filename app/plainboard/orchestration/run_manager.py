@@ -96,17 +96,47 @@ class RunManager:
     # ------------------------------------------------------------------ lifecycle
 
     async def start(self) -> None:
+        await self._recover_interrupted()
+        self._dispatcher = asyncio.create_task(self._dispatch_loop(), name="run-dispatcher")
+        self._wake.set()
+
+    async def _recover_interrupted(self) -> None:
         async with self._sm() as s:
             now = utcnow()
-            for run in (await s.scalars(select(Run).where(Run.status == RunStatus.RUNNING))).all():
+            interrupted = list((await s.scalars(select(Run).where(Run.status == RunStatus.RUNNING))).all())
+            for run in interrupted:
                 run.status, run.error, run.finished_at = RunStatus.FAILED, "Interrupted by a restart", now
                 if run.assignment_id and (a := await s.get(Assignment, run.assignment_id)):
                     a.status, a.result, a.finished_at = AssignmentStatus.FAILED, "Interrupted by a restart", now
             for run in (await s.scalars(select(Run).where(Run.status == RunStatus.QUEUED, Run.trigger == RunTrigger.ASK))).all():
                 run.status, run.error, run.finished_at = RunStatus.CANCELLED, "Asking agent is gone (restart)", now
             await s.commit()
-        self._dispatcher = asyncio.create_task(self._dispatch_loop(), name="run-dispatcher")
-        self._wake.set()
+            for run in interrupted:
+                try:
+                    await self._report_interrupted(s, run)
+                except Exception:  # a failed report must not keep the app from starting
+                    log.exception("Could not report interrupted run %s", run.id)
+
+    async def _report_interrupted(self, s: AsyncSession, run: Run) -> None:
+        """Nothing retries an interrupted run (it may be half done): tell whoever can decide."""
+        agent = await s.get(Agent, run.agent_id)
+        project = await s.get(Project, run.project_id)
+        if agent is None or project is None:
+            return
+        assignment = await s.get(Assignment, run.assignment_id) if run.assignment_id else None
+        if assignment:
+            ticket = await s.get(Task, assignment.task_id) if assignment.task_id else None
+            if ticket:
+                await board_service.add_comment(s, ticket, f"Assignment #{assignment.id} ({agent.name}) was interrupted by a restart.", author_kind="system")
+            ref = f", ticket #{ticket.number}" if ticket else ""
+            recipient = assignment.created_by_agent_id or (await agent_service.get_manager(s, project.id)).id
+            await inbox.push(
+                s, recipient, f'Assignment #{assignment.id} "{assignment.title}" ({agent.name}{ref}) was interrupted by a restart and may be half done. Check its state and delegate again if needed.'
+            )
+            await self._maybe_wake(s, project, recipient)
+        elif agent.is_manager:
+            await inbox.push(s, agent.id, f"Your previous turn was interrupted by a restart and may be incomplete: {truncate(run.input_text or 'processing updates', 500)}")
+            await self._maybe_wake(s, project, agent.id)
 
     async def stop(self) -> None:
         if self._dispatcher:

@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass, field
 
 from plainboard_protocol import JobSpec, JobState, ResultEvent, RunSpec, ToolBridgeSpec, ToolCallResult, WorkspaceSpec
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..config import get_config
@@ -199,7 +199,29 @@ class RunManager:
     async def chat(self, s: AsyncSession, agent: Agent, text: str, attachment_ids: list[int] | None = None) -> Run:
         if attachment_ids and len(await board_service.chat_attachments(s, agent.project_id, attachment_ids)) != len(set(attachment_ids)):
             raise ServiceError("Unknown attachment")
-        return await self.enqueue(s, agent, RunTrigger.CHAT, text, attachment_ids=attachment_ids)
+        return await self._join_waiting_chat(s, agent, text, attachment_ids) or await self.enqueue(s, agent, RunTrigger.CHAT, text, attachment_ids=attachment_ids)
+
+    async def _join_waiting_chat(self, s: AsyncSession, agent: Agent, text: str, attachment_ids: list[int] | None) -> Run | None:
+        """Add a message to the agent's chat run that has not started yet, so it answers everything at once."""
+        waiting = await s.scalar(
+            select(Run).where(Run.agent_id == agent.id, Run.trigger == RunTrigger.CHAT, Run.status == RunStatus.QUEUED).order_by(Run.id.desc()).limit(1)
+        )
+        if waiting is None or not agent.enabled:
+            return None
+        joined = chr(10).join(part for part in (waiting.input_text + chr(10), text) if part.strip())
+        # The status check matters: the dispatcher may start this run at any moment.
+        result = await s.execute(
+            update(Run)
+            .where(Run.id == waiting.id, Run.status == RunStatus.QUEUED)
+            .values(input_text=joined, attachment_ids=[*waiting.attachment_ids, *(attachment_ids or [])])
+        )
+        await s.commit()
+        if not result.rowcount:
+            return None
+        await s.refresh(waiting)
+        bus.publish(agent.project_id, "run.upserted", RunOut.model_validate(waiting))
+        self._wake.set()
+        return waiting
 
     async def hand_ticket(self, s: AsyncSession, task: Task) -> Run:
         """Give a ticket to the project manager, who plans and delegates it."""
@@ -459,6 +481,7 @@ class RunManager:
             conv = await agent_service.conversation_for(s, agent.id)
             run.status, run.started_at = RunStatus.RUNNING, utcnow()
             await s.commit()
+            await s.refresh(run)  # a chat message may have joined until now
 
             updates = await inbox.consume(s, agent.id)
             files = await board_service.chat_attachments(s, project.id, run.attachment_ids) if run.attachment_ids else []

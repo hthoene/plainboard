@@ -739,3 +739,18 @@ def test_limits_are_read_without_a_run(client, project):
     runner(client).limit_windows = [LimitWindow(name="seven_day", utilization=0.2)]
     wait_for(lambda: client.get("/api/limits").json()["windows"])
     assert client.get("/api/limits").json()["windows"][0]["name"] == "seven_day"
+
+
+def test_waiting_chat_messages_go_out_together(client, project):
+    pid = project["id"]
+    client.put("/api/settings", json={"values": {"max_parallel_runs": 0}})
+    dev = make_dev(client, pid)
+    first = chat(client, dev["id"], "SAY one")
+    assert chat(client, dev["id"], "SAY two")["id"] == first["id"]
+    assert chat(client, dev["id"], "SAY three")["input_text"] == "SAY one\n\nSAY two\n\nSAY three"
+    client.put("/api/settings", json={"values": {"max_parallel_runs": 3}})
+    client.app_ref.state.runs._wake.set()
+    wait_for(lambda: idle(client, pid))
+    assert len(runs_of(client, pid, agent_id=dev["id"])) == 1
+    texts = [m["content"] for m in conversation(client, dev["id"])["messages"] if m["role"] == "assistant"]
+    assert texts == ["one | two | three"]

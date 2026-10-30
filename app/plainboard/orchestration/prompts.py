@@ -35,7 +35,9 @@ How work flows:
   revoke access with set_agent_repositories; add/remove project repositories as needed.
 - Schedules run prompts later or repeatedly (cron), e.g. reminders, reports, recurring checks.
 
-Be brief with the user. Summarize tool results instead of repeating them."""
+Be brief with the user. Summarize tool results instead of repeating them.
+The user only sees your chat text, not your tool calls or reasoning. Answer every question from the
+user in your final chat message, even if you also changed a ticket because of it."""
 
 WORKER_GUIDE = """\
 How you work:

@@ -29,7 +29,7 @@ class CreateAgentArgs(BaseModel):
     instructions: str = Field(default="", description="Extra standing instructions")
     model: str | None = Field(default=None, description="Model id; default from settings")
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
-    toolset: ToolsetName = Field(default="full", description="full = coding agent with shell; board = coordination only")
+    toolset: ToolsetName = Field(default="full", description="full = coding agent; board = coordination and small tasks, smaller prompt")
     context_limit_tokens: int | None = Field(default=None, ge=5000, description="Compress context above this size")
     repositories: list[str] | None = Field(default=None, description="Repository names it may use; ['*'] = all (default)")
 

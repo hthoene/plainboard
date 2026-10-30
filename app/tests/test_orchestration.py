@@ -37,6 +37,7 @@ def test_chat_run_persists_messages_and_usage(client, project):
     assert conv["provider_session_id"] and conv["context_tokens"] == 1000
     spec = runner(client).specs[-1]
     assert spec.toolset == "board" and "delegate" in {t.name for t in spec.bridge.tools}
+    assert "full shell access" in spec.system_prompt and "Do small things yourself" in spec.system_prompt
     assert "Current time:" in spec.prompt
 
 

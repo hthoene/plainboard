@@ -100,7 +100,7 @@ You ──chat──▶ Manager ──delegate──▶ Agent A ─┐
   limit must be below the model's context window (default: 400,000); otherwise Claude Code compacts
   first, using its own threshold.
 - **Coordinator toolset** for the manager: a short custom prompt instead of the full Claude Code
-  prompt, plus board tools and read-only file access.
+  prompt, plus board tools and a shell for small tasks that would cost more to delegate.
 - **Inbox instead of extra runs**: updates are prepended to an agent's next turn; manager wake-ups
   are coalesced.
 - Compact tool schemas and results, effort per agent, titles-only note listings, pinned notes only

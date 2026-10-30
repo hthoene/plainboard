@@ -71,7 +71,8 @@ limits apply. An answer that arrives after a timeout goes to the asker's inbox i
 ### Prompts (`orchestration/prompts.py`)
 The system prompt is stable (cache-friendly): role, area, guide, workspace, instructions, team roster,
 pinned notes, memory. Volatile data such as the current time and inbox updates goes into the user turn.
-The manager uses the `board` toolset: a short custom prompt and no Claude Code preset. Workers use
+The manager uses the `board` toolset: a short custom prompt and no Claude Code preset, with shell and
+file editing for small tasks it would cost more to delegate. Workers use
 `full`: the Claude Code preset with the PlainBoard part appended.
 
 ## Extension points

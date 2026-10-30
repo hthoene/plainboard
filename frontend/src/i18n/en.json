@@ -55,7 +55,7 @@
     "full": "Coding agent",
     "board": "Coordinator",
     "fullHint": "Shell, files, git & web, plus board tools.",
-    "boardHint": "Board tools and read-only files. Much smaller prompt, fewer tokens."
+    "boardHint": "Board tools, shell and file editing for small tasks. Much smaller prompt, fewer tokens."
   },
   "projects": {
     "none": "No projects yet",

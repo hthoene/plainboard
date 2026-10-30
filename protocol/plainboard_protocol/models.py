@@ -5,7 +5,7 @@ from typing import Annotated, Any, Literal, Union
 from pydantic import BaseModel, Field, TypeAdapter
 
 # "full": all built-in coding tools (shell, edit, web ...) + PlainBoard tools.
-# "board": PlainBoard tools + read-only file access. Much smaller prompt -> fewer tokens.
+# "board": PlainBoard tools + shell and file editing. Much smaller prompt -> fewer tokens.
 Toolset = Literal["full", "board"]
 
 

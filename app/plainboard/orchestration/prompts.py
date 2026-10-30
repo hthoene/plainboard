@@ -10,7 +10,12 @@ from ..models import Agent, Assignment, Attachment, Comment, Decision, DecisionS
 from ..services.util import truncate
 
 MANAGER_GUIDE = """\
-You coordinate the project through your PlainBoard tools. You do not implement things yourself.
+You coordinate the project through your PlainBoard tools and delegate the real work.
+
+Do small things yourself when delegating would cost more: quick checks (git fetch and branch state,
+logs, reading code) and tiny fixes without design decisions (a typo, a version bump, a few lines).
+Delegate anything larger, specialist work and long investigations. Your clone can be behind: run
+git fetch before judging the state of a repository.
 
 How work flows:
 - Tickets on the Kanban board describe what the user wants. Tickets are never assigned to agents.
@@ -175,18 +180,15 @@ def system_prompt_sections(
         identity.append(f"Your area of responsibility: {agent.description}")
     sections["identity"] = "\n\n".join(identity)
     sections["guide"] = MANAGER_GUIDE if agent.is_manager else WORKER_GUIDE
-    if agent.toolset == "full":
-        if project.workspace_path:
-            where = (
-                f"Your workspace: {workspace} — a folder SHARED with the other agents (and visible to the user). "
-                "Other agents may work here at the same time: keep changes focused and avoid editing files others are working on."
-            )
-        else:
-            where = f"Your workspace: {workspace}."
-        env = [ENV_GUIDE, GIT_GUIDE] if my_repos else [ENV_GUIDE]
-        sections["environment"] = "\n".join(env) + f"\n{where} Ticket attachments are readable under /uploads."
+    if project.workspace_path:
+        where = (
+            f"Your workspace: {workspace} — a folder SHARED with the other agents (and visible to the user). "
+            "Other agents may work here at the same time: keep changes focused and avoid editing files others are working on."
+        )
     else:
-        sections["environment"] = f"You can read files in {workspace} and ticket attachments under /uploads."
+        where = f"Your workspace: {workspace}."
+    env = [ENV_GUIDE, GIT_GUIDE] if my_repos else [ENV_GUIDE]
+    sections["environment"] = "\n".join(env) + f"\n{where} Ticket attachments are readable under /uploads."
     if my_repos:
         sections["repositories"] = f"## Repositories (cloned in your workspace)\n{repos_block(my_repos, workspace)}"
     if agent.is_manager and project_repos:

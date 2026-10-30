@@ -52,7 +52,7 @@ from .base import Provider
 log = logging.getLogger(__name__)
 
 MCP_SERVER_NAME = "plainboard"
-BOARD_TOOLSET_BUILTINS = ["Read", "Glob", "Grep"]
+BOARD_TOOLSET_BUILTINS = ["Read", "Glob", "Grep", "Bash", "Edit", "Write"]
 # Interactive tools make no sense for headless agents; they talk back via chat or the board.
 DISALLOWED_TOOLS = ["AskUserQuestion"]
 

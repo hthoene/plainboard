@@ -11,6 +11,9 @@
   body {
     height: 100%;
   }
+  html {
+    color-scheme: light dark; /* native pickers (e.g. datetime-local) follow the theme */
+  }
   #root {
     height: 100dvh;
   }

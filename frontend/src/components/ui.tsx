@@ -1,14 +1,23 @@
 import clsx from "clsx";
-import { Loader2, X } from "lucide-react";
+import { Check, ChevronDown, Loader2, X } from "lucide-react";
 import {
+  Children,
   forwardRef,
+  isValidElement,
   useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
   type ButtonHTMLAttributes,
+  type CSSProperties,
   type InputHTMLAttributes,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type OptionHTMLAttributes,
   type ReactNode,
-  type SelectHTMLAttributes,
   type TextareaHTMLAttributes,
 } from "react";
+import { createPortal } from "react-dom";
 
 type Variant = "primary" | "secondary" | "ghost" | "danger";
 
@@ -79,11 +88,217 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<H
   return <textarea ref={ref} className={clsx(fieldBase, "py-1.5 leading-relaxed", className)} {...rest} />;
 });
 
-export function Select({ className, children, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
+const LIST_GUTTER = 8;
+const LIST_GAP = 4;
+const LIST_MAX_HEIGHT = 288;
+const LIST_MIN_WIDTH = 160;
+
+interface SelectOption {
+  value: string;
+  label: ReactNode;
+  text: string;
+  disabled: boolean;
+}
+
+function readOptions(children: ReactNode): SelectOption[] {
+  return Children.toArray(children).flatMap((child) => {
+    if (!isValidElement<OptionHTMLAttributes<HTMLOptionElement>>(child)) return [];
+    const { value, children: label, disabled } = child.props;
+    return [{ value: String(value ?? ""), label, text: Children.toArray(label).join("").toLowerCase(), disabled: !!disabled }];
+  });
+}
+
+/** Styled replacement for <select>: browsers draw the native list themselves, so it cannot match the
+ * app. Takes <option> children and calls onChange with `e.target.value` like the native element.
+ * `trigger` replaces the field look, e.g. for a dropdown in a header. */
+export function Select({
+  value,
+  onChange,
+  children,
+  className,
+  disabled,
+  trigger,
+  "aria-label": ariaLabel,
+}: {
+  value?: string | number;
+  onChange?: (e: { target: { value: string } }) => void;
+  children: ReactNode;
+  className?: string;
+  disabled?: boolean;
+  trigger?: ReactNode;
+  "aria-label"?: string;
+}) {
+  const options = readOptions(children);
+  const selected = Math.max(
+    options.findIndex((o) => o.value === String(value ?? "")),
+    0,
+  );
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const [position, setPosition] = useState<CSSProperties>({});
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const typed = useRef({ text: "", at: 0 });
+  const id = useId();
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = (e?: Event) => {
+      const button = triggerRef.current;
+      const list = listRef.current;
+      if (!button || !list || e?.target === list) return;
+      const rect = button.getBoundingClientRect();
+      const below = window.innerHeight - rect.bottom - LIST_GUTTER - LIST_GAP;
+      const above = rect.top - LIST_GUTTER - LIST_GAP;
+      const up = list.scrollHeight > below && above > below;
+      const width = Math.min(Math.max(rect.width, LIST_MIN_WIDTH), window.innerWidth - 2 * LIST_GUTTER);
+      setPosition({
+        left: Math.max(LIST_GUTTER, Math.min(rect.left, window.innerWidth - width - LIST_GUTTER)),
+        width,
+        maxHeight: Math.min(up ? above : below, LIST_MAX_HEIGHT),
+        ...(up ? { bottom: window.innerHeight - rect.top + LIST_GAP } : { top: rect.bottom + LIST_GAP }),
+      });
+    };
+    // Capture: also runs inside modals, which stop mouse events from bubbling further.
+    const closeOutside = (e: PointerEvent) => {
+      const target = e.target as Node;
+      if (!triggerRef.current?.contains(target) && !listRef.current?.contains(target)) setOpen(false);
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    document.addEventListener("pointerdown", closeOutside, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+      document.removeEventListener("pointerdown", closeOutside, true);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (open) listRef.current?.children[active]?.scrollIntoView({ block: "nearest" });
+  }, [open, active]);
+
+  const show = () => {
+    setActive(selected);
+    setOpen(true);
+    triggerRef.current?.focus();
+  };
+
+  const choose = (index: number) => {
+    const option = options[index];
+    if (!option || option.disabled) return;
+    setOpen(false);
+    if (index !== selected) onChange?.({ target: { value: option.value } });
+  };
+
+  const move = (start: number, step: number) => {
+    for (let i = start; i >= 0 && i < options.length; i += step) {
+      if (!options[i].disabled) return setActive(i);
+    }
+  };
+
+  const typeAhead = (key: string) => {
+    const now = Date.now();
+    const text = (now - typed.current.at < 700 ? typed.current.text : "") + key.toLowerCase();
+    typed.current = { text, at: now };
+    const match = options.findIndex((o) => !o.disabled && o.text.startsWith(text));
+    if (match >= 0) setActive(match);
+  };
+
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (!open) {
+      if (["ArrowDown", "ArrowUp", "Enter", " "].includes(e.key)) {
+        e.preventDefault();
+        show();
+      }
+      return;
+    }
+    const keys: Record<string, () => void> = {
+      ArrowDown: () => move(active + 1, 1),
+      ArrowUp: () => move(active - 1, -1),
+      Home: () => move(0, 1),
+      End: () => move(options.length - 1, -1),
+      Enter: () => choose(active),
+      " ": () => choose(active),
+      Escape: () => setOpen(false),
+    };
+    if (keys[e.key]) {
+      e.preventDefault();
+      e.stopPropagation(); // Escape closes the list, not the surrounding modal
+      keys[e.key]();
+    } else if (e.key === "Tab") setOpen(false);
+    else if (e.key.length === 1) typeAhead(e.key);
+  };
+
   return (
-    <select className={clsx(fieldBase, "h-8 pr-7", className)} {...rest}>
-      {children}
-    </select>
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        role="combobox"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={open ? id : undefined}
+        aria-activedescendant={open ? `${id}-${active}` : undefined}
+        aria-label={ariaLabel}
+        disabled={disabled}
+        onClick={() => (open ? setOpen(false) : show())}
+        onKeyDown={onKeyDown}
+        onBlur={() => setOpen(false)}
+        className={clsx(
+          trigger
+            ? "block w-full cursor-pointer rounded-md text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+            : clsx(fieldBase, "flex h-8 cursor-pointer items-center justify-between gap-2 text-left disabled:cursor-not-allowed", open && "ring-2 ring-indigo-500"),
+          className,
+        )}
+      >
+        {trigger ?? (
+          <>
+            <span className="min-w-0 truncate">{options[selected]?.label}</span>
+            <ChevronDown className={clsx("size-3.5 shrink-0 text-zinc-400 transition-transform", open && "rotate-180")} />
+          </>
+        )}
+      </button>
+      {open &&
+        createPortal(
+          <div
+            ref={listRef}
+            id={id}
+            role="listbox"
+            style={position}
+            // Keeps focus on the trigger; the portal must not trigger handlers of the surrounding modal.
+            onMouseDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onClick={(e) => e.stopPropagation()}
+            className="scroll-thin fixed z-[60] overflow-y-auto rounded-lg bg-white p-1 text-base text-zinc-900 shadow-lg ring-1 ring-zinc-200 sm:text-sm dark:bg-zinc-900 dark:text-zinc-100 dark:ring-zinc-800"
+          >
+            {options.map((option, index) => (
+              <div
+                key={option.value}
+                id={`${id}-${index}`}
+                role="option"
+                aria-selected={index === selected}
+                aria-disabled={option.disabled || undefined}
+                onMouseMove={() => !option.disabled && setActive(index)}
+                onClick={() => choose(index)}
+                className={clsx(
+                  "flex items-center gap-2 rounded-md px-2 py-2 sm:py-1.5",
+                  option.disabled ? "opacity-50" : "cursor-pointer",
+                  index === active && !option.disabled && "bg-zinc-100 dark:bg-zinc-800",
+                  index === selected && "font-medium",
+                )}
+              >
+                <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                {index === selected && <Check className="size-3.5 shrink-0 text-indigo-600 dark:text-indigo-400" />}
+              </div>
+            ))}
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }
 

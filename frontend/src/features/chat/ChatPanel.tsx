@@ -8,7 +8,7 @@ import { useStreamingText } from "../../api/events";
 import { qk, useConversation, useRuns } from "../../api/queries";
 import type { Conversation } from "../../api/types";
 import { Markdown } from "../../components/Markdown";
-import { AgentDot, IconButton, Spinner } from "../../components/ui";
+import { AgentDot, IconButton, Select, Spinner } from "../../components/ui";
 import { formatCost, formatTokens } from "../../lib/format";
 import { useStored } from "../../lib/hooks";
 import { useShell } from "../layout/shell-context";
@@ -79,31 +79,32 @@ export function ChatPanel({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex items-center gap-2 border-b border-zinc-100 px-3 py-2 sm:px-4 dark:border-zinc-800">
-        <div className="relative min-w-0 flex-1">
-          <select
+        <div className="min-w-0 flex-1">
+          <Select
             value={agentId}
             onChange={(e) => onSelectAgent(Number(e.target.value))}
-            className="absolute inset-0 cursor-pointer opacity-0"
             aria-label={t("chat.selectAgent")}
+            trigger={
+              <span className="flex items-center gap-2">
+                <AgentDot color={agent.color} status={agent.status} />
+                <span className="block min-w-0">
+                  <span className="flex items-center gap-1 text-sm font-semibold">
+                    <span className="truncate">{agent.name}</span>
+                    <ChevronDown className="size-3.5 shrink-0 text-zinc-400" />
+                  </span>
+                  <span className="block truncate text-xs text-zinc-500">
+                    {agent.role} · {agent.model}
+                  </span>
+                </span>
+              </span>
+            }
           >
             {agents.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name} — {a.role}
               </option>
             ))}
-          </select>
-          <div className="flex items-center gap-2">
-            <AgentDot color={agent.color} status={agent.status} />
-            <div className="min-w-0">
-              <div className="flex items-center gap-1 text-sm font-semibold">
-                <span className="truncate">{agent.name}</span>
-                <ChevronDown className="size-3.5 shrink-0 text-zinc-400" />
-              </div>
-              <div className="truncate text-xs text-zinc-500">
-                {agent.role} · {agent.model}
-              </div>
-            </div>
-          </div>
+          </Select>
         </div>
         {details && <ContextGauge used={conversation.data?.context_tokens ?? agent.context_tokens} limit={agent.context_limit_tokens} base={agent.base_context_tokens} />}
         <IconButton label={details ? t("chat.hideDetails") : t("chat.showDetails")} onClick={() => setDetails(!details)} className={clsx(details && "text-indigo-600 dark:text-indigo-400")}>

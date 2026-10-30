@@ -52,7 +52,7 @@ class AttachFileArgs(BaseModel):
 
 class RequestDecisionArgs(BaseModel):
     task_number: int
-    question: str
+    question: str = Field(description="One short question in plain words, no jargon")
     details: str = Field(default="", description="Markdown: background the user needs")
     options: list[DecisionOption] = Field(default_factory=list, max_length=8, description="Choices to click; empty = free answer only")
     attachment_ids: list[int] = Field(default_factory=list, description="Files for the question as a whole")
@@ -125,7 +125,7 @@ async def add_comment(ctx: ToolContext, args: CommentArgs) -> str:
 local_tool("attach_file", "Attach a file from your workspace to a ticket (e.g. screenshot, report).", AttachFileArgs)
 
 
-@tool("request_decision", "Ask the user to decide on a ticket. Their answer arrives as an update.", RequestDecisionArgs, roles=(MANAGER,))
+@tool("request_decision", "Ask the user to decide on a ticket; this marks the ticket on the board. Their answer arrives as an update.", RequestDecisionArgs, roles=(MANAGER,))
 async def request_decision(ctx: ToolContext, args: RequestDecisionArgs) -> str:
     task = await board_service.get_task_by_number(ctx.session, ctx.project.id, args.task_number)
     decision = await decision_service.create(

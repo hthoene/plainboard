@@ -78,6 +78,7 @@ class Outcome:
     cancelled: bool = False
     last_text: str | None = None
     tool_messages: dict[str, int] = field(default_factory=dict)
+    resumed: bool = False
 
 
 class RunManager:
@@ -473,7 +474,7 @@ class RunManager:
             return spec, ctx
 
     async def _stream(self, spec: RunSpec, ctx: RunContext) -> Outcome:
-        outcome = Outcome()
+        outcome = Outcome(resumed=spec.resume_session_id is not None)
         fresh_session = spec.resume_session_id is None
         async with self._sm() as s:
             conv = await agent_service.conversation_for(s, ctx.agent_id)
@@ -545,6 +546,10 @@ class RunManager:
                 run.input_tokens, run.output_tokens = res.input_tokens, res.output_tokens
                 run.cache_read_tokens, run.cache_creation_tokens = res.cache_read_tokens, res.cache_creation_tokens
                 run.cost_usd, run.num_turns, run.context_tokens = res.cost_usd, res.num_turns, res.context_tokens
+                if res.session_cost_usd is not None and conv:
+                    before = conv.session_cost_usd if outcome.resumed else 0.0
+                    run.cost_usd = res.session_cost_usd - before if res.session_cost_usd >= before else res.session_cost_usd
+                    conv.session_cost_usd = res.session_cost_usd
             if conv:
                 conv.total_input_tokens += run.input_tokens + run.cache_read_tokens + run.cache_creation_tokens
                 conv.total_output_tokens += run.output_tokens

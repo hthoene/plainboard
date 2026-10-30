@@ -195,7 +195,8 @@ class ResultEvent(BaseModel):
     output_tokens: int = 0
     cache_read_tokens: int = 0
     cache_creation_tokens: int = 0
-    cost_usd: float = 0.0
+    cost_usd: float = 0.0  # cost of this run
+    session_cost_usd: float | None = None  # instead of cost_usd: provider reports the session's total so far
     context_tokens: int = 0
 
 

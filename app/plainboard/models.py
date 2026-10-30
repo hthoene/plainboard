@@ -271,6 +271,7 @@ class Conversation(Base):
     total_input_tokens: Mapped[int] = mapped_column(Integer, default=0)
     total_output_tokens: Mapped[int] = mapped_column(Integer, default=0)
     total_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    session_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)  # provider's running total for the current session
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 

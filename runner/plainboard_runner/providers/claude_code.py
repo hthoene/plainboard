@@ -186,7 +186,7 @@ class EventMapper:
                     output_tokens=int(usage.get("output_tokens") or 0),
                     cache_read_tokens=int(usage.get("cache_read_input_tokens") or 0),
                     cache_creation_tokens=int(usage.get("cache_creation_input_tokens") or 0),
-                    cost_usd=float(message.total_cost_usd or 0.0),
+                    session_cost_usd=float(message.total_cost_usd or 0.0),  # keeps growing across resumed turns
                     context_tokens=self.context_tokens,
                 )
             )

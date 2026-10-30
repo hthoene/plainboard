@@ -282,7 +282,7 @@ def test_event_mapper_translates_sdk_messages():
     )
     assert [e.type for e in events] == ["session", "assistant_text", "tool_use", "usage", "tool_result", "result"]
     assert events[3].context_tokens == 1100
-    assert events[-1].context_tokens == 1100 and events[-1].text == "Done" and events[-1].cost_usd == 0.01
+    assert events[-1].context_tokens == 1100 and events[-1].text == "Done" and events[-1].session_cost_usd == 0.01
 
 
 def test_event_mapper_reports_provider_compaction():

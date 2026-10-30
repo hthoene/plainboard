@@ -646,3 +646,23 @@ def test_worker_wake_result_goes_to_the_manager(client, project):
     job_tick(client)
     wait_for(lambda: idle(client, pid) and "Update from Dev" in runner(client).specs[-1].prompt)
     assert "delegate" in {t.name for t in runner(client).specs[-1].bridge.tools}
+
+
+def test_session_cost_totals_are_not_counted_twice(client, project, monkeypatch):
+    manager = agents_by_slug(client, project["id"])["manager"]
+    totals = iter([0.10, 0.25])
+    original = FakeRunner.stream_run
+
+    async def stream_run(self, spec):
+        async for event in original(self, spec):
+            if event.type == "result":
+                event = event.model_copy(update={"cost_usd": 0.0, "session_cost_usd": next(totals)})
+            yield event
+
+    monkeypatch.setattr(FakeRunner, "stream_run", stream_run)
+    for _ in range(2):
+        chat(client, manager["id"], "SAY hi")
+        wait_for(lambda: idle(client, project["id"]))
+    costs = [r["cost_usd"] for r in runs_of(client, project["id"])]
+    assert sorted(round(c, 2) for c in costs) == [0.10, 0.15]
+    assert round(agents_by_slug(client, project["id"])["manager"]["total_cost_usd"], 2) == 0.25

@@ -70,6 +70,11 @@ export function Markdown({ children, className }: { children: string; className?
             return ticket ? <TicketLink number={Number(ticket[1])}>{props.children}</TicketLink> : <a {...props} target="_blank" rel="noreferrer" />;
           },
           img: ({ src, alt }) => (typeof src === "string" ? <ZoomableImage src={src} alt={alt ?? ""} /> : null),
+          table: ({ node: _node, ...props }) => (
+            <div className="scroll-thin overflow-x-auto">
+              <table {...props} />
+            </div>
+          ),
         }}
       >
         {children}

@@ -138,7 +138,7 @@ export function ChatPanel({
         )}
       </header>
 
-      <div ref={scroller} onScroll={onScroll} className="scroll-thin min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
+      <div ref={scroller} onScroll={onScroll} className="scroll-thin min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-4 sm:px-6">
         <div className={clsx("space-y-3", column)}>
         {conversation.isLoading && (
           <div className="flex justify-center py-8">

@@ -149,6 +149,7 @@
     "selectAgent": "Select agent",
     "loadOlder": "Load older messages",
     "working": "{{name}} is working…",
+    "waiting": "{{name}} is waiting to start…",
     "placeholder": "Message {{name}}…",
     "agentDisabled": "This agent is disabled",
     "send": "Send",

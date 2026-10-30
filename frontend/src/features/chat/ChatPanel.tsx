@@ -47,7 +47,7 @@ export function ChatPanel({
   useLayoutEffect(() => {
     const el = scroller.current;
     if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [messages.length, streaming, queued.length, agentId]);
+  }, [messages.length, streaming, queued.length, agentId, activeRuns.length]);
 
   useEffect(() => {
     stickToBottom.current = true;
@@ -151,21 +151,22 @@ export function ChatPanel({
             <div className="max-w-[85%] rounded-2xl rounded-br-md bg-indigo-600/60 px-3.5 py-2 text-sm whitespace-pre-wrap text-white">{r.input_text}</div>
           </div>
         ))}
-        {running && (
+        {running && streaming && (
           <div className="text-sm">
-            {streaming ? (
-              <Markdown>{streaming}</Markdown>
-            ) : (
-              <div className="flex items-center gap-2 text-xs text-zinc-500">
-                <Loader2 className="size-3.5 animate-spin" /> {t("chat.working", { name: agent.name })}
-              </div>
-            )}
+            <Markdown>{streaming}</Markdown>
           </div>
         )}
         </div>
       </div>
 
-      <Composer agentId={agentId} agentName={agent.name} runningId={running?.id} disabled={!agent.enabled} className={column} />
+      <Composer
+        agentId={agentId}
+        agentName={agent.name}
+        runningId={running?.id}
+        disabled={!agent.enabled}
+        className={column}
+        status={activeRuns.length > 0 ? t(running ? "chat.working" : "chat.waiting", { name: agent.name }) : undefined}
+      />
     </div>
   );
 }
@@ -253,12 +254,14 @@ function Composer({
   runningId,
   disabled,
   className,
+  status,
 }: {
   agentId: number;
   agentName: string;
   runningId?: number;
   disabled: boolean;
   className?: string;
+  status?: string;
 }) {
   const { t } = useTranslation();
   const { project } = useShell();
@@ -301,6 +304,12 @@ function Composer({
     <div className="border-t border-zinc-100 p-3 dark:border-zinc-800">
       <div className={className}>
       {error && <p className="mb-2 text-xs text-red-600">{error}</p>}
+      {status && (
+        <div role="status" className="mb-2 flex items-center gap-2 px-1 text-xs font-medium text-indigo-600 dark:text-indigo-400">
+          <Loader2 className="size-3.5 shrink-0 animate-spin" />
+          <span className="truncate">{status}</span>
+        </div>
+      )}
       <div className="flex items-end gap-2 rounded-xl bg-zinc-50 p-1.5 ring-1 ring-zinc-200 focus-within:ring-2 focus-within:ring-indigo-500 dark:bg-zinc-950 dark:ring-zinc-800">
         <textarea
           ref={area}

@@ -6,8 +6,8 @@ import { useTasks } from "../api/queries";
 import { useShell } from "../features/layout/shell-context";
 import { Lightbox } from "./Lightbox";
 
-const TICKET_REF = /(?<![\w/#&])#(\d+)/g;
-const OTHER_NUMBERING = /(?:PR|MR|pull request|issue)\s*$/i; // numbers on GitHub, not tickets
+const TICKET_REF = /(?<![\w/#&])#(\d+)\b/g;
+const OTHER_NUMBERING = /\b(?:PR|MR|pull request|issue)\s*$/i; // numbers on GitHub, not tickets
 
 type MdNode = { type: string; value?: string; url?: string; children?: MdNode[] };
 

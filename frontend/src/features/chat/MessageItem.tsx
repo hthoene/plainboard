@@ -3,6 +3,7 @@ import { AlertCircle, Archive, Bell, CalendarClock, ChevronRight, ClipboardList,
 import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { Agent, Message } from "../../api/types";
+import { AttachmentLink } from "../../components/AttachmentLink";
 import { Lightbox } from "../../components/Lightbox";
 import { Markdown } from "../../components/Markdown";
 import { formatTokens } from "../../lib/format";
@@ -176,14 +177,15 @@ function MessageFiles({ files }: { files: { id: number; filename: string; conten
         </div>
       )}
       {others.map((f) => (
-        <a
+        <AttachmentLink
           key={f.id}
-          href={`/api/attachments/${f.id}?inline=false`}
+          file={f}
+          download
           className="flex max-w-[85%] items-center gap-1.5 rounded-lg bg-zinc-100 px-2.5 py-1.5 text-xs text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
         >
           <Paperclip className="size-3.5 shrink-0" />
           <span className="truncate">{f.filename}</span>
-        </a>
+        </AttachmentLink>
       ))}
       {viewing !== null && <Lightbox images={images.map((f) => ({ src: `/api/attachments/${f.id}`, alt: f.filename }))} start={viewing} onClose={() => setViewing(null)} />}
     </>

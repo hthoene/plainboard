@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { api, errorMessage } from "../../api/client";
 import { qk, useTask } from "../../api/queries";
 import type { Assignment, Attachment, Priority, TaskDetail, TaskStatus } from "../../api/types";
+import { AttachmentLink } from "../../components/AttachmentLink";
 import { Lightbox } from "../../components/Lightbox";
 import { Markdown } from "../../components/Markdown";
 import { AgentDot, Badge, Button, ErrorText, IconButton, Input, Modal, Select, Spinner, Textarea } from "../../components/ui";
@@ -359,13 +360,13 @@ function Attachments({
                     <img src={`/api/attachments/${a.id}`} alt={a.filename} className="h-24 w-full object-cover" />
                   </button>
                 ) : (
-                  <a href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer" className="flex h-24 items-center justify-center bg-zinc-50 dark:bg-zinc-800/60">
+                  <AttachmentLink file={a} className="flex h-24 w-full items-center justify-center bg-zinc-50 dark:bg-zinc-800/60">
                     <FileText className="size-8 text-zinc-300" />
-                  </a>
+                  </AttachmentLink>
                 )}
-                <a href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer" className="block truncate px-2 py-1 text-xs">
+                <AttachmentLink file={a} className="block w-full truncate px-2 py-1 text-xs">
                   {a.filename} <span className="text-zinc-400">· {formatBytes(a.size)}</span>
-                </a>
+                </AttachmentLink>
                 {reviewIds.has(a.id) && (
                   <Badge tone="amber" className="absolute top-1 left-1">
                     {t("ticket.forReview")}

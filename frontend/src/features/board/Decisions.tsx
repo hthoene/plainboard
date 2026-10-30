@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { api } from "../../api/client";
 import { qk } from "../../api/queries";
 import type { Attachment, Decision } from "../../api/types";
+import { AttachmentLink } from "../../components/AttachmentLink";
 import { Markdown } from "../../components/Markdown";
 import { Button, ErrorText, Textarea } from "../../components/ui";
 import { useShell } from "../layout/shell-context";
@@ -30,17 +31,15 @@ function Thumbs({ ids, attachments, onView, small }: { ids: number[]; attachment
             <img src={`/api/attachments/${a.id}`} alt={a.filename} className="size-full object-cover" />
           </button>
         ) : (
-          <a
+          <AttachmentLink
             key={a.id}
-            href={`/api/attachments/${a.id}`}
-            target="_blank"
-            rel="noreferrer"
+            file={a}
             title={a.filename}
             className={clsx("flex flex-col items-center justify-center gap-1 overflow-hidden rounded-md bg-zinc-50 px-1 text-[11px] text-zinc-500 ring-1 ring-zinc-200 dark:bg-zinc-800/60 dark:ring-zinc-700", box)}
           >
             <FileText className="size-4 shrink-0" />
             {!small && <span className="w-full truncate text-center">{a.filename}</span>}
-          </a>
+          </AttachmentLink>
         ),
       )}
     </div>

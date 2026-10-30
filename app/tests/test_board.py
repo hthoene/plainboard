@@ -92,3 +92,34 @@ def test_password_protection(client, monkeypatch):
     finally:
         monkeypatch.delenv("PLAINBOARD_PASSWORD")
         config.get_config.cache_clear()
+
+
+def test_public_api_shows_only_customer_texts(client, project):
+    pid = project["id"]
+    url = "/api/public/tasks"
+    client.post(f"/api/projects/{pid}/tasks", json={"title": "Internal secret", "description": "hidden", "customer_description": "no title, so hidden"})
+    shown = client.post(f"/api/projects/{pid}/tasks", json={"title": "Refactor reader", "description": "hidden", "customer_title": "Faster opening of books", "customer_description": "Large books open sooner."}).json()
+    other = client.post("/api/projects", json={"name": "Other"}).json()
+    client.post(f"/api/projects/{other['id']}/tasks", json={"title": "Other", "customer_title": "Other project"})
+
+    assert client.get(url).status_code == 401
+    assert client.get(url, headers={"Authorization": "Bearer nope"}).status_code == 401
+
+    key = client.post(f"/api/projects/{pid}/public-api-key").json()["key"]
+    headers = {"Authorization": f"Bearer {key}"}
+    resp = client.get(url, headers=headers)
+    assert resp.status_code == 200 and resp.headers["access-control-allow-origin"] == "*"
+    body = resp.json()
+    assert body["project"] == project["name"]
+    assert len(body["tasks"]) == 1
+    assert set(body["tasks"][0]) == {"number", "title", "description", "status", "updated_at"}
+    assert body["tasks"][0]["title"] == "Faster opening of books" and body["tasks"][0]["number"] == shown["number"]
+    assert body["tasks"][0]["description"] == "Large books open sooner."
+    assert "secret" not in resp.text and "Refactor" not in resp.text
+    assert client.get(f"/api/projects/{pid}").json()["has_public_api_key"] is True
+
+    client.patch(f"/api/tasks/{shown['id']}", json={"customer_title": ""})
+    assert client.get(url, headers=headers).json()["tasks"] == []
+
+    client.delete(f"/api/projects/{pid}/public-api-key")
+    assert client.get(url, headers=headers).status_code == 401

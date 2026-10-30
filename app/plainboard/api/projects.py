@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from ..models import ACTIVE_RUN_STATUSES, Run
 from ..orchestration.runner_client import RunnerError
-from ..schemas import AgentCreate, AgentOut, AgentUpdate, CheckOut, ProjectCreate, ProjectOut, ProjectUpdate
+from ..schemas import AgentCreate, AgentOut, AgentUpdate, CheckOut, ProjectCreate, ProjectOut, ProjectUpdate, PublicApiKey
 from ..services import agents as agent_service
 from ..services import projects as project_service
 from ..services import repositories as repo_service
@@ -52,6 +52,17 @@ async def check_project_github(project_id: int, session: Session, runner: Runner
     urls = [r.url for r in await repo_service.list_for_project(session, project_id)]
     result = await runner.check_github(settings_service.credentials(values, project_service.github_token(project)), urls)
     return CheckOut(ok=result.ok, detail=result.detail)
+
+
+@router.post("/projects/{project_id}/public-api-key", response_model=PublicApiKey, status_code=201)
+async def create_public_api_key(project_id: int, session: Session) -> PublicApiKey:
+    project = await project_service.get(session, project_id)
+    return PublicApiKey(key=await project_service.create_public_api_key(session, project))
+
+
+@router.delete("/projects/{project_id}/public-api-key", status_code=204)
+async def revoke_public_api_key(project_id: int, session: Session) -> None:
+    await project_service.revoke_public_api_key(session, await project_service.get(session, project_id))
 
 
 # --- agents ---------------------------------------------------------------------------------

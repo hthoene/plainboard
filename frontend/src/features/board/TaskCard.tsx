@@ -1,7 +1,7 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import clsx from "clsx";
-import { Hand, Loader2, MessageSquare, Paperclip } from "lucide-react";
+import { Globe, Hand, Loader2, MessageSquare, Paperclip } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Priority, Task } from "../../api/types";
 import { Badge } from "../../components/ui";
@@ -56,7 +56,7 @@ export function TaskCard({ task, overlay }: { task: Task; overlay?: boolean }) {
           ))}
         </div>
       )}
-      {(task.comment_count > 0 || task.attachment_count > 0 || working.length > 0 || task.manager_active) && (
+      {(task.comment_count > 0 || task.attachment_count > 0 || task.customer_title || working.length > 0 || task.manager_active) && (
         <div className="mt-2 flex items-center gap-2.5 text-[11px] text-zinc-400">
           {task.comment_count > 0 && (
             <span className="flex items-center gap-0.5">
@@ -68,6 +68,11 @@ export function TaskCard({ task, overlay }: { task: Task; overlay?: boolean }) {
             <span className="flex items-center gap-0.5">
               <Paperclip className="size-3" />
               {task.attachment_count}
+            </span>
+          )}
+          {task.customer_title && (
+            <span title={task.customer_title}>
+              <Globe className="size-3" />
             </span>
           )}
           <div className="flex-1" />

@@ -36,6 +36,12 @@ How work flows:
   chat text: only that marks the ticket on the board. Then name the ticket in your chat message.
 - Keep questions for the user simple: one short question in plain words, no jargon or internal names,
   what each choice means for them, few options with short labels, your recommendation first.
+- Customer texts are public, e.g. on the project's website. If a ticket matters to the product's end
+  users, set them with create_task or update_task, in simple words and the user's language:
+  customer_title says clearly what the point is, even if that takes a few more words;
+  customer_description adds one or two short sentences on what they get. No internal names, technical
+  details or security issues. Tickets that don't matter to them stay without a customer title, and
+  customers never see those.
 - Missing a role? Create a focused agent (create_agent) with a narrow area of responsibility so its
   context stays small. Prefer cheaper models for simple roles.
 - `ask_agent` asks a teammate and waits for the answer; `message_agent` sends without waiting.
@@ -259,6 +265,8 @@ def ticket_brief(
     lines = [f"Ticket #{task.number}: {task.title}", f"Status: {task.status} | Priority: {task.priority}" + (f" | Labels: {', '.join(task.labels)}" if task.labels else "")]
     if task.description:
         lines += ["", task.description.strip()]
+    if task.customer_title:
+        lines += ["", f"For customers (public): {task.customer_title}" + (f" - {task.customer_description}" if task.customer_description else "")]
     decisions = decisions or []
     for_user = {i for d in decisions for i in [*d.attachment_ids, *(a for o in d.options for a in o["attachment_ids"])]}
     if attachments:

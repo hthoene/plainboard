@@ -86,6 +86,7 @@ class ProjectOut(ORM):
     description: str
     workspace_path: str | None
     has_github_token: bool = False
+    has_public_api_key: bool = False
     auto_wake_manager: bool
     created_at: UTCDateTime
 
@@ -167,9 +168,15 @@ class AgentOut(ORM):
 # --- board ----------------------------------------------------------------------------------
 
 
+CUSTOMER_TITLE_MAX = 150
+CUSTOMER_DESCRIPTION_MAX = 400
+
+
 class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     description: str = ""
+    customer_title: str = Field(default="", max_length=CUSTOMER_TITLE_MAX)
+    customer_description: str = Field(default="", max_length=CUSTOMER_DESCRIPTION_MAX)
     status: Status = "backlog"
     priority: Priority = "medium"
     labels: list[str] = Field(default_factory=list)
@@ -178,6 +185,8 @@ class TaskCreate(BaseModel):
 class TaskUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=300)
     description: str | None = None
+    customer_title: str | None = Field(default=None, max_length=CUSTOMER_TITLE_MAX)
+    customer_description: str | None = Field(default=None, max_length=CUSTOMER_DESCRIPTION_MAX)
     status: Status | None = None
     priority: Priority | None = None
     labels: list[str] | None = None
@@ -190,6 +199,8 @@ class TaskOut(ORM):
     number: int
     title: str
     description: str
+    customer_title: str
+    customer_description: str
     status: str
     position: float
     priority: str
@@ -202,6 +213,23 @@ class TaskOut(ORM):
     active_agent_ids: list[int] = Field(default_factory=list)  # agents with open assignments
     manager_active: bool = False
     open_decisions: int = 0
+
+
+class PublicTask(BaseModel):
+    number: int
+    title: str
+    description: str
+    status: str
+    updated_at: UTCDateTime
+
+
+class PublicBoard(BaseModel):
+    project: str
+    tasks: list[PublicTask]
+
+
+class PublicApiKey(BaseModel):
+    key: str
 
 
 class CommentCreate(BaseModel):

@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from pydantic import BaseModel, Field
 
 from ..models import Assignment, Task
-from ..schemas import DecisionOption, Priority, Status, TaskCreate, TaskUpdate
+from ..schemas import CUSTOMER_DESCRIPTION_MAX, CUSTOMER_TITLE_MAX, DecisionOption, Priority, Status, TaskCreate, TaskUpdate
 from ..services import board as board_service
 from ..services import decisions as decision_service
 from ..services.util import truncate
@@ -26,6 +26,8 @@ class TicketRef(BaseModel):
 class CreateTaskArgs(BaseModel):
     title: str
     description: str = ""
+    customer_title: str = Field(default="", max_length=CUSTOMER_TITLE_MAX, description="Public, for end users: says clearly what this is, simple words; empty = hidden")
+    customer_description: str = Field(default="", max_length=CUSTOMER_DESCRIPTION_MAX, description="Public, for end users: 1-2 short sentences on what they get")
     status: Status = "backlog"
     priority: Priority = "medium"
     labels: list[str] = Field(default_factory=list)
@@ -35,6 +37,8 @@ class UpdateTaskArgs(BaseModel):
     number: int
     title: str | None = None
     description: str | None = None
+    customer_title: str | None = Field(default=None, max_length=CUSTOMER_TITLE_MAX, description="Public, for end users: says clearly what this is, simple words; empty = hidden")
+    customer_description: str | None = Field(default=None, max_length=CUSTOMER_DESCRIPTION_MAX, description="Public, for end users: 1-2 short sentences on what they get")
     status: Status | None = None
     priority: Priority | None = None
     labels: list[str] | None = None

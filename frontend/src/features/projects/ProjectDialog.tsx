@@ -153,10 +153,68 @@ export function ProjectDialog({
             <CheckBadge result={check} />
           </div>
         )}
+        {project && (
+          <Field group label={t("projects.publicApi")} hint={t("projects.publicApiHint")}>
+            <PublicApiKeyEditor project={project} />
+          </Field>
+        )}
         <Toggle checked={form.auto_wake_manager} onChange={(v) => set({ auto_wake_manager: v })} label={t("projects.autoWake")} />
         <p className="-mt-2 pl-11 text-xs text-zinc-500">{t("projects.autoWakeHint")}</p>
         <ErrorText error={error} />
       </div>
     </Modal>
+  );
+}
+
+function PublicApiKeyEditor({ project }: { project: Project }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const [active, setActive] = useState(project.has_public_api_key);
+  const [key, setKey] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
+
+  const change = async (action: () => Promise<void>) => {
+    setError(null);
+    try {
+      await action();
+      await qc.invalidateQueries({ queryKey: qk.projects });
+    } catch (err) {
+      setError(err);
+    }
+  };
+  const create = () =>
+    change(async () => {
+      setKey((await api.post<{ key: string }>(`/projects/${project.id}/public-api-key`)).key);
+      setActive(true);
+    });
+  const revoke = () =>
+    change(async () => {
+      await api.del(`/projects/${project.id}/public-api-key`);
+      setKey(null);
+      setActive(false);
+    });
+
+  return (
+    <div className="space-y-2">
+      {key ? (
+        <div className="space-y-1">
+          <p className="text-xs text-amber-600">{t("projects.publicApiCopy")}</p>
+          <Input readOnly value={key} onFocus={(e) => e.target.select()} className="font-mono" />
+        </div>
+      ) : (
+        active && <p className="text-xs text-zinc-500">{t("projects.publicApiActive")}</p>
+      )}
+      <div className="flex gap-2">
+        <Button size="sm" onClick={create}>
+          {active ? t("projects.publicApiRenew") : t("projects.publicApiCreate")}
+        </Button>
+        {active && (
+          <Button size="sm" variant="danger" onClick={revoke}>
+            {t("projects.publicApiRevoke")}
+          </Button>
+        )}
+      </div>
+      <ErrorText error={error} />
+    </div>
   );
 }

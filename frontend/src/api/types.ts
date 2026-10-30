@@ -11,6 +11,7 @@ export interface Project {
   description: string;
   workspace_path: string | null;
   has_github_token: boolean;
+  has_public_api_key: boolean;
   auto_wake_manager: boolean;
   created_at: string;
 }
@@ -63,6 +64,8 @@ export interface Task {
   number: number;
   title: string;
   description: string;
+  customer_title: string;
+  customer_description: string;
   status: TaskStatus;
   position: number;
   priority: Priority;

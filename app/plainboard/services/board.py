@@ -24,7 +24,7 @@ from ..models import (
     Task,
     TaskStatus,
 )
-from ..schemas import AssignmentOut, AttachmentOut, CommentOut, DecisionOut, TaskCreate, TaskDetail, TaskOut, TaskUpdate
+from ..schemas import AssignmentOut, AttachmentOut, CommentOut, DecisionOut, PublicBoard, PublicTask, TaskCreate, TaskDetail, TaskOut, TaskUpdate
 from .errors import NotFound, ServiceError
 
 OPEN_ASSIGNMENT_STATUSES = (AssignmentStatus.QUEUED, AssignmentStatus.RUNNING)
@@ -45,6 +45,8 @@ async def create_task(session: AsyncSession, project_id: int, data: TaskCreate, 
         number=project.task_counter,
         title=data.title,
         description=data.description,
+        customer_title=data.customer_title,
+        customer_description=data.customer_description,
         status=data.status,
         priority=data.priority,
         labels=data.labels,
@@ -55,6 +57,18 @@ async def create_task(session: AsyncSession, project_id: int, data: TaskCreate, 
     await session.commit()
     await publish_task(session, task)
     return task
+
+
+async def public_board(session: AsyncSession, project: Project) -> PublicBoard:
+    """What customers may see: only tickets with a customer title, and nothing else about them."""
+    tasks = [t for t in await list_tasks(session, project.id) if t.customer_title.strip()]
+    return PublicBoard(
+        project=project.name,
+        tasks=[
+            PublicTask(number=t.number, title=t.customer_title.strip(), description=t.customer_description.strip(), status=t.status, updated_at=t.updated_at)
+            for t in tasks
+        ],
+    )
 
 
 async def update_task(session: AsyncSession, task: Task, data: TaskUpdate) -> tuple[Task, str]:

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import secrets
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -96,7 +99,31 @@ def github_token(project: Project) -> str | None:
     return decrypt(project.github_token_enc)
 
 
+def _key_hash(key: str) -> str:
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
+async def create_public_api_key(session: AsyncSession, project: Project) -> str:
+    """A new key replaces the old one. Only its hash is stored, so it can be shown just once."""
+    key = f"pb_{secrets.token_urlsafe(32)}"
+    project.public_api_key_hash = _key_hash(key)
+    await session.commit()
+    bus.publish(project.id, "project.updated", to_out(project))
+    return key
+
+
+async def revoke_public_api_key(session: AsyncSession, project: Project) -> None:
+    project.public_api_key_hash = None
+    await session.commit()
+    bus.publish(project.id, "project.updated", to_out(project))
+
+
+async def by_public_api_key(session: AsyncSession, key: str) -> Project | None:
+    return await session.scalar(select(Project).where(Project.public_api_key_hash == _key_hash(key)))
+
+
 def to_out(project: Project) -> ProjectOut:
     out = ProjectOut.model_validate(project)
     out.has_github_token = bool(project.github_token_enc)
+    out.has_public_api_key = bool(project.public_api_key_hash)
     return out

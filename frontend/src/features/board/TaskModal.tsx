@@ -100,6 +100,7 @@ export function TaskModal({ taskId, onClose }: { taskId: number; onClose: () => 
       <div className="grid gap-6 md:grid-cols-[1fr_220px]" onPaste={onPaste}>
         <div className="min-w-0 space-y-6">
           <DescriptionEditor value={data.description} onSave={(description) => patch({ description })} />
+          <CustomerTexts title={data.customer_title} description={data.customer_description} onSave={patch} />
           <Attachments attachments={data.attachments} reviewIds={reviewAttachmentIds(data.decisions)} onUpload={upload} onView={setViewing} />
           <Assignments assignments={data.assignments} />
           <Comments taskId={taskId} comments={data.comments} />
@@ -186,6 +187,37 @@ function TitleEditor({ value, onSave }: { value: string; onSave: (v: string) => 
       onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
       className="min-w-0 flex-1 rounded bg-transparent px-1 py-0.5 outline-none hover:bg-zinc-50 focus:bg-zinc-50 dark:hover:bg-zinc-800 dark:focus:bg-zinc-800"
     />
+  );
+}
+
+function CustomerTexts({ title, description, onSave }: { title: string; description: string; onSave: (body: { customer_title?: string; customer_description?: string }) => void }) {
+  const { t } = useTranslation();
+  const [draftTitle, setDraftTitle] = useState(title);
+  const [draftDescription, setDraftDescription] = useState(description);
+  useEffect(() => setDraftTitle(title), [title]);
+  useEffect(() => setDraftDescription(description), [description]);
+  return (
+    <section className="space-y-2">
+      <SectionTitle>{t("ticket.customerSection")}</SectionTitle>
+      <Input
+        aria-label={t("ticket.customerTitle")}
+        placeholder={t("ticket.customerTitle")}
+        maxLength={150}
+        value={draftTitle}
+        onChange={(e) => setDraftTitle(e.target.value)}
+        onBlur={() => draftTitle !== title && onSave({ customer_title: draftTitle })}
+      />
+      <Textarea
+        aria-label={t("ticket.customerDescription")}
+        placeholder={t("ticket.customerDescription")}
+        rows={2}
+        maxLength={400}
+        value={draftDescription}
+        onChange={(e) => setDraftDescription(e.target.value)}
+        onBlur={() => draftDescription !== description && onSave({ customer_description: draftDescription })}
+      />
+      <p className="text-xs text-zinc-500">{t("ticket.customerHint")}</p>
+    </section>
   );
 }
 

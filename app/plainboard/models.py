@@ -102,6 +102,7 @@ class Project(Timestamps, Base):
     # Maintained by the manager: installs what this project needs, so it survives container rebuilds.
     setup_script: Mapped[str] = mapped_column(Text, default="")
     github_token_enc: Mapped[str | None] = mapped_column(Text)
+    public_api_key_hash: Mapped[str | None] = mapped_column(String(64), unique=True)  # read-only access to customer notes
     auto_wake_manager: Mapped[bool] = mapped_column(Boolean, default=True)
     task_counter: Mapped[int] = mapped_column(Integer, default=0)
 
@@ -178,6 +179,9 @@ class Task(Timestamps, Base):
     number: Mapped[int] = mapped_column(Integer)
     title: Mapped[str] = mapped_column(String(300))
     description: Mapped[str] = mapped_column(Text, default="")
+    # Public via the API. No title = hidden from customers.
+    customer_title: Mapped[str] = mapped_column(String(150), default="")
+    customer_description: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(20), default=TaskStatus.BACKLOG)
     position: Mapped[float] = mapped_column(Float, default=0.0)
     priority: Mapped[str] = mapped_column(String(10), default="medium")

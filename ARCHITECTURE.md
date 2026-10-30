@@ -29,6 +29,7 @@ token that is valid only while the run lasts and only for that run's project and
 | Concept | Where | Notes |
 |---|---|---|
 | Ticket (`Task`) | `models.py`, `services/board.py` | Never assigned to agents. Statuses live in `TaskStatus`. |
+| Customer texts | `task.customer_title`, `task.customer_description`, `api/public.py` | Short public title and description on a ticket, mostly written by the manager. `GET /api/public/tasks` with a project key returns only tickets with a customer title, and only these texts, number, status and date. |
 | Assignment | `run_manager.delegate` | A work order for one agent, optionally linked to a ticket. |
 | Decision | `services/decisions.py`, `tools/board.py` | A question from the manager to the user on a ticket, with options to click and attachments for the user's review. The answer becomes a ticket comment and an inbox update that wakes the agent that asked. If the user answers in chat, the manager records it with `resolve_decision`. |
 | Chat attachment | `services/board.py`, `api/chat.py` | A file sent with a chat message: an `Attachment` without a ticket, listed on the `Run` and in the user message's meta. The agent gets its path under `/uploads` in the turn and opens it with its file tools. |

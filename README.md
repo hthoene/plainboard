@@ -75,6 +75,24 @@ it may use (branches + pull requests, no conflicts between parallel agents). To 
 set `PLAINBOARD_BIND=0.0.0.0` and `PLAINBOARD_PASSWORD`, ideally behind a reverse proxy with TLS. Browsers offer to install PlainBoard as an app
 only over HTTPS or on `localhost`.
 
+### Public API
+
+To show progress on a website, create a key under **Project settings → Public API**. Tickets with a
+customer title are then available, with their customer texts and nothing else: no internal titles,
+descriptions or comments.
+
+```bash
+curl -H "Authorization: Bearer pb_..." https://your-plainboard/api/public/tasks
+```
+
+```json
+{"project": "PaperPaw", "tasks": [{"number": 12, "title": "Faster opening of books", "description": "Large books open in about half the time.", "status": "in_progress", "updated_at": "2026-10-30T09:00:00Z"}]}
+```
+
+`status` is `backlog`, `todo`, `in_progress`, `review` or `done`. The endpoint allows calls from any
+website, and responses may be cached for 60 seconds. The server must be reachable from where you call it
+(see Server usage).
+
 ## How work flows
 
 ```

@@ -15,6 +15,7 @@ import { useShell } from "../layout/shell-context";
 import { LimitsRing } from "./LimitsRing";
 import { MessageItem } from "./MessageItem";
 import { OpenQuestions } from "./OpenQuestions";
+import { StoppingAgents } from "./StoppingAgents";
 
 export function ChatPanel({
   agentId,
@@ -391,6 +392,7 @@ function Composer({
     <div className="border-t border-zinc-100 p-3 dark:border-zinc-800">
       <div className={className}>
       {error && <p className="mb-2 text-xs text-red-600">{error}</p>}
+      <StoppingAgents />
       {status && (
         <div role="status" className="mb-2 flex items-center gap-2 px-1 text-xs font-medium text-indigo-600 dark:text-indigo-400">
           <Loader2 className="size-3.5 shrink-0 animate-spin" />

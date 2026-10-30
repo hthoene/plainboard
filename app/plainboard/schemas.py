@@ -379,6 +379,7 @@ class RunOut(ORM):
     created_at: UTCDateTime
     started_at: UTCDateTime | None
     finished_at: UTCDateTime | None
+    stop_requested_at: UTCDateTime | None = None
 
 
 # --- notes / schedules / mcp ----------------------------------------------------------------

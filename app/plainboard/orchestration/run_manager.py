@@ -351,8 +351,12 @@ class RunManager:
         for run_id, status in rows:
             if status == RunStatus.QUEUED:
                 await self.cancel_run(run_id)
-            else:
-                running = await self.runner.notify_run(run_id, prompts.wind_down_notice(reason)) or running
+            elif await self.runner.notify_run(run_id, prompts.wind_down_notice(reason)):
+                running = True
+                run = await s.get(Run, run_id)
+                run.stop_requested_at = run.stop_requested_at or utcnow()
+                await s.commit()
+                bus.publish(run.project_id, "run.upserted", RunOut.model_validate(run))
         return running
 
     async def stop_agent(self, s: AsyncSession, agent: Agent) -> int:

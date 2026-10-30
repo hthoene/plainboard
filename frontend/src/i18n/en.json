@@ -173,6 +173,15 @@
     "stop": "Stop",
     "queueHint": "New messages are queued until the current turn finishes.",
     "openQuestions": "Tickets with a question for you",
+    "stopping": {
+      "active_one": "Stopping {{count}} agent",
+      "active_other": "Stopping {{count}} agents, {{done}} done",
+      "finished_one": "{{count}} agent stopped",
+      "finished_other": "All {{count}} agents stopped",
+      "working": "still working",
+      "paused": "paused",
+      "stopped": "stopped"
+    },
     "limits": {
       "ring": "Plan limit {{percent}}% used",
       "five_hour": "5-hour limit",

@@ -703,7 +703,8 @@ def test_working_teammate_is_told_to_wrap_up_not_aborted(client, project):
     (run_id, text), = runner(client).notices
     assert run_id == runs_of(client, pid, agent_id=dev["id"])[0]["id"]
     assert "safe point" in text and "release" in text
-    assert runs_of(client, pid, agent_id=dev["id"])[0]["status"] == "succeeded"
+    run = runs_of(client, pid, agent_id=dev["id"])[0]
+    assert run["status"] == "succeeded" and run["stop_requested_at"]
     assert agents_by_slug(client, pid)["dev"]["enabled"] is False
 
 

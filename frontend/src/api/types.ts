@@ -177,6 +177,7 @@ export interface Run {
   agent_id: number;
   trigger: "chat" | "ticket" | "assignment" | "ask" | "message" | "schedule" | "wake";
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  stop_requested_at: string | null;
   input_text: string;
   attachment_ids: number[];
   effort: string | null;

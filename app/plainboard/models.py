@@ -318,6 +318,7 @@ class Run(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+    stop_requested_at: Mapped[datetime | None] = mapped_column(DateTime)  # told to wrap up
 
 
 class Job(Base):

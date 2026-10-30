@@ -30,6 +30,7 @@ token that is valid only while the run lasts and only for that run's project and
 |---|---|---|
 | Ticket (`Task`) | `models.py`, `services/board.py` | Never assigned to agents. Statuses live in `TaskStatus`. |
 | Assignment | `run_manager.delegate` | A work order for one agent, optionally linked to a ticket. |
+| Decision | `services/decisions.py`, `tools/board.py` | A question from the manager to the user on a ticket, with options to click and attachments for the user's review. The answer becomes a ticket comment and an inbox update that wakes the agent that asked. If the user answers in chat, the manager records it with `resolve_decision`. |
 | Run | `run_manager.py` | One agent turn. Triggers: chat, ticket, assignment, ask, message, schedule, wake. |
 | Conversation | `context.py` | One endless conversation per agent, with provider session, summary and token totals. |
 | Inbox | `orchestration/inbox.py` | Prepended to the agent's next turn. Manager wake-ups are coalesced. |

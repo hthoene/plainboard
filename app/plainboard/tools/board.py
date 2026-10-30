@@ -6,8 +6,9 @@ from sqlalchemy import func, select
 from pydantic import BaseModel, Field
 
 from ..models import Assignment, Task
-from ..schemas import Priority, Status, TaskCreate, TaskUpdate
+from ..schemas import DecisionOption, Priority, Status, TaskCreate, TaskUpdate
 from ..services import board as board_service
+from ..services import decisions as decision_service
 from ..services.util import truncate
 from .registry import ALL, MANAGER, ToolContext, local_tool, tool
 
@@ -47,6 +48,21 @@ class CommentArgs(BaseModel):
 class AttachFileArgs(BaseModel):
     task_number: int
     path: str = Field(description="File path, absolute or relative to your workspace")
+
+
+class RequestDecisionArgs(BaseModel):
+    task_number: int
+    question: str
+    details: str = Field(default="", description="Markdown: background the user needs")
+    options: list[DecisionOption] = Field(default_factory=list, max_length=8, description="Choices to click; empty = free answer only")
+    attachment_ids: list[int] = Field(default_factory=list, description="Files for the question as a whole")
+
+
+class ResolveDecisionArgs(BaseModel):
+    decision_id: int
+    option: int | None = Field(default=None, ge=1, description="Number of the chosen option")
+    note: str = Field(default="", description="The user's answer in their words")
+    withdraw: bool = Field(default=False, description="The question is no longer needed")
 
 
 def ticket_line(task: Task) -> str:
@@ -107,3 +123,23 @@ async def add_comment(ctx: ToolContext, args: CommentArgs) -> str:
 
 
 local_tool("attach_file", "Attach a file from your workspace to a ticket (e.g. screenshot, report).", AttachFileArgs)
+
+
+@tool("request_decision", "Ask the user to decide on a ticket. Their answer arrives as an update.", RequestDecisionArgs, roles=(MANAGER,))
+async def request_decision(ctx: ToolContext, args: RequestDecisionArgs) -> str:
+    task = await board_service.get_task_by_number(ctx.session, ctx.project.id, args.task_number)
+    decision = await decision_service.create(
+        ctx.session, task, args.question, details=args.details, options=args.options, attachment_ids=args.attachment_ids, agent_id=ctx.agent.id
+    )
+    return f"Decision {decision.id} is waiting for the user on ticket #{task.number}."
+
+
+@tool("resolve_decision", "Record the answer the user gave you directly, or withdraw the question.", ResolveDecisionArgs, roles=(MANAGER,))
+async def resolve_decision(ctx: ToolContext, args: ResolveDecisionArgs) -> str:
+    decision = await decision_service.get_in_project(ctx.session, ctx.project.id, args.decision_id)
+    if args.withdraw:
+        await decision_service.withdraw(ctx.session, decision)
+        return f"Withdrew decision {decision.id}."
+    option_index = args.option - 1 if args.option else None
+    await decision_service.answer(ctx.session, decision, option_index=option_index, text=args.note, by="agent", agent_id=ctx.agent.id)
+    return f"Recorded decision {decision.id}."

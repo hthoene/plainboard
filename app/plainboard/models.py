@@ -60,6 +60,12 @@ class AssignmentStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class DecisionStatus(StrEnum):
+    OPEN = "open"
+    ANSWERED = "answered"
+    WITHDRAWN = "withdrawn"
+
+
 ACTIVE_RUN_STATUSES = (RunStatus.QUEUED, RunStatus.RUNNING)
 
 
@@ -190,6 +196,26 @@ class Attachment(Base):
     storage_name: Mapped[str] = mapped_column(String(100), unique=True)
     uploaded_by_agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Decision(Timestamps, Base):
+    """A question from the manager to the user on a ticket. Attachments referenced here are meant
+    for the user's review, not as input for other agents."""
+
+    __tablename__ = "decisions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
+    requested_by_agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id", ondelete="SET NULL"))
+    question: Mapped[str] = mapped_column(Text)
+    details: Mapped[str] = mapped_column(Text, default="")
+    options: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)  # label, description, attachment_ids
+    attachment_ids: Mapped[list[int]] = mapped_column(JSON, default=list)  # not tied to a single option
+    status: Mapped[str] = mapped_column(String(20), default=DecisionStatus.OPEN)
+    answer_option: Mapped[int | None] = mapped_column(Integer)  # index into options
+    answer_text: Mapped[str] = mapped_column(Text, default="")
+    answered_by: Mapped[str | None] = mapped_column(String(10))  # user | agent
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
 class Assignment(Timestamps, Base):

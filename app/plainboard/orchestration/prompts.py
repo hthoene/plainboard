@@ -6,7 +6,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
-from ..models import Agent, Assignment, Attachment, Comment, Note, Project, Repository, Task
+from ..models import Agent, Assignment, Attachment, Comment, Decision, DecisionStatus, Note, Project, Repository, Task
 from ..services.util import truncate
 
 MANAGER_GUIDE = """\
@@ -24,6 +24,10 @@ How work flows:
   every change of effort invalidates the agent's prompt cache, which costs tokens.
 - Finished assignment reports arrive as updates in your next turn. Review them, delegate follow-ups if
   needed, then move the ticket (update_task: review/done) and leave a short comment for the user.
+- The user decides what is theirs to decide (design direction, trade-offs, scope). Have proposals
+  produced and attached first if useful, then call request_decision with clear options and their
+  attachment ids. Then stop that work: the answer arrives as an update. If the user answers you in
+  chat instead, record it with resolve_decision.
 - Missing a role? Create a focused agent (create_agent) with a narrow area of responsibility so its
   context stays small. Prefer cheaper models for simple roles.
 - `ask_agent` asks a teammate and waits for the answer; `message_agent` sends without waiting.
@@ -46,7 +50,9 @@ How you work:
   where (files, branch, PR link), how to verify, and open issues. Keep it short.
 - You can read tickets (get_task) and comment on them. Ticket status is managed by the manager.
 - Ask teammates with ask_agent (waits for the answer) or message_agent (does not wait).
-- Store durable knowledge in notes. Pin only what everyone must always know."""
+- Store durable knowledge in notes. Pin only what everyone must always know.
+- Files for the user's review (e.g. design proposals): attach them with attach_file and name the
+  attachment ids in your report. Attachments marked "for the user's review" are not input for your work."""
 
 ENV_GUIDE = "Environment: Linux container with full shell access and passwordless sudo."
 
@@ -222,12 +228,21 @@ def now_line(tz_name: str) -> str:
     return datetime.now(UTC).astimezone(tz).strftime("Current time: %Y-%m-%d %H:%M %Z (%A)")
 
 
-def ticket_brief(task: Task, attachments: list[Attachment], comments: list[Comment], names: dict[int, str], runner_path) -> str:
+def ticket_brief(
+    task: Task, attachments: list[Attachment], comments: list[Comment], names: dict[int, str], runner_path, decisions: list[Decision] | None = None
+) -> str:
     lines = [f"Ticket #{task.number}: {task.title}", f"Status: {task.status} | Priority: {task.priority}" + (f" | Labels: {', '.join(task.labels)}" if task.labels else "")]
     if task.description:
         lines += ["", task.description.strip()]
+    decisions = decisions or []
+    for_user = {i for d in decisions for i in [*d.attachment_ids, *(a for o in d.options for a in o["attachment_ids"])]}
     if attachments:
-        lines += ["", "Attachments:"] + [f"- {a.filename}: {runner_path(a)}" for a in attachments]
+        lines += ["", "Attachments:"] + [f"- {a.id} {a.filename}: {runner_path(a)}" + (" (for the user's review)" if a.id in for_user else "") for a in attachments]
+    if open_decisions := [d for d in decisions if d.status == DecisionStatus.OPEN]:
+        lines += ["", "Waiting for the user's decision:"]
+        for d in open_decisions:
+            options = "; ".join(f"{i}. {o['label']}" for i, o in enumerate(d.options, 1))
+            lines.append(f"- Decision {d.id}: {d.question}" + (f" ({options})" if options else ""))
     if comments:
         lines += ["", "Recent comments:"]
         for c in comments:

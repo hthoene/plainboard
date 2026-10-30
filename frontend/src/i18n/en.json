@@ -125,7 +125,25 @@
     "agent": "Agent",
     "system": "System",
     "confirmDelete": "Delete ticket #{{number}}?",
-    "effort": "effort {{effort}}"
+    "effort": "effort {{effort}}",
+    "forReview": "For your review"
+  },
+  "decision": {
+    "title": "Your decision",
+    "requestedBy": "asked by {{name}}",
+    "choose": "Choose this",
+    "notePlaceholder": "Add a note to your choice, or answer in your own words…",
+    "answerPlaceholder": "Write your answer…",
+    "sendAnswer": "Send answer",
+    "askInChat": "Discuss with {{name}}",
+    "recordedBy": "(recorded by {{name}})",
+    "withdrawn": "Withdrawn"
+  },
+  "lightbox": {
+    "position": "{{current}} of {{total}}",
+    "previous": "Previous image",
+    "next": "Next image",
+    "openOriginal": "Open original"
   },
   "chat": {
     "selectAgent": "Select agent",

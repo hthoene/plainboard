@@ -1,9 +1,10 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import clsx from "clsx";
-import { Loader2, MessageSquare, Paperclip } from "lucide-react";
+import { Hand, Loader2, MessageSquare, Paperclip } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Priority, Task } from "../../api/types";
+import { Badge } from "../../components/ui";
 import { useShell } from "../layout/shell-context";
 
 export const priorityStyle: Record<Priority, string> = {
@@ -37,6 +38,14 @@ export function TaskCard({ task, overlay }: { task: Task; overlay?: boolean }) {
         <span className="pt-px font-mono text-[11px] text-zinc-400">#{task.number}</span>
         <h3 className="min-w-0 flex-1 text-[13px] leading-snug font-medium text-zinc-800 dark:text-zinc-100">{task.title}</h3>
       </div>
+      {task.open_decisions > 0 && (
+        <div className="mt-1.5">
+          <Badge tone="amber">
+            <Hand className="size-3" />
+            {t("decision.title")}
+          </Badge>
+        </div>
+      )}
       {(task.labels.length > 0 || task.priority !== "medium") && (
         <div className="mt-1.5 flex flex-wrap items-center gap-1">
           {task.priority !== "medium" && <span className={clsx("text-[11px] font-medium", priorityStyle[task.priority])}>{t(`priority.${task.priority}`)}</span>}

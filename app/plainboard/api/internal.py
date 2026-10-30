@@ -45,4 +45,4 @@ async def upload_attachment(
         )
     except ServiceError as exc:
         return ToolCallResult(text=str(exc), is_error=True)
-    return ToolCallResult(text=f"Attached {attachment.filename} to ticket #{task.number}.")
+    return ToolCallResult(text=f"Attached {attachment.filename} to ticket #{task.number} (attachment id {attachment.id}).")

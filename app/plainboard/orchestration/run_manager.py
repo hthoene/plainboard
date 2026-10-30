@@ -28,6 +28,7 @@ from ..models import (
     Assignment,
     AssignmentStatus,
     Conversation,
+    Decision,
     Message,
     Project,
     Run,
@@ -40,6 +41,7 @@ from ..models import (
 from ..schemas import AssignmentOut, MessageOut, RunOut, TaskUpdate
 from ..services import agents as agent_service
 from ..services import board as board_service
+from ..services import decisions as decision_service
 from ..services import mcp as mcp_service
 from ..services import projects as project_service
 from ..services import repositories as repo_service
@@ -579,6 +581,16 @@ class RunManager:
                 await board_service.add_comment(s, ticket, f"Manager could not process the ticket: {run.error}", author_kind="system")
 
         await board_service.publish_task_id(s, run.task_id)
+
+    async def decision_answered(self, s: AsyncSession, decision: Decision) -> None:
+        """Tell the agent that asked (or the manager, if it is gone) what the user decided."""
+        project = await s.get(Project, decision.project_id)
+        task = await s.get(Task, decision.task_id)
+        if project is None or task is None:
+            return
+        recipient = decision.requested_by_agent_id or (await agent_service.get_manager(s, project.id)).id
+        await inbox.push(s, recipient, f'User decided on ticket #{task.number} ("{decision.question}"): {decision_service.answer_summary(decision)}')
+        await self._maybe_wake(s, project, recipient)
 
     async def _maybe_wake(self, s: AsyncSession, project: Project, agent_id: int) -> None:
         if project.auto_wake_manager:

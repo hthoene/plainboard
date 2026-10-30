@@ -57,6 +57,7 @@ function handle(qc: QueryClient, pid: number, event: ServerEvent) {
     case "task":
     case "comment":
     case "attachment":
+    case "decision":
       qc.invalidateQueries({ queryKey: qk.tasks(pid) });
       qc.invalidateQueries({ queryKey: ["task"] });
       break;

@@ -199,6 +199,7 @@ class TaskOut(ORM):
     attachment_count: int = 0
     active_agent_ids: list[int] = Field(default_factory=list)  # agents with open assignments
     manager_active: bool = False
+    open_decisions: int = 0
 
 
 class CommentCreate(BaseModel):
@@ -240,10 +241,38 @@ class AssignmentOut(ORM):
     finished_at: UTCDateTime | None
 
 
+class DecisionOption(BaseModel):
+    label: str = Field(min_length=1, max_length=200)
+    description: str = ""
+    attachment_ids: list[int] = Field(default_factory=list, description="Files showing this option")
+
+
+class DecisionAnswer(BaseModel):
+    option_index: int | None = Field(default=None, ge=0)
+    text: str = ""
+
+
+class DecisionOut(ORM):
+    id: int
+    task_id: int
+    requested_by_agent_id: int | None
+    question: str
+    details: str
+    options: list[DecisionOption]
+    attachment_ids: list[int]
+    status: str
+    answer_option: int | None
+    answer_text: str
+    answered_by: str | None
+    answered_at: UTCDateTime | None
+    created_at: UTCDateTime
+
+
 class TaskDetail(TaskOut):
     comments: list[CommentOut] = Field(default_factory=list)
     attachments: list[AttachmentOut] = Field(default_factory=list)
     assignments: list[AssignmentOut] = Field(default_factory=list)
+    decisions: list[DecisionOut] = Field(default_factory=list)
 
 
 # --- chat & runs ----------------------------------------------------------------------------

@@ -6,11 +6,13 @@ import { useTranslation } from "react-i18next";
 import { api, errorMessage } from "../../api/client";
 import { qk, useTask } from "../../api/queries";
 import type { Assignment, Attachment, Priority, TaskDetail, TaskStatus } from "../../api/types";
+import { Lightbox } from "../../components/Lightbox";
 import { Markdown } from "../../components/Markdown";
 import { AgentDot, Badge, Button, ErrorText, IconButton, Input, Modal, Select, Spinner, Textarea } from "../../components/ui";
 import { formatBytes, timeAgo } from "../../lib/format";
 import { useShell } from "../layout/shell-context";
 import { statusColor, STATUSES } from "./Board";
+import { Decisions, isImage, reviewAttachmentIds } from "./Decisions";
 
 const PRIORITIES: Priority[] = ["low", "medium", "high", "urgent"];
 
@@ -20,6 +22,7 @@ export function TaskModal({ taskId, onClose }: { taskId: number; onClose: () => 
   const qc = useQueryClient();
   const task = useTask(taskId);
   const [error, setError] = useState<unknown>(null);
+  const [viewing, setViewing] = useState<number | null>(null);
 
   const patch = async (body: Partial<TaskDetail>) => {
     setError(null);
@@ -60,6 +63,7 @@ export function TaskModal({ taskId, onClose }: { taskId: number; onClose: () => 
     );
   }
   const data = task.data;
+  const images = data.attachments.filter(isImage);
 
   const handToManager = async () => {
     setError(null);
@@ -90,10 +94,13 @@ export function TaskModal({ taskId, onClose }: { taskId: number; onClose: () => 
         </div>
       }
     >
+      <div className="mb-6 empty:hidden">
+        <Decisions decisions={data.decisions} attachments={data.attachments} onView={setViewing} />
+      </div>
       <div className="grid gap-6 md:grid-cols-[1fr_220px]" onPaste={onPaste}>
         <div className="min-w-0 space-y-6">
           <DescriptionEditor value={data.description} onSave={(description) => patch({ description })} />
-          <Attachments attachments={data.attachments} onUpload={upload} />
+          <Attachments attachments={data.attachments} reviewIds={reviewAttachmentIds(data.decisions)} onUpload={upload} onView={setViewing} />
           <Assignments assignments={data.assignments} />
           <Comments taskId={taskId} comments={data.comments} />
         </div>
@@ -136,6 +143,16 @@ export function TaskModal({ taskId, onClose }: { taskId: number; onClose: () => 
           <ErrorText error={error} />
         </aside>
       </div>
+      {viewing !== null && (
+        <Lightbox
+          images={images.map((a) => ({ src: `/api/attachments/${a.id}`, alt: a.filename }))}
+          start={Math.max(
+            images.findIndex((a) => a.id === viewing),
+            0,
+          )}
+          onClose={() => setViewing(null)}
+        />
+      )}
     </Modal>
   );
 }
@@ -252,7 +269,17 @@ function LabelsEditor({ value, onSave }: { value: string[]; onSave: (v: string[]
   );
 }
 
-function Attachments({ attachments, onUpload }: { attachments: Attachment[]; onUpload: (files: FileList) => void }) {
+function Attachments({
+  attachments,
+  reviewIds,
+  onUpload,
+  onView,
+}: {
+  attachments: Attachment[];
+  reviewIds: Set<number>;
+  onUpload: (files: FileList) => void;
+  onView: (id: number) => void;
+}) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const input = useRef<HTMLInputElement>(null);
@@ -295,18 +322,23 @@ function Attachments({ attachments, onUpload }: { attachments: Attachment[]; onU
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {attachments.map((a) => (
               <div key={a.id} className="group relative overflow-hidden rounded-md ring-1 ring-zinc-200 dark:ring-zinc-800">
-                <a href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer" className="block">
-                  {a.content_type.startsWith("image/") ? (
+                {isImage(a) ? (
+                  <button type="button" onClick={() => onView(a.id)} className="block w-full cursor-zoom-in">
                     <img src={`/api/attachments/${a.id}`} alt={a.filename} className="h-24 w-full object-cover" />
-                  ) : (
-                    <div className="flex h-24 items-center justify-center bg-zinc-50 dark:bg-zinc-800/60">
-                      <FileText className="size-8 text-zinc-300" />
-                    </div>
-                  )}
-                  <div className="truncate px-2 py-1 text-xs">
-                    {a.filename} <span className="text-zinc-400">· {formatBytes(a.size)}</span>
-                  </div>
+                  </button>
+                ) : (
+                  <a href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer" className="flex h-24 items-center justify-center bg-zinc-50 dark:bg-zinc-800/60">
+                    <FileText className="size-8 text-zinc-300" />
+                  </a>
+                )}
+                <a href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer" className="block truncate px-2 py-1 text-xs">
+                  {a.filename} <span className="text-zinc-400">· {formatBytes(a.size)}</span>
                 </a>
+                {reviewIds.has(a.id) && (
+                  <Badge tone="amber" className="absolute top-1 left-1">
+                    {t("ticket.forReview")}
+                  </Badge>
+                )}
                 <IconButton label={t("common.delete")} onClick={() => remove(a)} className="absolute top-1 right-1 bg-white/90 opacity-0 group-hover:opacity-100 dark:bg-zinc-900/90">
                   <Trash2 className="size-3.5" />
                 </IconButton>

@@ -5,8 +5,21 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select
 
 from ..models import Assignment, Run, TaskStatus
-from ..schemas import AssignmentOut, AttachmentOut, CommentCreate, CommentOut, RunOut, TaskCreate, TaskDetail, TaskOut, TaskUpdate
+from ..schemas import (
+    AssignmentOut,
+    AttachmentOut,
+    CommentCreate,
+    CommentOut,
+    DecisionAnswer,
+    DecisionOut,
+    RunOut,
+    TaskCreate,
+    TaskDetail,
+    TaskOut,
+    TaskUpdate,
+)
 from ..services import board as board_service
+from ..services import decisions as decision_service
 from ..services.errors import NotFound, ServiceError
 from .deps import Runs, Session
 
@@ -79,6 +92,14 @@ async def upload(task_id: int, session: Session, files: list[UploadFile] = File(
         attachment = await board_service.add_attachment(session, task, file.filename or "file", file.content_type or "", data)
         out.append(AttachmentOut.model_validate(attachment))
     return out
+
+
+@router.post("/decisions/{decision_id}/answer", response_model=DecisionOut)
+async def answer_decision(decision_id: int, body: DecisionAnswer, session: Session, runs: Runs) -> DecisionOut:
+    decision = await decision_service.get(session, decision_id)
+    await decision_service.answer(session, decision, option_index=body.option_index, text=body.text)
+    await runs.decision_answered(session, decision)
+    return DecisionOut.model_validate(decision)
 
 
 @router.get("/attachments/{attachment_id}")

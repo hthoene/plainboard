@@ -254,6 +254,109 @@ def test_session_without_frozen_prompt_is_kept(client, project):
     assert runner(client).specs[-1].resume_session_id == session_id
 
 
+def decision_ticket(client, pid: int) -> tuple[dict, int]:
+    ticket = client.post(f"/api/projects/{pid}/tasks", json={"title": "New design"}).json()
+    upload = client.post(f"/api/tasks/{ticket['id']}/attachments", files={"files": ("a.png", b"png", "image/png")})
+    assert upload.status_code == 201, upload.text
+    return ticket, upload.json()[0]["id"]
+
+
+def request_decision(client, pid: int, manager_id: int, number: int, attachment_id: int) -> None:
+    args = {
+        "task_number": number,
+        "question": "Which layout?",
+        "options": [{"label": "Compact", "attachment_ids": [attachment_id]}, {"label": "Airy", "description": "More whitespace"}],
+    }
+    chat(client, manager_id, f"TOOL request_decision {json.dumps(args)}")
+    wait_for(lambda: idle(client, pid))
+
+
+def test_user_decision_answer_reaches_the_manager(client, project):
+    pid = project["id"]
+    manager = agents_by_slug(client, pid)["manager"]
+    ticket, attachment_id = decision_ticket(client, pid)
+    request_decision(client, pid, manager["id"], ticket["number"], attachment_id)
+
+    detail = client.get(f"/api/tasks/{ticket['id']}").json()
+    assert detail["open_decisions"] == 1
+    decision = detail["decisions"][0]
+    assert decision["status"] == "open" and decision["requested_by_agent_id"] == manager["id"]
+    assert decision["options"][0]["attachment_ids"] == [attachment_id]
+    board = client.get(f"/api/projects/{pid}/tasks").json()
+    assert next(t for t in board if t["id"] == ticket["id"])["open_decisions"] == 1
+
+    chat(client, manager["id"], f'TOOL get_task {{"number": {ticket["number"]}}}')
+    wait_for(lambda: idle(client, pid))
+    tool_msg = [m for m in conversation(client, manager["id"])["messages"] if m["kind"] == "tool"][-1]
+    assert "a.png" in tool_msg["meta"]["result"] and "(for the user's review)" in tool_msg["meta"]["result"]
+    assert f"Decision {decision['id']}: Which layout? (1. Compact; 2. Airy)" in tool_msg["meta"]["result"]
+
+    resp = client.post(f"/api/decisions/{decision['id']}/answer", json={"option_index": 1, "text": "but darker"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "answered" and resp.json()["answered_by"] == "user"
+    wait_for(lambda: idle(client, pid))
+    spec = runner(client).specs[-1]
+    assert 'User decided on ticket #%d ("Which layout?"): Airy — but darker' % ticket["number"] in spec.prompt
+
+    detail = client.get(f"/api/tasks/{ticket['id']}").json()
+    assert detail["open_decisions"] == 0
+    assert "Airy — but darker" in detail["comments"][-1]["body"] and detail["comments"][-1]["author_kind"] == "user"
+    assert client.post(f"/api/decisions/{decision['id']}/answer", json={"option_index": 0}).status_code == 409
+
+
+def test_decision_answer_needs_content_and_a_known_option(client, project):
+    pid = project["id"]
+    manager = agents_by_slug(client, pid)["manager"]
+    ticket, attachment_id = decision_ticket(client, pid)
+    request_decision(client, pid, manager["id"], ticket["number"], attachment_id)
+    decision = client.get(f"/api/tasks/{ticket['id']}").json()["decisions"][0]
+    assert client.post(f"/api/decisions/{decision['id']}/answer", json={"text": "  "}).status_code == 400
+    assert client.post(f"/api/decisions/{decision['id']}/answer", json={"option_index": 5}).status_code == 400
+    assert client.get(f"/api/tasks/{ticket['id']}").json()["open_decisions"] == 1
+
+
+def test_manager_records_or_withdraws_decision_from_chat(client, project):
+    pid = project["id"]
+    manager = agents_by_slug(client, pid)["manager"]
+    ticket, attachment_id = decision_ticket(client, pid)
+    request_decision(client, pid, manager["id"], ticket["number"], attachment_id)
+    request_decision(client, pid, manager["id"], ticket["number"], attachment_id)
+    first, second = client.get(f"/api/tasks/{ticket['id']}").json()["decisions"]
+
+    chat(client, manager["id"], f'TOOL resolve_decision {{"decision_id": {first["id"]}, "option": 1, "note": "said in chat"}}')
+    wait_for(lambda: idle(client, pid))
+    chat(client, manager["id"], f'TOOL resolve_decision {{"decision_id": {second["id"]}, "withdraw": true}}')
+    wait_for(lambda: idle(client, pid))
+
+    detail = client.get(f"/api/tasks/{ticket['id']}").json()
+    assert detail["open_decisions"] == 0
+    answered, withdrawn = detail["decisions"]
+    assert answered["status"] == "answered" and answered["answered_by"] == "agent" and answered["answer_option"] == 0
+    assert withdrawn["status"] == "withdrawn"
+    assert "Compact — said in chat" in detail["comments"][-1]["body"]
+    # The manager decided this itself: no extra wake-up with the answer.
+    assert "User decided" not in runner(client).specs[-1].prompt
+
+
+def test_decision_rejects_foreign_attachments_and_workers(client, project):
+    pid = project["id"]
+    manager = agents_by_slug(client, pid)["manager"]
+    dev = make_dev(client, pid)
+    ticket, _ = decision_ticket(client, pid)
+    _, foreign_id = decision_ticket(client, pid)
+    args = {"task_number": ticket["number"], "question": "Which?", "attachment_ids": [foreign_id]}
+    chat(client, manager["id"], f"TOOL request_decision {json.dumps(args)}")
+    wait_for(lambda: idle(client, pid))
+    tool_msg = [m for m in conversation(client, manager["id"])["messages"] if m["kind"] == "tool"][-1]
+    assert tool_msg["meta"]["is_error"] and str(foreign_id) in tool_msg["meta"]["result"]
+    assert client.get(f"/api/tasks/{ticket['id']}").json()["decisions"] == []
+
+    chat(client, dev["id"], "SAY hi")
+    wait_for(lambda: idle(client, pid))
+    names = {t.name for t in runner(client).specs[-1].bridge.tools}
+    assert "request_decision" not in names and "resolve_decision" not in names and "attach_file" in names
+
+
 def test_queued_run_can_be_cancelled(client, project):
     pid = project["id"]
     client.put("/api/settings", json={"values": {"max_parallel_runs": 0}})

@@ -17,12 +17,14 @@ from ..models import (
     AssignmentStatus,
     Attachment,
     Comment,
+    Decision,
+    DecisionStatus,
     Project,
     Run,
     Task,
     TaskStatus,
 )
-from ..schemas import AssignmentOut, AttachmentOut, CommentOut, TaskCreate, TaskDetail, TaskOut, TaskUpdate
+from ..schemas import AssignmentOut, AttachmentOut, CommentOut, DecisionOut, TaskCreate, TaskDetail, TaskOut, TaskUpdate
 from .errors import NotFound, ServiceError
 
 OPEN_ASSIGNMENT_STATUSES = (AssignmentStatus.QUEUED, AssignmentStatus.RUNNING)
@@ -112,6 +114,9 @@ async def task_outs(session: AsyncSession, tasks: list[Task]) -> list[TaskOut]:
     ids = [t.id for t in tasks]
     comments = dict((await session.execute(select(Comment.task_id, func.count()).where(Comment.task_id.in_(ids)).group_by(Comment.task_id))).all())
     files = dict((await session.execute(select(Attachment.task_id, func.count()).where(Attachment.task_id.in_(ids)).group_by(Attachment.task_id))).all())
+    decisions = dict(
+        (await session.execute(select(Decision.task_id, func.count()).where(Decision.task_id.in_(ids), Decision.status == DecisionStatus.OPEN).group_by(Decision.task_id))).all()
+    )
     active: dict[int, set[int]] = {}
     for task_id, agent_id in (
         await session.execute(
@@ -135,13 +140,15 @@ async def task_outs(session: AsyncSession, tasks: list[Task]) -> list[TaskOut]:
         item.attachment_count = files.get(task.id, 0)
         item.active_agent_ids = sorted(active.get(task.id, set()))
         item.manager_active = task.id in manager_busy
+        item.open_decisions = decisions.get(task.id, 0)
         out.append(item)
     return out
 
 
 async def task_detail(session: AsyncSession, task: Task) -> TaskDetail:
     (base,) = await task_outs(session, [task])
-    detail = TaskDetail.model_validate({**dict(base), "comments": [], "attachments": [], "assignments": []})
+    detail = TaskDetail.model_validate({**dict(base), "comments": [], "attachments": [], "assignments": [], "decisions": []})
+    detail.decisions = [DecisionOut.model_validate(d) for d in await list_decisions(session, task.id)]
     detail.comments = [CommentOut.model_validate(c) for c in (await session.scalars(select(Comment).where(Comment.task_id == task.id).order_by(Comment.id))).all()]
     detail.attachments = [AttachmentOut.model_validate(a) for a in await list_attachments(session, task.id)]
     detail.assignments = [
@@ -246,6 +253,10 @@ async def delete_attachment(session: AsyncSession, attachment: Attachment) -> No
     await publish_task_id(session, task_id)
 
 
+async def list_decisions(session: AsyncSession, task_id: int) -> list[Decision]:
+    return list((await session.scalars(select(Decision).where(Decision.task_id == task_id).order_by(Decision.id))).all())
+
+
 def is_open(task: Task) -> bool:
     return task.status not in (TaskStatus.DONE,)
 
@@ -256,4 +267,5 @@ async def ticket_text(session: AsyncSession, task: Task, comment_limit: int = 5)
 
     agents = (await session.scalars(select(Agent).where(Agent.project_id == task.project_id))).all()
     names = {a.id: a.name for a in agents}
-    return ticket_brief(task, await list_attachments(session, task.id), await recent_comments(session, task.id, comment_limit), names, runner_path)
+    decisions = await list_decisions(session, task.id)
+    return ticket_brief(task, await list_attachments(session, task.id), await recent_comments(session, task.id, comment_limit), names, runner_path, decisions)

@@ -73,6 +73,7 @@ export interface Task {
   attachment_count: number;
   active_agent_ids: number[];
   manager_active: boolean;
+  open_decisions: number;
 }
 
 export interface Comment {
@@ -110,10 +111,33 @@ export interface Assignment {
   finished_at: string | null;
 }
 
+export interface DecisionOption {
+  label: string;
+  description: string;
+  attachment_ids: number[];
+}
+
+export interface Decision {
+  id: number;
+  task_id: number;
+  requested_by_agent_id: number | null;
+  question: string;
+  details: string;
+  options: DecisionOption[];
+  attachment_ids: number[];
+  status: "open" | "answered" | "withdrawn";
+  answer_option: number | null;
+  answer_text: string;
+  answered_by: "user" | "agent" | null;
+  answered_at: string | null;
+  created_at: string;
+}
+
 export interface TaskDetail extends Task {
   comments: Comment[];
   attachments: Attachment[];
   assignments: Assignment[];
+  decisions: Decision[];
 }
 
 export interface Message {

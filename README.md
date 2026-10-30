@@ -9,7 +9,10 @@ specialised agents. Agents run on Claude via the **Claude Agent SDK** (Anthropic
 Claude login); the provider layer is ready for others such as OpenAI.
 
 - **Kanban board**: tickets with Markdown, labels, priorities, attachments (paste or drag & drop
-  images), and comments.
+  images, click for a large view), and comments.
+- **Your decisions**: the manager can ask you on a ticket, e.g. to choose between two design
+  proposals with screenshots. Pick an option with one click, answer in your own words, or discuss it
+  in chat. The ticket shows a badge until you have decided.
 - **Manager chat**: the manager reads tickets, splits them into self-contained assignments for one or
   more agents, reviews the reports, and moves the tickets. It also manages agents, notes, schedules
   and MCP servers.

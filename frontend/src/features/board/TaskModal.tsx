@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Bot, ChevronDown, ChevronRight, FileText, Play, Send, Trash2, Upload, X } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronRight, FileText, Play, Send, Trash2, Upload, UserRound, X } from "lucide-react";
 import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { api, errorMessage } from "../../api/client";
@@ -14,6 +14,7 @@ import { formatBytes, timeAgo } from "../../lib/format";
 import { useShell } from "../layout/shell-context";
 import { statusColor, STATUSES } from "./Board";
 import { Decisions, isImage, reviewAttachmentIds } from "./Decisions";
+import { labelTone } from "./TaskCard";
 
 const PRIORITIES: Priority[] = ["low", "medium", "high", "urgent"];
 
@@ -95,6 +96,7 @@ export function TaskModal({ taskId, onClose }: { taskId: number; onClose: () => 
         </div>
       }
     >
+      {data.user_action && <UserAction taskId={taskId} action={data.user_action} />}
       <div className="mb-6 empty:hidden">
         <Decisions decisions={data.decisions} attachments={data.attachments} onView={setViewing} />
       </div>
@@ -156,6 +158,40 @@ export function TaskModal({ taskId, onClose }: { taskId: number; onClose: () => 
         />
       )}
     </Modal>
+  );
+}
+
+function UserAction({ taskId, action }: { taskId: number; action: string }) {
+  const { t } = useTranslation();
+  const { project } = useShell();
+  const qc = useQueryClient();
+  const [note, setNote] = useState("");
+  const [error, setError] = useState<unknown>(null);
+
+  const done = async () => {
+    setError(null);
+    try {
+      await api.post(`/tasks/${taskId}/user-action/done`, { note });
+      qc.invalidateQueries({ queryKey: qk.task(taskId) });
+      qc.invalidateQueries({ queryKey: qk.tasks(project.id) });
+    } catch (err) {
+      setError(err);
+    }
+  };
+
+  return (
+    <section className="mb-6 space-y-2 rounded-lg bg-amber-50 p-3 ring-2 ring-amber-400 dark:bg-amber-950/40 dark:ring-amber-500">
+      <h3 className="flex items-center gap-1.5 text-sm font-semibold text-amber-900 dark:text-amber-200">
+        <UserRound className="size-4" />
+        {t("ticket.userAction")}
+      </h3>
+      <p className="text-sm whitespace-pre-wrap">{action}</p>
+      <Textarea rows={2} aria-label={t("ticket.userActionNote")} placeholder={t("ticket.userActionNote")} value={note} onChange={(e) => setNote(e.target.value)} />
+      <Button variant="primary" size="sm" icon={<Check className="size-3.5" />} onClick={done}>
+        {t("ticket.userActionDone")}
+      </Button>
+      <ErrorText error={error} />
+    </section>
   );
 }
 
@@ -277,6 +313,7 @@ function DescriptionEditor({ value, onSave }: { value: string; onSave: (v: strin
 
 function LabelsEditor({ value, onSave }: { value: string[]; onSave: (v: string[]) => void }) {
   const { t } = useTranslation();
+  const { project } = useShell();
   const [draft, setDraft] = useState("");
   const add = () => {
     const label = draft.trim();
@@ -288,12 +325,12 @@ function LabelsEditor({ value, onSave }: { value: string[]; onSave: (v: string[]
       {value.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {value.map((label) => (
-            <Badge key={label}>
+            <span key={label} className={clsx("inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium", labelTone(project.label_colors, label))}>
               {label}
               <button onClick={() => onSave(value.filter((l) => l !== label))} aria-label={t("common.remove")}>
                 <X className="size-3" />
               </button>
-            </Badge>
+            </span>
           ))}
         </div>
       )}

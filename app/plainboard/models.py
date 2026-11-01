@@ -105,6 +105,7 @@ class Project(Timestamps, Base):
     public_api_key_hash: Mapped[str | None] = mapped_column(String(64), unique=True)  # read-only access to customer notes
     auto_wake_manager: Mapped[bool] = mapped_column(Boolean, default=True)
     task_counter: Mapped[int] = mapped_column(Integer, default=0)
+    label_colors: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)  # label name -> color name
 
     agents: Mapped[list[Agent]] = relationship(back_populates="project", cascade="all, delete-orphan", passive_deletes=True)
 
@@ -186,7 +187,21 @@ class Task(Timestamps, Base):
     position: Mapped[float] = mapped_column(Float, default=0.0)
     priority: Mapped[str] = mapped_column(String(10), default="medium")
     labels: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # What only the user can do for this ticket (e.g. test on a phone). Highlights it until done.
+    user_action: Mapped[str] = mapped_column(String(500), default="")
     created_by_agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id", ondelete="SET NULL"))
+
+
+class TaskTransition(Base):
+    """A ticket entering a status, for the statistics. Keeps the number, so it outlives the ticket."""
+
+    __tablename__ = "task_transitions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    task_number: Mapped[int] = mapped_column(Integer)
+    from_status: Mapped[str | None] = mapped_column(String(20))  # None: the ticket was created
+    status: Mapped[str] = mapped_column(String(20))
+    at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class Comment(Base):

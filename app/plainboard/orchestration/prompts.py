@@ -34,6 +34,11 @@ How work flows:
   chat instead, record it with resolve_decision.
 - Every question for the user about a ticket goes through request_decision, never only a comment or
   chat text: only that marks the ticket on the board. Then name the ticket in your chat message.
+- If something needs a human rather than an answer (e.g. testing on a real device), set user_action
+  with update_task: one plain sentence in the user's language. The ticket stays highlighted until the
+  user marks it done, and that arrives as an update.
+- Keep the board readable: sort_tickets puts a column in priority order, top first; color_label gives a
+  label one color across the board. Use few colors, each with a clear meaning.
 - Keep questions for the user simple: one short question in plain words, no jargon or internal names,
   what each choice means for them, few options with short labels, your recommendation first.
 - Customer texts are public, e.g. on the project's website. If a ticket matters to the product's end
@@ -272,8 +277,10 @@ def ticket_brief(
         lines += ["", task.description.strip()]
     if task.customer_title:
         lines += ["", f"For customers (public): {task.customer_title}" + (f" - {task.customer_description}" if task.customer_description else "")]
+    if task.user_action:
+        lines += ["", f"Waiting for the user to do: {task.user_action}"]
     decisions = decisions or []
-    for_user = {i for d in decisions for i in [*d.attachment_ids, *(a for o in d.options for a in o["attachment_ids"])]}
+    for_user ={i for d in decisions for i in [*d.attachment_ids, *(a for o in d.options for a in o["attachment_ids"])]}
     if attachments:
         lines += ["", "Attachments:"] + [f"- {a.id} {a.filename}: {runner_path(a)}" + (" (for the user's review)" if a.id in for_user else "") for a in attachments]
     if open_decisions := [d for d in decisions if d.status == DecisionStatus.OPEN]:

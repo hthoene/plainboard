@@ -2,7 +2,7 @@ import clsx from "clsx";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLimits } from "../../api/queries";
-import type { LimitWindow } from "../../api/types";
+import type { LimitForecast, LimitWindow } from "../../api/types";
 import { timeAgo } from "../../lib/format";
 
 const tone = (used: number) => (used >= 0.9 ? "red" : used >= 0.75 ? "amber" : "indigo");
@@ -27,20 +27,22 @@ export function LimitsRing() {
 
   if (!data) return null;
   const highest = Math.max(0, ...data.windows.map((w) => w.utilization));
-  const label = t("chat.limits.ring", { percent: percent(highest) });
+  const slowDown = data.forecasts.some((f) => f.status === "over");
+  const ringTone = tone(highest) === "indigo" && slowDown ? "amber" : tone(highest);
+  const label = t("chat.limits.ring", { percent: percent(highest) }) + (slowDown ? ` · ${t("chat.limits.slowDown")}` : "");
 
   return (
     <div ref={ref} className="relative shrink-0">
       <button onClick={() => setOpen(!open)} aria-label={label} aria-expanded={open} title={label} className="flex size-6 items-center justify-center rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-800">
         <svg viewBox="0 0 20 20" className="size-4 -rotate-90" aria-hidden>
           <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="3" className="text-zinc-200 dark:text-zinc-700" />
-          <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" pathLength={100} strokeDasharray={`${Math.min(percent(highest), 100)} 100`} className={stroke[tone(highest)]} />
+          <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" pathLength={100} strokeDasharray={`${Math.min(percent(highest), 100)} 100`} className={stroke[ringTone]} />
         </svg>
       </button>
       {open && (
         <div className="absolute right-0 bottom-full z-20 mb-2 w-64 space-y-3 rounded-xl border border-zinc-200 bg-white p-3 text-xs shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
           {data.windows.map((window) => (
-            <LimitRow key={window.name} window={window} />
+            <LimitRow key={window.name} window={window} forecast={data.forecasts.find((f) => f.name === window.name)} />
           ))}
           {!data.windows.length && <p className="text-zinc-500">{t(data.available ? "chat.limits.unknown" : "chat.limits.noPlan")}</p>}
           {data.windows.length > 0 && data.updated_at && <p className="text-zinc-500">{t("chat.limits.updated", { when: timeAgo(fromUnix(data.updated_at)) })}</p>}
@@ -50,7 +52,30 @@ export function LimitsRing() {
   );
 }
 
-function LimitRow({ window }: { window: LimitWindow }) {
+const forecastTone = {
+  ok: "text-emerald-700 dark:text-emerald-400",
+  tight: "text-amber-700 dark:text-amber-400",
+  over: "text-red-700 dark:text-red-400",
+};
+
+function Forecast({ forecast }: { forecast: LimitForecast }) {
+  const { t } = useTranslation();
+  const headline =
+    forecast.status === "over"
+      ? forecast.runs_out_at
+        ? t("chat.limits.forecast.over", { when: timeAgo(fromUnix(forecast.runs_out_at)) })
+        : t("chat.limits.forecast.reached")
+      : t(`chat.limits.forecast.${forecast.status}`, { percent: percent(forecast.projected) });
+  return (
+    <div className="mt-1.5 space-y-0.5">
+      <p className={clsx("font-medium", forecastTone[forecast.status])}>{headline}</p>
+      <p className="text-zinc-500">{t("chat.limits.forecast.pace", { daily: percent(forecast.daily), budget: percent(forecast.budget) })}</p>
+      <p className="text-zinc-500">{forecast.basis_days ? t("chat.limits.forecast.basisDays", { count: forecast.basis_days }) : t("chat.limits.forecast.basisWeek")}</p>
+    </div>
+  );
+}
+
+function LimitRow({ window, forecast }: { window: LimitWindow; forecast?: LimitForecast }) {
   const { t } = useTranslation();
   return (
     <div>
@@ -62,6 +87,7 @@ function LimitRow({ window }: { window: LimitWindow }) {
         <div className={clsx("h-full rounded-full", bar[tone(window.utilization)])} style={{ width: `${Math.min(percent(window.utilization), 100)}%` }} />
       </div>
       {window.resets_at && <p className="mt-1 text-zinc-500">{t("chat.limits.resets", { when: timeAgo(fromUnix(window.resets_at)) })}</p>}
+      {forecast && <Forecast forecast={forecast} />}
     </div>
   );
 }

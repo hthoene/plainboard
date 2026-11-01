@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { AlertTriangle, CalendarClock, FolderKanban, MessageSquare, NotebookPen, PanelRight, Plug, Settings, Users } from "lucide-react";
+import { AlertTriangle, BarChart3, CalendarClock, FolderKanban, MessageSquare, NotebookPen, PanelRight, Plug, Settings, Users } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useProjectEvents } from "../../api/events";
@@ -16,11 +16,12 @@ import { ProjectDialog } from "../projects/ProjectDialog";
 import { ProjectSwitcher } from "../projects/ProjectSwitcher";
 import { SchedulesView } from "../schedules/SchedulesView";
 import { SettingsDialog } from "../settings/SettingsDialog";
+import { StatsView } from "../stats/StatsView";
 import { TeamView } from "../team/TeamView";
 import { ToolsView } from "../tools/ToolsView";
 import { ShellContext, type ShellApi } from "./shell-context";
 
-export type View = "board" | "chat" | "team" | "notes" | "schedules" | "tools";
+export type View = "board" | "chat" | "team" | "notes" | "schedules" | "tools" | "stats";
 
 const VIEWS: { id: View; icon: (cls: string) => ReactNode }[] = [
   { id: "board", icon: (c) => <FolderKanban className={c} /> },
@@ -29,6 +30,7 @@ const VIEWS: { id: View; icon: (cls: string) => ReactNode }[] = [
   { id: "notes", icon: (c) => <NotebookPen className={c} /> },
   { id: "schedules", icon: (c) => <CalendarClock className={c} /> },
   { id: "tools", icon: (c) => <Plug className={c} /> },
+  { id: "stats", icon: (c) => <BarChart3 className={c} /> },
 ];
 
 export function Shell() {
@@ -241,6 +243,7 @@ function ProjectWorkspace({
           {view === "notes" && <NotesView />}
           {view === "schedules" && <SchedulesView />}
           {view === "tools" && <ToolsView />}
+          {view === "stats" && <StatsView />}
         </main>
         {showPanel && (
           <>

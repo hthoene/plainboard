@@ -46,9 +46,20 @@ class RepositoryUpdate(BaseModel):
     agent_ids: list[int] | None = None
 
 
+class LimitForecast(BaseModel):
+    name: str  # the weekly window this is about
+    status: Literal["ok", "tight", "over"]
+    daily: float  # expected use per day, as a fraction of the limit
+    budget: float  # use per day that would last until the reset
+    projected: float  # expected utilization at the reset; can pass 1
+    runs_out_at: int | None = None  # unix seconds
+    basis_days: int = 0  # complete days behind `daily`; 0: the pace of this week so far
+
+
 class LimitsOut(BaseModel):
     available: bool = True  # False: this login has no plan limits at all
     windows: list[LimitWindow] = Field(default_factory=list)
+    forecasts: list[LimitForecast] = Field(default_factory=list)
     updated_at: int | None = None  # unix seconds, like the windows' resets_at
 
 
@@ -95,6 +106,7 @@ class ProjectOut(ORM):
     has_github_token: bool = False
     has_public_api_key: bool = False
     auto_wake_manager: bool
+    label_colors: dict[str, str] = Field(default_factory=dict)
     created_at: UTCDateTime
 
 
@@ -177,6 +189,8 @@ class AgentOut(ORM):
 
 CUSTOMER_TITLE_MAX = 150
 CUSTOMER_DESCRIPTION_MAX = 400
+USER_ACTION_MAX = 500
+LabelColor = Literal["gray", "red", "orange", "amber", "green", "teal", "blue", "indigo", "purple", "pink"]
 
 
 class TaskCreate(BaseModel):
@@ -198,6 +212,11 @@ class TaskUpdate(BaseModel):
     priority: Priority | None = None
     labels: list[str] | None = None
     position: float | None = None
+    user_action: str | None = Field(default=None, max_length=USER_ACTION_MAX)
+
+
+class UserActionDone(BaseModel):
+    note: str = ""
 
 
 class TaskOut(ORM):
@@ -212,6 +231,7 @@ class TaskOut(ORM):
     position: float
     priority: str
     labels: list[str]
+    user_action: str
     created_by_agent_id: int | None
     created_at: UTCDateTime
     updated_at: UTCDateTime
@@ -220,6 +240,33 @@ class TaskOut(ORM):
     active_agent_ids: list[int] = Field(default_factory=list)  # agents with open assignments
     manager_active: bool = False
     open_decisions: int = 0
+
+
+class StatsDay(BaseModel):
+    date: str  # UTC
+    tickets_created: int = 0
+    tickets_done: int = 0
+    runs: int = 0
+    failed_runs: int = 0
+    tokens: int = 0  # input + output
+    cost_usd: float = 0.0
+
+
+class StatsAgent(BaseModel):
+    agent_id: int
+    runs: int = 0
+    failed_runs: int = 0
+    assignments_done: int = 0
+    busy_seconds: int = 0
+    tokens: int = 0
+    cost_usd: float = 0.0
+
+
+class StatsOut(BaseModel):
+    days: list[StatsDay]
+    agents: list[StatsAgent]
+    open_tickets: int
+    median_cycle_seconds: int | None = None  # from starting work on a ticket to done
 
 
 class PublicTask(BaseModel):

@@ -13,6 +13,7 @@ export interface Project {
   has_github_token: boolean;
   has_public_api_key: boolean;
   auto_wake_manager: boolean;
+  label_colors: Record<string, string>;
   created_at: string;
 }
 
@@ -70,6 +71,7 @@ export interface Task {
   position: number;
   priority: Priority;
   labels: string[];
+  user_action: string;
   created_by_agent_id: number | null;
   created_at: string;
   updated_at: string;
@@ -281,8 +283,46 @@ export interface LimitWindow {
   status: string | null;
 }
 
+export interface LimitForecast {
+  name: string;
+  status: "ok" | "tight" | "over";
+  daily: number;
+  budget: number;
+  projected: number;
+  runs_out_at: number | null;
+  basis_days: number;
+}
+
 export interface Limits {
   available: boolean;
   windows: LimitWindow[];
+  forecasts: LimitForecast[];
   updated_at: number | null;
+}
+
+export interface StatsDay {
+  date: string;
+  tickets_created: number;
+  tickets_done: number;
+  runs: number;
+  failed_runs: number;
+  tokens: number;
+  cost_usd: number;
+}
+
+export interface StatsAgent {
+  agent_id: number;
+  runs: number;
+  failed_runs: number;
+  assignments_done: number;
+  busy_seconds: number;
+  tokens: number;
+  cost_usd: number;
+}
+
+export interface Stats {
+  days: StatsDay[];
+  agents: StatsAgent[];
+  open_tickets: number;
+  median_cycle_seconds: number | null;
 }

@@ -742,6 +742,54 @@ def test_limits_are_read_without_a_run(client, project):
     assert client.get("/api/limits").json()["windows"][0]["name"] == "seven_day"
 
 
+def test_manager_marks_and_sorts_the_board(client, project):
+    pid = project["id"]
+    manager = agents_by_slug(client, pid)["manager"]
+    tickets = [client.post(f"/api/projects/{pid}/tasks", json={"title": title, "status": "todo", "labels": ["bug"]}).json() for title in ("A", "B", "C")]
+    chat(client, manager["id"], 'TOOL sort_tickets {"status": "todo", "numbers": [3, 2]}\nTOOL color_label {"label": "bug", "color": "red"}\nTOOL update_task {"number": 1, "user_action": "Test it on a phone"}')
+    wait_for(lambda: idle(client, pid))
+    board = client.get(f"/api/projects/{pid}/tasks").json()
+    assert [t["number"] for t in board] == [3, 2, 1]
+    assert client.get(f"/api/projects/{pid}").json()["label_colors"] == {"bug": "red"}
+    assert next(t for t in board if t["number"] == 1)["user_action"] == "Test it on a phone"
+
+    url = f"/api/tasks/{tickets[0]['id']}/user-action/done"
+    assert client.post(url, json={"note": "works"}).json()["user_action"] == ""
+    assert client.post(url, json={}).status_code == 400
+    assert "Test it on a phone" in client.get(f"/api/tasks/{tickets[0]['id']}").json()["comments"][-1]["body"]
+    wait_for(lambda: idle(client, pid))
+    assert 'User finished "Test it on a phone" on ticket #1: works' in runner(client).specs[-1].prompt
+
+
+def test_workers_cannot_sort_or_color(client, project):
+    dev = make_dev(client, project["id"])
+    chat(client, dev["id"], "SAY hi")
+    wait_for(lambda: idle(client, project["id"]))
+    names = {t.name for t in runner(client).specs[-1].bridge.tools}
+    assert "sort_tickets" not in names and "color_label" not in names
+
+
+def test_stats_count_tickets_and_runs(client, project):
+    pid = project["id"]
+    dev = make_dev(client, pid)
+    first = client.post(f"/api/projects/{pid}/tasks", json={"title": "A"}).json()
+    client.post(f"/api/projects/{pid}/tasks", json={"title": "B"})
+    client.patch(f"/api/tasks/{first['id']}", json={"status": "done"})
+    client.patch(f"/api/tasks/{first['id']}", json={"status": "review"})
+    client.patch(f"/api/tasks/{first['id']}", json={"status": "done"})
+    chat(client, dev["id"], "SAY hi")
+    wait_for(lambda: idle(client, pid))
+
+    stats = client.get(f"/api/projects/{pid}/stats?days=7").json()
+    assert len(stats["days"]) == 7
+    today = stats["days"][-1]
+    assert (today["tickets_created"], today["tickets_done"], today["runs"]) == (2, 1, 1)
+    assert stats["open_tickets"] == 1 and stats["median_cycle_seconds"] is not None
+    assert [a["agent_id"] for a in stats["agents"]] == [dev["id"]]
+    client.delete(f"/api/tasks/{first['id']}")
+    assert client.get(f"/api/projects/{pid}/stats?days=7").json()["days"][-1]["tickets_done"] == 1  # history stays
+
+
 def test_waiting_chat_messages_go_out_together(client, project):
     pid = project["id"]
     client.put("/api/settings", json={"values": {"max_parallel_runs": 0}})

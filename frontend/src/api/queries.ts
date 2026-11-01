@@ -14,6 +14,7 @@ import type {
   Run,
   Schedule,
   SettingsResponse,
+  Stats,
   Task,
   TaskDetail,
 } from "./types";
@@ -34,6 +35,7 @@ export const qk = {
   schedules: (pid: number) => ["schedules", pid] as const,
   mcp: (pid: number) => ["mcp", pid] as const,
   repos: (pid: number) => ["repos", pid] as const,
+  stats: (pid: number, days: number) => ["stats", pid, days] as const,
 };
 
 export interface AuthStatus {
@@ -70,6 +72,9 @@ export const useMcpServers = (pid: number) =>
 
 export const useRepositories = (pid: number) =>
   useQuery({ queryKey: qk.repos(pid), queryFn: () => api.get<Repository[]>(`/projects/${pid}/repositories`) });
+
+export const useStats = (pid: number, days: number) =>
+  useQuery({ queryKey: qk.stats(pid, days), queryFn: () => api.get<Stats>(`/projects/${pid}/stats?days=${days}`), refetchInterval: 60_000 });
 
 /** Generic mutation that invalidates the given query keys on success. */
 export function useApiMutation<TVars, TResult = unknown>(

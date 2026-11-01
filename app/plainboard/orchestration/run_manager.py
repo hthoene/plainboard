@@ -727,6 +727,13 @@ class RunManager:
         await inbox.push(s, recipient, f'User decided on ticket #{task.number} ("{decision.question}"): {decision_service.answer_summary(decision)}')
         await self._maybe_wake(s, project, recipient)
 
+    async def user_action_done(self, s: AsyncSession, task: Task, action: str, note: str) -> None:
+        """Tell the manager that the user did what the ticket was waiting for."""
+        project = await s.get(Project, task.project_id)
+        manager = await agent_service.get_manager(s, task.project_id)
+        await inbox.push(s, manager.id, f'User finished "{action}" on ticket #{task.number}' + (f": {note.strip()}" if note.strip() else "."))
+        await self._maybe_wake(s, project, manager.id)
+
     # ------------------------------------------------------------------ background jobs
 
     async def start_job(self, s: AsyncSession, project: Project, agent: Agent, command: str) -> Job:

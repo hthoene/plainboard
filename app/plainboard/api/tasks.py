@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, File, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 
@@ -13,13 +13,16 @@ from ..schemas import (
     DecisionAnswer,
     DecisionOut,
     RunOut,
+    StatsOut,
     TaskCreate,
     TaskDetail,
     TaskOut,
     TaskUpdate,
+    UserActionDone,
 )
 from ..services import board as board_service
 from ..services import decisions as decision_service
+from ..services import stats as stats_service
 from ..services.errors import NotFound, ServiceError
 from .deps import Runs, Session
 
@@ -66,6 +69,20 @@ async def start_task(task_id: int, session: Session, runs: Runs) -> RunOut:
     """Hand the ticket to the manager, who plans and delegates it."""
     run = await runs.hand_ticket(session, await board_service.get_task(session, task_id))
     return RunOut.model_validate(run)
+
+
+@router.post("/tasks/{task_id}/user-action/done", response_model=TaskOut)
+async def user_action_done(task_id: int, body: UserActionDone, session: Session, runs: Runs) -> TaskOut:
+    task = await board_service.get_task(session, task_id)
+    action = await board_service.finish_user_action(session, task, body.note)
+    await runs.user_action_done(session, task, action, body.note)
+    (out,) = await board_service.task_outs(session, [task])
+    return out
+
+
+@router.get("/projects/{project_id}/stats", response_model=StatsOut)
+async def stats(project_id: int, session: Session, days: int = Query(default=30, ge=1, le=365)) -> StatsOut:
+    return await stats_service.overview(session, project_id, days)
 
 
 @router.get("/tasks/{task_id}/runs", response_model=list[RunOut])

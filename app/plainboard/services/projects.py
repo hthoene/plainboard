@@ -63,6 +63,15 @@ async def update(session: AsyncSession, project: Project, data: ProjectUpdate) -
     return project
 
 
+async def set_label_color(session: AsyncSession, project: Project, label: str, color: str | None) -> None:
+    colors = {name: value for name, value in project.label_colors.items() if name != label}
+    if color:
+        colors[label] = color
+    project.label_colors = colors
+    await session.commit()
+    bus.publish(project.id, "project.updated", to_out(project))
+
+
 async def delete(session: AsyncSession, project: Project) -> None:
     from .board import storage_path
 

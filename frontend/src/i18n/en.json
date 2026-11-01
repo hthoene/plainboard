@@ -19,6 +19,7 @@
     "notes": "Notes",
     "schedules": "Schedules",
     "tools": "Tools",
+    "stats": "Stats",
     "chat": "Chat",
     "settings": "Settings",
     "togglePanel": "Toggle chat panel"
@@ -105,7 +106,36 @@
     "addTicket": "Add ticket",
     "newTicketPlaceholder": "Ticket title",
     "newTicketKeys": "Enter to add · Ctrl+Enter to add and open · Esc to cancel",
-    "managerPlanning": "Manager is working on this ticket"
+    "managerPlanning": "Manager is working on this ticket",
+    "userAction": "For you"
+  },
+  "stats": {
+    "title": "Statistics",
+    "subtitle": "What happened in this project. Days are in UTC.",
+    "lastDays": "{{count}} days",
+    "ticketsDone": "Tickets finished",
+    "ticketsCreated": "Tickets created",
+    "openTickets": "Open tickets now",
+    "cycleTime": "Typical time to finish",
+    "cycleHint": "Median, from starting work to done",
+    "runs": "Agent turns",
+    "failedRuns": "{{count}} failed",
+    "tokens": "Tokens",
+    "cost": "Cost",
+    "ticketsChart": "Tickets per day",
+    "runsChart": "Agent turns per day",
+    "tokensChart": "Tokens per day",
+    "costChart": "Cost per day",
+    "date": "Date",
+    "agents": "By agent",
+    "agent": "Agent",
+    "failed": "Failed",
+    "assignmentsDone": "Assignments done",
+    "busy": "Working time",
+    "noAgents": "No agent has worked in this period.",
+    "minutes": "{{value}} min",
+    "hours": "{{value}} h",
+    "days": "{{value}} d"
   },
   "ticket": {
     "customerSection": "For customers",
@@ -138,7 +168,10 @@
     "system": "System",
     "confirmDelete": "Delete ticket #{{number}}?",
     "effort": "effort {{effort}}",
-    "forReview": "For your review"
+    "forReview": "For your review",
+    "userAction": "This needs you",
+    "userActionNote": "How did it go? (optional)",
+    "userActionDone": "Done, tell the manager"
   },
   "decision": {
     "title": "Your decision",
@@ -173,7 +206,7 @@
     "fileCount_other": "{{count}} files",
     "stop": "Stop",
     "queueHint": "New messages are queued until the current turn finishes.",
-    "openQuestions": "Tickets with a question for you",
+    "openQuestions": "Tickets waiting for you",
     "stopping": {
       "active_one": "Stopping {{count}} agent",
       "active_other": "Stopping {{count}} agents, {{done}} done",
@@ -192,6 +225,17 @@
       "seven_day_overage_included": "Weekly limit (included models)",
       "resets": "Resets {{when}}",
       "updated": "Last updated {{when}}",
+      "slowDown": "slow down to make it to the reset",
+      "forecast": {
+        "ok": "On track: about {{percent}}% used at the reset",
+        "tight": "Tight: about {{percent}}% used at the reset",
+        "over": "Slow down: at this pace it runs out {{when}}",
+        "reached": "Limit reached",
+        "pace": "Using about {{daily}}% a day; {{budget}}% a day lasts until the reset",
+        "basisDays_one": "Based on the last day",
+        "basisDays_other": "Based on the last {{count}} days",
+        "basisWeek": "Based on this week so far"
+      },
       "unknown": "No usage known yet. It appears after the next agent turn at the latest.",
       "noPlan": "You are signed in with an API key, which has no 5-hour or weekly limit. Switch to your subscription in Settings to see them here."
     },

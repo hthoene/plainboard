@@ -6,9 +6,10 @@ from sqlalchemy import func, select
 from pydantic import BaseModel, Field
 
 from ..models import Assignment, Task
-from ..schemas import CUSTOMER_DESCRIPTION_MAX, CUSTOMER_TITLE_MAX, DecisionOption, Priority, Status, TaskCreate, TaskUpdate
+from ..schemas import CUSTOMER_DESCRIPTION_MAX, CUSTOMER_TITLE_MAX, USER_ACTION_MAX, DecisionOption, LabelColor, Priority, Status, TaskCreate, TaskUpdate
 from ..services import board as board_service
 from ..services import decisions as decision_service
+from ..services import projects as project_service
 from ..services.util import truncate
 from .registry import ALL, MANAGER, ToolContext, local_tool, tool
 
@@ -42,6 +43,17 @@ class UpdateTaskArgs(BaseModel):
     status: Status | None = None
     priority: Priority | None = None
     labels: list[str] | None = None
+    user_action: str | None = Field(default=None, max_length=USER_ACTION_MAX, description="What only the user can do (e.g. test on a phone); highlights the ticket until done; empty = clear")
+
+
+class SortTicketsArgs(BaseModel):
+    status: Status
+    numbers: list[int] = Field(min_length=1, description="Ticket numbers, top first; other tickets of the column follow below")
+
+
+class ColorLabelArgs(BaseModel):
+    label: str
+    color: LabelColor | None = Field(default=None, description="Empty = default color")
 
 
 class CommentArgs(BaseModel):
@@ -71,7 +83,8 @@ class ResolveDecisionArgs(BaseModel):
 
 def ticket_line(task: Task) -> str:
     labels = f" {{{', '.join(task.labels)}}}" if task.labels else ""
-    return f"#{task.number} [{task.status}] ({task.priority}) {task.title}{labels}"
+    waiting = f" (user to do: {task.user_action})" if task.user_action else ""
+    return f"#{task.number} [{task.status}] ({task.priority}) {task.title}{labels}{waiting}"
 
 
 @tool("list_tasks", "List tickets on the board (compact). Filter by status or text.", ListTasksArgs)
@@ -85,7 +98,8 @@ async def get_board_summary(ctx: ToolContext, _args) -> str:
     rows = (await ctx.session.execute(select(Task.status, func.count()).where(Task.project_id == ctx.project.id).group_by(Task.status))).all()
     counts = ", ".join(f"{status}: {n}" for status, n in rows) or "empty board"
     open_tasks = [t for t in await board_service.list_tasks(ctx.session, ctx.project.id) if t.status != "done"][:40]
-    return f"Counts: {counts}\n" + "\n".join(ticket_line(t) for t in open_tasks)
+    colors = ", ".join(f"{label}={color}" for label, color in ctx.project.label_colors.items())
+    return f"Counts: {counts}\n" + (f"Label colors: {colors}\n" if colors else "") + "\n".join(ticket_line(t) for t in open_tasks)
 
 
 @tool("get_task", "Full ticket: description, attachments (paths), recent comments, assignments.", TicketRef)
@@ -110,6 +124,18 @@ async def update_task(ctx: ToolContext, args: UpdateTaskArgs) -> str:
     fields = args.model_dump(exclude_unset=True, exclude={"number"})
     task, _ = await board_service.update_task(ctx.session, task, TaskUpdate(**fields))
     return f"Updated: {ticket_line(task)}"
+
+
+@tool("sort_tickets", "Set the order of tickets within a board column.", SortTicketsArgs, roles=(MANAGER,))
+async def sort_tickets(ctx: ToolContext, args: SortTicketsArgs) -> str:
+    await board_service.sort_column(ctx.session, ctx.project.id, args.status, args.numbers)
+    return f"Sorted {args.status}."
+
+
+@tool("color_label", "Give a label one color across the board.", ColorLabelArgs, roles=(MANAGER,))
+async def color_label(ctx: ToolContext, args: ColorLabelArgs) -> str:
+    await project_service.set_label_color(ctx.session, ctx.project, args.label, args.color)
+    return f"Label {args.label}: {args.color or 'default'}."
 
 
 @tool("delete_task", "Delete a ticket permanently.", TicketRef, roles=(MANAGER,))

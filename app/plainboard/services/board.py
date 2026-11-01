@@ -23,6 +23,7 @@ from ..models import (
     Run,
     Task,
     TaskStatus,
+    TaskTransition,
 )
 from ..schemas import AssignmentOut, AttachmentOut, CommentOut, DecisionOut, PublicBoard, PublicTask, TaskCreate, TaskDetail, TaskOut, TaskUpdate
 from .errors import NotFound, ServiceError
@@ -54,6 +55,7 @@ async def create_task(session: AsyncSession, project_id: int, data: TaskCreate, 
         created_by_agent_id=by_agent_id,
     )
     session.add(task)
+    session.add(TaskTransition(project_id=project_id, task_number=task.number, from_status=None, status=task.status))
     await session.commit()
     await publish_task(session, task)
     return task
@@ -79,9 +81,40 @@ async def update_task(session: AsyncSession, task: Task, data: TaskUpdate) -> tu
         fields["position"] = await _next_position(session, task.project_id, fields["status"])
     for key, value in fields.items():
         setattr(task, key, value)
+    if task.status != previous:
+        session.add(TaskTransition(project_id=task.project_id, task_number=task.number, from_status=previous, status=task.status))
     await session.commit()
     await publish_task(session, task)
     return task, previous
+
+
+async def sort_column(session: AsyncSession, project_id: int, status: str, numbers: list[int]) -> None:
+    """Puts the given tickets at the top of a column in this order; the others keep theirs below them."""
+    tasks = await list_tasks(session, project_id, status=status)
+    by_number = {t.number: t for t in tasks}
+    if missing := [n for n in numbers if n not in by_number]:
+        raise ServiceError(f"Not in {status}: {', '.join(f'#{n}' for n in missing)}")
+    first = list(dict.fromkeys(numbers))
+    ordered = [by_number[n] for n in first] + [t for t in tasks if t.number not in first]
+    changed = []
+    for index, task in enumerate(ordered, 1):
+        if task.position != index * 1024.0:
+            task.position = index * 1024.0
+            changed.append(task)
+    await session.commit()
+    for task in changed:
+        await publish_task(session, task)
+
+
+async def finish_user_action(session: AsyncSession, task: Task, note: str = "") -> str:
+    """The user did what the ticket waited for. Returns what that was."""
+    action = task.user_action
+    if not action:
+        raise ServiceError("This ticket is not waiting for you")
+    task.user_action = ""
+    body = f"Done: {action}" + (f"\n\n{note.strip()}" if note.strip() else "")
+    await add_comment(session, task, body)
+    return action
 
 
 async def delete_task(session: AsyncSession, task: Task) -> None:

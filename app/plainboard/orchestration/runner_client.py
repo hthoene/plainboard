@@ -56,10 +56,10 @@ class RunnerClient:
     async def stop_job(self, runner_id: str) -> bool:
         return (await self._post_job(f"/jobs/{runner_id}/stop", {})).json()["stopped"]
 
-    async def notify_run(self, run_id: int, text: str) -> bool:
-        """Give a running turn a message it sees after the agent's current step."""
+    async def notify_run(self, run_id: int, text: str, urgent: bool = False) -> bool:
+        """Give a running turn a message it sees after the agent's current step. If urgent, a long step gets interrupted."""
         try:
-            resp = await self._client.post(f"/runs/{run_id}/notify", json={"text": text})
+            resp = await self._client.post(f"/runs/{run_id}/notify", json={"text": text, "urgent": urgent})
             return bool(resp.json().get("delivered"))
         except (httpx.HTTPError, ValueError):
             return False

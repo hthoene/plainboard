@@ -348,6 +348,17 @@ def wind_down_notice(reason: str = "") -> str:
     )
 
 
+def wind_down_jobs_prompt(reason: str, jobs: list[str]) -> str:
+    why = f" Reason: {reason}" if reason else ""
+    listed = "\n".join(f"- {job}" for job in jobs)
+    return (
+        f"[PlainBoard] You are being paused.{why} Don't continue your plan or start anything new. These background jobs of "
+        f"yours are still running:\n{listed}\nStop them with stop_job, unless stopping would leave something broken "
+        "(then say so). Save your work (commit and push it, or write down where it is). Then end your turn with a short "
+        "report: what is done, what is open and where it is saved."
+    )
+
+
 def with_attachments(text: str, files: list[dict] | None) -> str:
     if not files:
         return text

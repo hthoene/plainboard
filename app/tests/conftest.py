@@ -91,7 +91,7 @@ class FakeRunner:
     async def limits(self, credentials) -> list[LimitWindow]:
         return self.limit_windows
 
-    async def notify_run(self, run_id: int, text: str) -> bool:
+    async def notify_run(self, run_id: int, text: str, urgent: bool = False) -> bool:
         self.notices.append((run_id, text))
         return True
 

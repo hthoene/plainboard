@@ -111,9 +111,9 @@ def test_delegating_moves_the_ticket_and_the_manager_is_reminded_when_work_ends(
     manager = agents_by_slug(client, pid)["manager"]
     ticket = client.post(f"/api/projects/{pid}/tasks", json={"title": "Build it", "status": "todo"}).json()
     chat(client, manager["id"], f'TOOL delegate {json.dumps({"agent": dev["slug"], "title": "Work", "instructions": "SAY finished", "ticket_number": ticket["number"]})}')
-    wait_for(lambda: idle(client, pid))
+    # The wake-up after the report.
+    wait_for(lambda: idle(client, pid) and any("Board check" in spec.prompt and f"#{ticket['number']} Build it" in spec.prompt for spec in runner(client).specs))
     assert client.get(f"/api/tasks/{ticket['id']}").json()["status"] == "in_progress"
-    assert f"#{ticket['number']} Build it" in runner(client).specs[-1].prompt and "Board check" in runner(client).specs[-1].prompt  # the wake-up after the report
 
     client.patch(f"/api/tasks/{ticket['id']}", json={"user_action": "Test on a phone"})
     chat(client, manager["id"], "SAY ok")
@@ -606,16 +606,23 @@ def job_tick(client) -> None:
     client.portal.call(client.app_ref.state.job_watcher.tick)
 
 
-def test_stopping_an_idle_agent_names_its_running_jobs(client, project):
+def test_pausing_an_agent_waiting_for_a_job_gets_it_a_turn_to_stop(client, project):
     pid = project["id"]
     dev = make_dev(client, pid)
     manager = agents_by_slug(client, pid)["manager"]
     start_job(client, dev["id"])
     wait_for(lambda: idle(client, pid))
-    chat(client, manager["id"], 'TOOL stop_agent {"agent": "dev"}')
+    chat(client, manager["id"], 'TOOL stop_agent {"agent": "dev", "pause": true, "reason": "release"}')
+    wait_for(lambda: idle(client, pid) and any("You are being paused" in spec.prompt for spec in runner(client).specs))
     wait_for(lambda: idle(client, pid))
-    tool_msg = [m for m in conversation(client, manager["id"])["messages"] if m["kind"] == "tool"][-1]
-    assert "1 background job(s) keep running" in tool_msg["meta"]["result"]
+    run = next(r for r in runs_of(client, pid, agent_id=dev["id"]) if r["trigger"] == "wake")
+    assert run["status"] == "succeeded" and run["stop_requested_at"]
+    prompt = next(spec.prompt for spec in runner(client).specs if "You are being paused" in spec.prompt)
+    assert "cargo build" in prompt and "stop_job" in prompt and "release" in prompt
+    assert agents_by_slug(client, pid)["dev"]["enabled"] is False
+
+    resp = client.post(f"/api/agents/{dev['id']}/messages", json={"text": "more work"})
+    assert resp.status_code != 202  # still paused for everything else
 
 
 def test_finished_job_is_reported_to_its_agent_and_wakes_it(client, project):

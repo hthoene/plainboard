@@ -374,6 +374,70 @@ async def test_notice_reaches_the_agent_once_after_a_tool_call():
     assert await hook({}, None, None) == {}
 
 
+async def test_sub_agent_tool_calls_leave_the_notice_for_the_agent():
+    from plainboard_runner import notices
+    from plainboard_runner.providers.claude_code import notice_hook
+
+    hook = notice_hook("r10")
+    notices.push("r10", "Please wrap up")
+    assert await hook({"agent_id": "sub"}, None, None) == {}
+    assert (await hook({}, None, None))["hookSpecificOutput"]["additionalContext"] == "Please wrap up"
+
+
+class FakeInterruptClient:
+    interrupts = 0
+
+    async def interrupt(self):
+        self.interrupts += 1
+
+
+async def test_urgent_notice_interrupts_a_long_tool_call_after_the_grace_period(monkeypatch):
+    from plainboard_runner import notices
+    from plainboard_runner.providers.claude_code import UrgentNoticeWatch
+
+    client = FakeInterruptClient()
+    watch = UrgentNoticeWatch(client, "r11")
+    watch.see(AssistantMessage(content=[ToolUseBlock(id="t1", name="Bash", input={})], model="m"))
+    notices.push("r11", "Not urgent")
+    monkeypatch.setattr(notices, "urgent_waiting", lambda run_id: 0.0)
+    await watch.check()
+    assert client.interrupts == 0  # no urgent message
+
+    notices.push("r11", "Stop now", urgent=True)
+    await watch.check()
+    assert client.interrupts == 0  # still within the grace period
+
+    monkeypatch.setattr(notices, "urgent_waiting", lambda run_id: 61.0)
+    await watch.check()
+    await watch.check()
+    assert client.interrupts == 1 and watch.interrupted
+    prompt = watch.resume_prompt()
+    assert "Stop now" in prompt and "Not urgent" in prompt and "interrupted" in prompt
+    assert not watch.interrupted and not watch.open_tools and notices.drain("r11") == []
+
+
+async def test_urgent_notice_leaves_a_turn_without_a_running_tool_alone(monkeypatch):
+    from plainboard_runner import notices
+    from plainboard_runner.providers.claude_code import UrgentNoticeWatch
+
+    client = FakeInterruptClient()
+    watch = UrgentNoticeWatch(client, "r12")
+    watch.see(AssistantMessage(content=[ToolUseBlock(id="t1", name="Bash", input={})], model="m"))
+    watch.see(UserMessage(content=[ToolResultBlock(tool_use_id="t1", content="ok")]))
+    monkeypatch.setattr(notices, "urgent_waiting", lambda run_id: 61.0)
+    await watch.check()
+    assert client.interrupts == 0
+
+
+def test_urgent_flag_ends_with_pickup():
+    from plainboard_runner import notices
+
+    notices.push("r13", "Stop", urgent=True)
+    assert notices.urgent_waiting("r13") >= 0 and "r13" in notices._urgent_since
+    notices.drain("r13")
+    assert notices.urgent_waiting("r13") == 0.0
+
+
 def test_notify_only_reaches_active_runs():
     assert TestClient(app).post("/runs/nope/notify", json={"text": "x"}).json() == {"delivered": False}
 

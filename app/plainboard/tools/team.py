@@ -11,7 +11,6 @@ from ..models import Agent, Assignment, Run, Task
 from ..schemas import AgentCreate, AgentUpdate, ToolsetName
 from ..services import agents as agent_service
 from ..services import board as board_service
-from ..services import jobs as job_service
 from ..services import repositories as repo_service
 from ..services.errors import NotFound
 from ..orchestration.context import render_message
@@ -220,9 +219,7 @@ async def stop_agent(ctx: ToolContext, args: StopAgentArgs) -> str:
         return f"Aborted {stopped} run(s) and job(s) of {target.slug}.{paused}"
     if await ctx.runs.wind_down(ctx.session, target, args.reason):
         return f"{target.slug} was told to wrap up after its current step; its report comes as an update.{paused}"
-    jobs = sum(job.agent_id == target.id for job in await job_service.running(ctx.session))
-    still = f", but {jobs} background job(s) keep running; now=true stops them" if jobs else ""
-    return f"{target.slug} is not working{still}.{paused}"
+    return f"{target.slug} is not working.{paused}"
 
 
 @tool("read_chat", "Read a teammate's conversation, newest messages last.", ReadChatArgs, roles=ALL)

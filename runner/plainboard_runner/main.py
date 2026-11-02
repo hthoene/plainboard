@@ -110,13 +110,14 @@ async def stop_job(job_id: str) -> dict[str, bool]:
 
 class RunNotice(BaseModel):
     text: str
+    urgent: bool = False
 
 
 @app.post("/runs/{run_id}/notify")
 async def notify_run(run_id: str, body: RunNotice) -> dict[str, bool]:
     if run_id not in _active:
         return {"delivered": False}
-    notices.push(run_id, body.text)
+    notices.push(run_id, body.text, body.urgent)
     return {"delivered": True}
 
 

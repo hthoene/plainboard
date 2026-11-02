@@ -63,6 +63,10 @@ interrupted assignment (or the manager, for its own turn) gets an inbox update a
 A job outlives its run: the stop button of a run does not touch it. If it is still running when a worker
 reports, the assignment counts as done; a worker's wake-up result goes to the manager's inbox.
 
+`wind_down` stops an agent safely. A running turn gets an urgent notice: it arrives after the current tool
+call, and a tool call still open after 60 seconds is interrupted (`claude_code.UrgentNoticeWatch`). An agent
+with no turn but running jobs gets a turn for stopping them, even if it is paused.
+
 `ask_agent` blocks on a future. A wait-for graph between agents rejects cycles, and depth and timeout
 limits apply. An answer that arrives after a timeout goes to the asker's inbox instead.
 

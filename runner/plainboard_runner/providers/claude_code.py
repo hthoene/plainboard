@@ -6,6 +6,7 @@ or an interactive ``claude login`` performed inside the runner container.
 
 from __future__ import annotations
 
+import asyncio
 import collections
 import logging
 from datetime import datetime
@@ -62,6 +63,8 @@ BOARD_TOOLSET_BUILTINS = ["Read", "Glob", "Grep", "Bash", "Edit", "Write"]
 DISALLOWED_TOOLS = ["AskUserQuestion"]
 # One CLI message holds a whole tool result; a screenshot the agent reads easily exceeds the SDK's 1 MB default.
 MAX_MESSAGE_BYTES = 64 * 1024 * 1024
+NOTICE_GRACE_SECONDS = 60
+NOTICE_CHECK_SECONDS = 5
 
 MODELS = [
     ModelInfo(id="claude-opus-5-5", label="Claude Opus 5.5", tier="large"),
@@ -135,7 +138,9 @@ def build_mcp_server(bridge: ToolBridge):
 def notice_hook(run_id: str):
     """Hands messages for the running turn to the agent after its current tool call."""
 
-    async def hook(_input: Any, _tool_use_id: str | None, _context: Any) -> dict[str, Any]:
+    async def hook(hook_input: Any, _tool_use_id: str | None, _context: Any) -> dict[str, Any]:
+        if hook_input.get("agent_id"):  # a sub-agent's tool call: the message is for the agent itself
+            return {}
         pending = notices.drain(run_id)
         if not pending:
             return {}
@@ -167,6 +172,45 @@ def usage_windows(rate_limits: dict[str, Any] | None) -> list[LimitWindow]:
             resets = window.get("resets_at")
             windows.append(LimitWindow(name=name, utilization=window["utilization"] / 100, resets_at=int(datetime.fromisoformat(resets).timestamp()) if resets else None))
     return windows
+
+
+class UrgentNoticeWatch:
+    """Notices arrive after a tool call, so a long one would hold back a stop: interrupt it after a grace period."""
+
+    def __init__(self, client: Any, run_id: str) -> None:
+        self.client = client
+        self.run_id = run_id
+        self.open_tools: set[str] = set()
+        self.interrupted = False
+
+    def see(self, message: Any) -> None:
+        if isinstance(message, (AssistantMessage, UserMessage)) and not message.parent_tool_use_id and not isinstance(message.content, str):
+            for block in message.content:
+                if isinstance(block, ToolUseBlock):
+                    self.open_tools.add(block.id)
+                elif isinstance(block, ToolResultBlock):
+                    self.open_tools.discard(block.tool_use_id)
+
+    async def check(self) -> None:
+        if self.interrupted or not self.open_tools or notices.urgent_waiting(self.run_id) < NOTICE_GRACE_SECONDS:
+            return
+        self.interrupted = True
+        try:
+            await self.client.interrupt()
+        except Exception:
+            self.interrupted = False
+            log.warning("Could not interrupt run %s", self.run_id, exc_info=True)
+
+    async def watch(self) -> None:
+        while True:
+            await asyncio.sleep(NOTICE_CHECK_SECONDS)
+            await self.check()
+
+    def resume_prompt(self) -> str:
+        """The turn goes on with the waiting messages; there is no tool call left to attach them to."""
+        self.interrupted = False
+        self.open_tools.clear()
+        return "\n\n".join(["[PlainBoard] Your running tool call was interrupted for this message, and its work may be half done.", *notices.drain(self.run_id)])
 
 
 class EventMapper:
@@ -288,11 +332,23 @@ class ClaudeCodeProvider(Provider):
         got_result = False
         try:
             async with ClaudeSDKClient(options=self._options(spec, bridge, stderr_tail)) as client:
-                await client.query(spec.prompt)
-                async for message in client.receive_response():
-                    for event in mapper.map(message):
-                        got_result = got_result or event.type == "result"
-                        yield event
+                watch = UrgentNoticeWatch(client, spec.run_id)
+                watcher = asyncio.create_task(watch.watch())
+                try:
+                    await client.query(spec.prompt)
+                    while True:
+                        async for message in client.receive_response():
+                            watch.see(message)
+                            for event in mapper.map(message):
+                                if event.type == "result" and watch.interrupted:
+                                    continue  # the turn goes on below
+                                got_result = got_result or event.type == "result"
+                                yield event
+                        if not watch.interrupted:
+                            break
+                        await client.query(watch.resume_prompt())
+                finally:
+                    watcher.cancel()
         except Exception as exc:
             detail = "\n".join(stderr_tail)
             raise RuntimeError(f"{exc}\n{detail}".strip()) from exc

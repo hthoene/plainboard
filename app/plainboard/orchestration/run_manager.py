@@ -174,8 +174,9 @@ class RunManager:
         parent_run_id: int | None = None,
         effort: str | None = None,
         attachment_ids: list[int] | None = None,
+        stopping: bool = False,
     ) -> Run:
-        if not agent.enabled:
+        if not agent.enabled and not stopping:
             raise ServiceError(f"Agent '{agent.name}' is disabled")
         run = Run(
             project_id=agent.project_id,
@@ -189,6 +190,7 @@ class RunManager:
             parent_run_id=parent_run_id,
             effort=effort,
             attachment_ids=attachment_ids or [],
+            stop_requested_at=utcnow() if stopping else None,
         )
         s.add(run)
         await s.commit()
@@ -351,18 +353,22 @@ class RunManager:
 
     async def wind_down(self, s: AsyncSession, agent: Agent, reason: str = "") -> bool:
         """Let an agent finish safely: drop what it has not started and tell its running turn to wrap up.
-        Returns whether a turn is still running."""
+        An agent that only has background jobs left gets a turn for that, even if it is paused.
+        Returns whether the agent is still wrapping up."""
         rows = (await s.execute(select(Run.id, Run.status).where(Run.agent_id == agent.id, Run.status.in_((RunStatus.QUEUED, RunStatus.RUNNING))))).all()
         running = False
         for run_id, status in rows:
             if status == RunStatus.QUEUED:
                 await self.cancel_run(run_id)
-            elif await self.runner.notify_run(run_id, prompts.wind_down_notice(reason)):
+            elif await self.runner.notify_run(run_id, prompts.wind_down_notice(reason), urgent=True):
                 running = True
                 run = await s.get(Run, run_id)
                 run.stop_requested_at = run.stop_requested_at or utcnow()
                 await s.commit()
                 bus.publish(run.project_id, "run.upserted", RunOut.model_validate(run))
+        if not running and (jobs := [job for job in await job_service.running(s) if job.agent_id == agent.id]):
+            await self.enqueue(s, agent, RunTrigger.WAKE, prompts.wind_down_jobs_prompt(reason, [job_service.label(job) for job in jobs]), stopping=True)
+            running = True
         return running
 
     async def stop_agent(self, s: AsyncSession, agent: Agent) -> int:
@@ -482,7 +488,7 @@ class RunManager:
             agent = await s.get(Agent, run.agent_id)
             project = await s.get(Project, run.project_id)
             assert agent and project
-            if not agent.enabled:  # disabled while the run was waiting
+            if not agent.enabled and not run.stop_requested_at:  # disabled while the run was waiting
                 run.status, run.finished_at, run.error = RunStatus.CANCELLED, utcnow(), "Agent is disabled"
                 await s.commit()
                 await self._after_run(s, run)

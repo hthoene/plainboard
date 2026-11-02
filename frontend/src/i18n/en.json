@@ -229,7 +229,7 @@
       "forecast": {
         "ok": "On track: about {{percent}}% used at the reset",
         "tight": "Tight: about {{percent}}% used at the reset",
-        "over": "Slow down: at this pace it runs out {{when}}",
+        "over": "Slow down: about {{percent}}% at the reset, runs out {{when}}",
         "reached": "Limit reached",
         "pace": "Using about {{daily}}% a day; {{budget}}% a day lasts until the reset",
         "basisDays_one": "Based on the last day",

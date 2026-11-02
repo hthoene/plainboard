@@ -63,7 +63,7 @@ function Forecast({ forecast }: { forecast: LimitForecast }) {
   const headline =
     forecast.status === "over"
       ? forecast.runs_out_at
-        ? t("chat.limits.forecast.over", { when: timeAgo(fromUnix(forecast.runs_out_at)) })
+        ? t("chat.limits.forecast.over", { percent: percent(forecast.projected), when: timeAgo(fromUnix(forecast.runs_out_at)) })
         : t("chat.limits.forecast.reached")
       : t(`chat.limits.forecast.${forecast.status}`, { percent: percent(forecast.projected) });
   return (

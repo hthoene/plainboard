@@ -43,6 +43,7 @@ def test_forecast_tells_whether_the_limit_lasts():
     assert tight.status == "tight"
     over = forecast(weekly(0.6, 5), history(0.2, 0.2, 0.2), NOW)
     assert over.status == "over" and over.runs_out_at == int(NOW + 2 * DAY) and round(over.budget, 2) == 0.08
+    assert round(over.projected, 2) == 1.6  # not capped: shown as 160% at the reset
 
 
 def test_forecast_falls_back_to_this_weeks_pace():

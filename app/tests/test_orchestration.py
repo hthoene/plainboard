@@ -606,6 +606,18 @@ def job_tick(client) -> None:
     client.portal.call(client.app_ref.state.job_watcher.tick)
 
 
+def test_stopping_an_idle_agent_names_its_running_jobs(client, project):
+    pid = project["id"]
+    dev = make_dev(client, pid)
+    manager = agents_by_slug(client, pid)["manager"]
+    start_job(client, dev["id"])
+    wait_for(lambda: idle(client, pid))
+    chat(client, manager["id"], 'TOOL stop_agent {"agent": "dev"}')
+    wait_for(lambda: idle(client, pid))
+    tool_msg = [m for m in conversation(client, manager["id"])["messages"] if m["kind"] == "tool"][-1]
+    assert "1 background job(s) keep running" in tool_msg["meta"]["result"]
+
+
 def test_finished_job_is_reported_to_its_agent_and_wakes_it(client, project):
     pid = project["id"]
     manager = agents_by_slug(client, pid)["manager"]

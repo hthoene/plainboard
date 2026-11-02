@@ -251,6 +251,8 @@ class RunManager:
     ) -> Assignment:
         if task is not None and task.project_id != target.project_id:
             raise ServiceError("Ticket belongs to another project")
+        if task is not None and task.status in (TaskStatus.BACKLOG, TaskStatus.TODO, TaskStatus.REVIEW):
+            await board_service.update_task(s, task, TaskUpdate(status="in_progress"))
         assignment = Assignment(
             project_id=target.project_id,
             task_id=task.id if task else None,
@@ -518,7 +520,8 @@ class RunManager:
             await board_service.publish_task_id(s, run.task_id)
 
             values = await settings_service.get_all(s)
-            full_text = prompts.with_preface(prompts.with_attachments(text, meta.get("attachments")), now=prompts.now_line(values["timezone"]), inbox=updates)
+            board = prompts.board_check(await board_service.idle_in_progress(s, project.id)) if agent.is_manager else ""
+            full_text = prompts.with_preface(prompts.with_attachments(text, meta.get("attachments")), now=prompts.now_line(values["timezone"]), inbox=updates, board=board)
             turn = await self.context.build_turn(s, project=project, agent=agent, conv=conv, text=full_text, message_id=message.id)
             if turn.briefing_changes:
                 message.meta = {**message.meta, "briefing_update": turn.briefing_changes}

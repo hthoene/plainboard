@@ -54,7 +54,7 @@ class DelegateArgs(BaseModel):
     agent: str = Field(description="Assignee slug, name or id")
     title: str = Field(description="Short title of the work order")
     instructions: str = Field(description="Self-contained instructions: goal, context, constraints, expected result")
-    ticket_number: int | None = Field(default=None, description="Related ticket, if any")
+    ticket_number: int | None = Field(default=None, description="The ticket this is for; set it whenever there is one")
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = Field(
         default=None, description="Reasoning effort for this assignment only; omit to use the agent's setting"
     )

@@ -19,6 +19,8 @@ from ..models import (
     Comment,
     Decision,
     DecisionStatus,
+    Job,
+    JobStatus,
     Project,
     Run,
     Task,
@@ -138,6 +140,21 @@ async def get_task_by_number(session: AsyncSession, project_id: int, number: int
     if task is None:
         raise NotFound(f"Ticket #{number} not found")
     return task
+
+
+async def idle_in_progress(session: AsyncSession, project_id: int) -> list[Task]:
+    """Tickets in progress that nothing is happening on and that aren't waiting for the user."""
+    tasks = [t for t in await list_tasks(session, project_id, status=TaskStatus.IN_PROGRESS) if not t.user_action]
+    if not tasks:
+        return []
+    with_job = select(Job.agent_id).where(Job.project_id == project_id, Job.status == JobStatus.RUNNING)
+    busy = {
+        *await session.scalars(select(Run.task_id).where(Run.project_id == project_id, Run.status.in_(ACTIVE_RUN_STATUSES))),
+        *await session.scalars(select(Decision.task_id).where(Decision.project_id == project_id, Decision.status == DecisionStatus.OPEN)),
+        # A job outlives its assignment's report and still belongs to that work.
+        *await session.scalars(select(Assignment.task_id).where(Assignment.project_id == project_id, Assignment.agent_id.in_(with_job))),
+    }
+    return [t for t in tasks if t.id not in busy]
 
 
 async def list_tasks(

@@ -105,6 +105,46 @@ def test_interrupted_manager_turn_is_reported_to_itself(client, project):
     assert "interrupted by a restart" in runner(client).specs[-1].prompt and "Plan the release" in runner(client).specs[-1].prompt
 
 
+def test_delegating_moves_the_ticket_and_the_manager_is_reminded_when_work_ends(client, project):
+    pid = project["id"]
+    dev = make_dev(client, pid)
+    manager = agents_by_slug(client, pid)["manager"]
+    ticket = client.post(f"/api/projects/{pid}/tasks", json={"title": "Build it", "status": "todo"}).json()
+    chat(client, manager["id"], f'TOOL delegate {json.dumps({"agent": dev["slug"], "title": "Work", "instructions": "SAY finished", "ticket_number": ticket["number"]})}')
+    wait_for(lambda: idle(client, pid))
+    assert client.get(f"/api/tasks/{ticket['id']}").json()["status"] == "in_progress"
+    assert f"#{ticket['number']} Build it" in runner(client).specs[-1].prompt and "Board check" in runner(client).specs[-1].prompt  # the wake-up after the report
+
+    client.patch(f"/api/tasks/{ticket['id']}", json={"user_action": "Test on a phone"})
+    chat(client, manager["id"], "SAY ok")
+    wait_for(lambda: idle(client, pid))
+    assert "Board check" not in runner(client).specs[-1].prompt
+
+
+def test_board_check_skips_tickets_being_worked_on_and_reaches_only_the_manager(client, project):
+    from plainboard.db import sessionmaker
+    from plainboard.models import Decision, Run
+    from plainboard.services import board as board_service
+
+    pid = project["id"]
+    dev = make_dev(client, pid)
+    idle_one, running, deciding = (client.post(f"/api/projects/{pid}/tasks", json={"title": t, "status": "in_progress"}).json() for t in ("A", "B", "C"))
+
+    async def numbers():
+        async with sessionmaker()() as s:
+            s.add(Run(project_id=pid, agent_id=dev["id"], trigger="assignment", input_text="x", status="queued", task_id=running["id"]))
+            s.add(Decision(project_id=pid, task_id=deciding["id"], question="Which?"))
+            await s.flush()
+            found = [t.number for t in await board_service.idle_in_progress(s, pid)]
+            await s.rollback()
+            return found
+
+    assert client.portal.call(numbers) == [idle_one["number"]]
+    chat(client, dev["id"], "SAY ok")
+    wait_for(lambda: idle(client, pid))
+    assert "Board check" not in runner(client).specs[-1].prompt
+
+
 def test_worker_tools_are_restricted(client, project):
     pid = project["id"]
     dev = make_dev(client, pid)

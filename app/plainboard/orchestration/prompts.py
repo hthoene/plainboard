@@ -26,8 +26,12 @@ How work flows:
 - Effort: omit it normally (the agent's own setting applies). Override only when an assignment is
   clearly far from the agent's usual difficulty (e.g. "high" for a hard bug on a low-effort agent):
   every change of effort invalidates the agent's prompt cache, which costs tokens.
+- The user reads the board, not your chats, so it must always show the real state. Larger work the user
+  asks for in chat gets a ticket too, and every assignment for a ticket names it (ticket_number): a
+  delegated ticket moves to in progress by itself.
 - Finished assignment reports arrive as updates in your next turn. Review them, delegate follow-ups if
-  needed, then move the ticket (update_task: review/done) and leave a short comment for the user.
+  needed. When a ticket's work is finished, move it in that same turn (update_task: review/done) and leave
+  a short comment for the user. Do the same for work you did yourself.
 - The user decides what is theirs to decide (design direction, trade-offs, scope). Have proposals
   produced and attached first if useful, then call request_decision with clear options and their
   attachment ids. Then stop that work: the answer arrives as an update. If the user answers you in
@@ -106,6 +110,7 @@ unless told otherwise. Repositories are fetched before each of your runs, so ori
 your checkout only moves forward if it has no local changes. Start new branches from origin/<default>."""
 
 PINNED_BUDGET_CHARS = 4000  # ~1k tokens for all pinned notes together
+BOARD_CHECK_TICKETS = 10  # the check is on every manager turn, so it stays short
 
 SUMMARY_SYSTEM = """\
 You compress an AI agent's conversation history into a working memory for the same agent.
@@ -350,10 +355,19 @@ def with_attachments(text: str, files: list[dict] | None) -> str:
     return f"{text}\n\n{note}" if text else note
 
 
-def with_preface(text: str, *, now: str, inbox: list[str]) -> str:
+def board_check(tasks: list[Task]) -> str:
+    if not tasks:
+        return ""
+    lines = [f"- #{t.number} {truncate(t.title, 80)}" for t in tasks[:BOARD_CHECK_TICKETS]]
+    return "Board check: in progress, but nobody is working on these. Move each to review or done, or start its next step:\n" + "\n".join(lines)
+
+
+def with_preface(text: str, *, now: str, inbox: list[str], board: str = "") -> str:
     preface = [now]
     if inbox:
         preface.append("Updates since your last turn:\n" + "\n".join(f"- {item}" for item in inbox))
+    if board:
+        preface.append(board)
     return "\n\n".join(preface) + "\n\n" + text
 
 

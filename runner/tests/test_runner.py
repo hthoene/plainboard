@@ -1,15 +1,16 @@
 import asyncio
+import collections
 import json
 
 import httpx
 import pytest
 from claude_agent_sdk import AssistantMessage, ResultMessage, SystemMessage, TextBlock, ToolResultBlock, ToolUseBlock, UserMessage
 from fastapi.testclient import TestClient
-from plainboard_protocol import Credentials, JobSpec, McpServerSpec, ToolBridgeSpec, ToolDef, parse_event
+from plainboard_protocol import Credentials, JobSpec, McpServerSpec, RunSpec, ToolBridgeSpec, ToolDef, parse_event
 
 from plainboard_runner import config, jobs
 from plainboard_runner.main import app
-from plainboard_runner.providers.claude_code import EventMapper, auth_env, external_mcp_config
+from plainboard_runner.providers.claude_code import ClaudeCodeProvider, EventMapper, auth_env, external_mcp_config
 from plainboard_runner.tool_bridge import ToolBridge
 from plainboard_runner.workspace import WorkspaceError
 
@@ -303,6 +304,12 @@ def test_external_mcp_config():
     assert external_mcp_config(McpServerSpec(name="fs", transport="stdio", command="npx", args=["-y", "x"]))["command"] == "npx"
     http = external_mcp_config(McpServerSpec(name="api", transport="http", url="https://x/mcp", headers={"A": "b"}))
     assert http == {"type": "http", "url": "https://x/mcp", "headers": {"A": "b"}}
+
+
+def test_run_accepts_messages_with_large_screenshots(workspaces):
+    spec = RunSpec(**{**run_spec(workspaces, "hi"), "credentials": {"claude_auth_mode": "runner_login"}})
+    options = ClaudeCodeProvider()._options(spec, ToolBridge(spec.bridge, workspaces), collections.deque())
+    assert options.max_buffer_size > 10 * 1024 * 1024
 
 
 def job_spec(workspaces, job_id: str, command: str) -> JobSpec:

@@ -60,6 +60,8 @@ MCP_SERVER_NAME = "plainboard"
 BOARD_TOOLSET_BUILTINS = ["Read", "Glob", "Grep", "Bash", "Edit", "Write"]
 # Interactive tools make no sense for headless agents; they talk back via chat or the board.
 DISALLOWED_TOOLS = ["AskUserQuestion"]
+# One CLI message holds a whole tool result; a screenshot the agent reads easily exceeds the SDK's 1 MB default.
+MAX_MESSAGE_BYTES = 64 * 1024 * 1024
 
 MODELS = [
     ModelInfo(id="claude-opus-5-5", label="Claude Opus 5.5", tier="large"),
@@ -260,6 +262,7 @@ class ClaudeCodeProvider(Provider):
             allowed_tools=allowed,
             disallowed_tools=DISALLOWED_TOOLS,
             include_partial_messages=True,
+            max_buffer_size=MAX_MESSAGE_BYTES,
             stderr=stderr_tail.append,
             hooks={"PostToolUse": [HookMatcher(hooks=[notice_hook(spec.run_id)])]},
         )

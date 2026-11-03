@@ -6,29 +6,35 @@ import { useTasks } from "../api/queries";
 import { useShell } from "../features/layout/shell-context";
 import { Lightbox } from "./Lightbox";
 
-const TICKET_REF = /(?<![\w/#&])#(\d+)\b/g;
+// Not inside words, URL paths or entities ("a#1", "x/#1", "&#1"), but "#1/#2" links both.
+const TICKET_REF = /(?<![\w#&])(?<![^\s\d]\/)#(\d+)\b/g;
 const OTHER_NUMBERING = /\b(?:PR|MR|pull request|issue)\s*$/i; // numbers on GitHub, not tickets
 
 type MdNode = { type: string; value?: string; url?: string; children?: MdNode[] };
 
-function splitTicketRefs(text: string): MdNode[] {
-  const nodes: MdNode[] = [];
+/** Splits text into plain parts and ticket numbers. */
+function ticketParts(text: string): (string | number)[] {
+  const parts: (string | number)[] = [];
   let last = 0;
   for (const match of text.matchAll(TICKET_REF)) {
     if (OTHER_NUMBERING.test(text.slice(0, match.index))) continue;
-    if (match.index > last) nodes.push({ type: "text", value: text.slice(last, match.index) });
-    nodes.push({ type: "link", url: `#ticket-${match[1]}`, children: [{ type: "text", value: match[0] }] });
+    if (match.index > last) parts.push(text.slice(last, match.index));
+    parts.push(Number(match[1]));
     last = match.index + match[0].length;
   }
-  if (last < text.length) nodes.push({ type: "text", value: text.slice(last) });
-  return nodes;
+  if (last < text.length) parts.push(text.slice(last));
+  return parts;
 }
 
-/** Remark plugin: turns #12 into a link, except in code and in existing links. */
+const ticketNode = (number: number): MdNode => ({ type: "link", url: `#ticket-${number}`, children: [{ type: "text", value: `#${number}` }] });
+
+/** Remark plugin: turns #12 (also `#12`) into a link, except in other code and in existing links. */
 function linkTickets() {
   const walk = (node: MdNode) => {
     node.children = node.children?.flatMap((child) => {
-      if (child.type === "text") return splitTicketRefs(child.value ?? "");
+      if (child.type === "text") return ticketParts(child.value ?? "").map((part) => (typeof part === "number" ? ticketNode(part) : { type: "text", value: part }));
+      const code = child.type === "inlineCode" && child.value?.match(/^#(\d+)$/);
+      if (code) return [ticketNode(Number(code[1]))];
       if (child.type !== "link" && child.type !== "linkReference") walk(child);
       return [child];
     });
@@ -36,14 +42,39 @@ function linkTickets() {
   return walk;
 }
 
-function TicketLink({ number, children }: { number: number; children: ReactNode }) {
+function TicketLink({ number, children, className }: { number: number; children: ReactNode; className?: string }) {
   const { project, openTask } = useShell();
   const task = useTasks(project.id).data?.find((t) => t.number === number);
   if (!task) return <>{children}</>;
   return (
-    <button type="button" title={task.title} onClick={() => openTask(task.id)} className="font-medium text-indigo-600 hover:underline dark:text-indigo-400">
+    <button
+      type="button"
+      title={task.title}
+      onClick={(e) => {
+        e.stopPropagation();
+        openTask(task.id);
+      }}
+      className={className ?? "font-medium text-indigo-600 hover:underline dark:text-indigo-400"}
+    >
       {children}
     </button>
+  );
+}
+
+/** Plain text with clickable ticket numbers, for places that don't render Markdown. */
+export function TicketText({ text, linkClassName }: { text: string; linkClassName?: string }) {
+  return (
+    <>
+      {ticketParts(text).map((part, i) =>
+        typeof part === "number" ? (
+          <TicketLink key={i} number={part} className={linkClassName}>
+            #{part}
+          </TicketLink>
+        ) : (
+          part
+        ),
+      )}
+    </>
   );
 }
 

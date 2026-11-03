@@ -8,7 +8,7 @@ import { qk, useTask } from "../../api/queries";
 import type { Assignment, Attachment, Priority, TaskDetail, TaskStatus } from "../../api/types";
 import { AttachmentLink } from "../../components/AttachmentLink";
 import { Lightbox } from "../../components/Lightbox";
-import { Markdown } from "../../components/Markdown";
+import { Markdown, TicketText } from "../../components/Markdown";
 import { AgentDot, Badge, Button, ErrorText, IconButton, Input, Modal, Select, Spinner, Textarea } from "../../components/ui";
 import { formatBytes, timeAgo } from "../../lib/format";
 import { useShell } from "../layout/shell-context";
@@ -185,7 +185,9 @@ function UserAction({ taskId, action }: { taskId: number; action: string }) {
         <UserRound className="size-4" />
         {t("ticket.userAction")}
       </h3>
-      <p className="text-sm whitespace-pre-wrap">{action}</p>
+      <p className="text-sm whitespace-pre-wrap">
+        <TicketText text={action} />
+      </p>
       <Textarea rows={2} aria-label={t("ticket.userActionNote")} placeholder={t("ticket.userActionNote")} value={note} onChange={(e) => setNote(e.target.value)} />
       <Button variant="primary" size="sm" icon={<Check className="size-3.5" />} onClick={done}>
         {t("ticket.userActionDone")}

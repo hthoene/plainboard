@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import type { Agent, Message } from "../../api/types";
 import { AttachmentLink } from "../../components/AttachmentLink";
 import { Lightbox } from "../../components/Lightbox";
-import { Markdown } from "../../components/Markdown";
+import { Markdown, TicketText } from "../../components/Markdown";
 import { formatTokens } from "../../lib/format";
 import { useShell } from "../layout/shell-context";
 
@@ -21,7 +21,9 @@ export function MessageItem({ message, agent, details }: { message: Message; age
       return (
         <div className="flex items-start gap-2 rounded-md bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300">
           <AlertCircle className="mt-px size-3.5 shrink-0" />
-          <span className="break-words whitespace-pre-wrap">{message.content}</span>
+          <span className="break-words whitespace-pre-wrap">
+            <TicketText text={message.content} />
+          </span>
         </div>
       );
   }
@@ -200,7 +202,7 @@ function UserBubble({ text }: { text: string }) {
   const long = text.length > COLLAPSE_AT;
   return (
     <div className="max-w-[85%] rounded-2xl rounded-br-md bg-indigo-600 px-3.5 py-2 text-sm break-words whitespace-pre-wrap text-white">
-      {long && !expanded ? `${text.slice(0, COLLAPSE_AT)}…` : text}
+      <TicketText text={long && !expanded ? `${text.slice(0, COLLAPSE_AT)}…` : text} linkClassName="font-medium underline" />
       {long && (
         <button onClick={() => setExpanded(!expanded)} className="mt-1 block text-xs text-indigo-200 hover:text-white">
           {expanded ? t("chat.showLess") : t("chat.showMore", { count: text.length })}

@@ -7,7 +7,7 @@ import { api } from "../../api/client";
 import { qk } from "../../api/queries";
 import type { Attachment, Decision } from "../../api/types";
 import { AttachmentLink } from "../../components/AttachmentLink";
-import { Markdown } from "../../components/Markdown";
+import { Markdown, TicketText } from "../../components/Markdown";
 import { Button, ErrorText, Textarea } from "../../components/ui";
 import { useShell } from "../layout/shell-context";
 
@@ -80,7 +80,7 @@ function OpenDecision({ decision, attachments, onView }: { decision: Decision; a
           </span>
           {asker && <span className="font-normal text-zinc-500">{t("decision.requestedBy", { name: asker.name })}</span>}
         </div>
-        <p className="mt-1 text-sm font-medium text-zinc-900 dark:text-zinc-100">{decision.question}</p>
+        <p className="mt-1 text-sm font-medium text-zinc-900 dark:text-zinc-100"><TicketText text={decision.question} /></p>
         {decision.details && <Markdown className="mt-1 text-[13px]">{decision.details}</Markdown>}
       </div>
       <Thumbs ids={decision.attachment_ids} attachments={attachments} onView={onView} />
@@ -128,7 +128,9 @@ function ClosedDecision({ decision, attachments, onView }: { decision: Decision;
     <div className="flex items-start gap-2 rounded-md bg-zinc-50 px-3 py-2 text-xs text-zinc-500 dark:bg-zinc-800/40">
       {decision.status === "answered" ? <CircleCheck className="mt-px size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" /> : <CircleSlash className="mt-px size-3.5 shrink-0" />}
       <div className="min-w-0 flex-1 space-y-1">
-        <div>{decision.question}</div>
+        <div>
+          <TicketText text={decision.question} />
+        </div>
         {decision.status === "answered" ? (
           <div className="font-medium text-zinc-700 dark:text-zinc-300">
             {answer}

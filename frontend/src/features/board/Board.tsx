@@ -14,14 +14,15 @@ import {
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Plus, Search } from "lucide-react";
+import { Archive, Plus, Search } from "lucide-react";
 import { useMemo, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../../api/client";
 import { qk, useTasks } from "../../api/queries";
 import type { Task, TaskStatus } from "../../api/types";
-import { IconButton, Input, Spinner } from "../../components/ui";
+import { Button, IconButton, Input, Spinner } from "../../components/ui";
 import { useShell } from "../layout/shell-context";
+import { ArchiveDialog } from "./ArchiveDialog";
 import { TaskCard } from "./TaskCard";
 
 export const STATUSES: TaskStatus[] = ["backlog", "todo", "in_progress", "review", "done"];
@@ -36,6 +37,7 @@ export function Board() {
   const tasks = useTasks(project.id);
   const [filter, setFilter] = useState("");
   const [activeId, setActiveId] = useState<number | null>(null);
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
     // Long-press to drag on touch screens, so horizontal swiping still scrolls the board.
@@ -108,8 +110,12 @@ export function Board() {
           <Search className="pointer-events-none absolute top-2 left-2.5 size-4 text-zinc-400" />
           <Input className="pl-8" placeholder={t("board.filter")} value={filter} onChange={(e) => setFilter(e.target.value)} />
         </div>
-        <p className="hidden text-xs text-zinc-500 lg:block">{t("board.hint")}</p>
+        <p className="hidden flex-1 text-xs text-zinc-500 lg:block">{t("board.hint")}</p>
+        <Button size="sm" variant="ghost" className="ml-auto shrink-0" icon={<Archive className="size-3.5" />} onClick={() => setArchiveOpen(true)}>
+          {t("archive.title")}
+        </Button>
       </div>
+      {archiveOpen && <ArchiveDialog onClose={() => setArchiveOpen(false)} />}
       <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setActiveId(null)}>
         <div className="scroll-thin flex min-h-0 flex-1 snap-x snap-mandatory gap-3 overflow-x-auto px-3 pb-3 sm:snap-none sm:px-4 sm:pb-4">
           {STATUSES.map((status) => (
@@ -125,7 +131,14 @@ export function Board() {
 function Column({ status, tasks }: { status: TaskStatus; tasks: Task[] }) {
   const { t } = useTranslation();
   const { setNodeRef, isOver } = useDroppable({ id: columnKey(status) });
+  const { project } = useShell();
+  const qc = useQueryClient();
   const [adding, setAdding] = useState(false);
+
+  const archiveDone = async () => {
+    await api.post(`/projects/${project.id}/tasks/archive`);
+    qc.invalidateQueries({ queryKey: qk.tasks(project.id) });
+  };
 
   return (
     <section className="flex w-[85vw] shrink-0 snap-center flex-col rounded-xl bg-zinc-100/70 sm:w-auto sm:max-w-80 sm:min-w-60 sm:flex-1 sm:shrink dark:bg-zinc-900/60">
@@ -134,6 +147,11 @@ function Column({ status, tasks }: { status: TaskStatus; tasks: Task[] }) {
         <h2 className="text-[13px] font-semibold text-zinc-700 dark:text-zinc-200">{t(`taskStatus.${status}`)}</h2>
         <span className="text-xs text-zinc-400">{tasks.length}</span>
         <div className="flex-1" />
+        {status === "done" && tasks.length > 0 && (
+          <IconButton label={t("archive.archiveDone")} onClick={archiveDone}>
+            <Archive className="size-4" />
+          </IconButton>
+        )}
         <IconButton label={t("board.addTicket")} onClick={() => setAdding(true)}>
           <Plus className="size-4" />
         </IconButton>

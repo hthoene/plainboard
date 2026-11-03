@@ -63,7 +63,7 @@ async def overview(session: AsyncSession, project_id: int, days: int = 30, now: 
     for agent_id, count in finished:
         agents.setdefault(agent_id, StatsAgent(agent_id=agent_id)).assignments_done = count
 
-    open_tickets = await session.scalar(select(func.count()).select_from(Task).where(Task.project_id == project_id, Task.status != TaskStatus.DONE))
+    open_tickets = await session.scalar(select(func.count()).select_from(Task).where(Task.project_id == project_id, Task.status != TaskStatus.DONE, Task.archived_at.is_(None)))
     return StatsOut(
         days=list(by_day.values()),
         agents=sorted(agents.values(), key=lambda a: a.runs, reverse=True),

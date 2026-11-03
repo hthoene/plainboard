@@ -8,6 +8,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..models import Agent, RunTrigger, utcnow
+from ..services import board as board_service
 from ..services import schedules as schedule_service
 from .run_manager import RunManager
 
@@ -49,4 +50,5 @@ class Scheduler:
                     run_id = run.id
                     fired += 1
                 await schedule_service.mark_fired(s, schedule, run_id, now)
+            await board_service.auto_archive(s)
         return fired

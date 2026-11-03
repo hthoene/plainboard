@@ -98,7 +98,9 @@
     "searchGithub": "Search {{count}} repositories…",
     "noGithubMatches": "No matching repositories",
     "addSelected": "Add {{count}} selected",
-    "private": "Private"
+    "private": "Private",
+    "autoArchive": "Archive done tickets after (days)",
+    "autoArchiveHint": "Archived tickets leave the board but keep their history and links. 0 = never."
   },
   "board": {
     "filter": "Filter tickets…",
@@ -437,5 +439,14 @@
     "maxParallelHint": "0 pauses all new work.",
     "timezone": "Timezone",
     "ownLoginNotice": "Uses your own Claude account login. Whether this is allowed for third-party tools depends on Anthropic's terms for your plan; an API key is the officially supported option."
+  },
+  "archive": {
+    "title": "Archive",
+    "hint": "Done tickets move here {{days}} days after they were finished. Open one to restore it.",
+    "empty": "No archived tickets.",
+    "more": "{{count}} more: refine the search.",
+    "archiveDone": "Archive all done tickets now",
+    "archivedOn": "Archived on {{date}}",
+    "restore": "Restore"
   }
 }

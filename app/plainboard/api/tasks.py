@@ -30,8 +30,14 @@ router = APIRouter(prefix="/api", tags=["board"])
 
 
 @router.get("/projects/{project_id}/tasks", response_model=list[TaskOut])
-async def list_tasks(project_id: int, session: Session, q: str | None = None) -> list[TaskOut]:
-    return await board_service.task_outs(session, await board_service.list_tasks(session, project_id, query=q))
+async def list_tasks(project_id: int, session: Session, q: str | None = None, archived: bool = False) -> list[TaskOut]:
+    return await board_service.task_outs(session, await board_service.list_tasks(session, project_id, query=q, archived=archived))
+
+
+@router.post("/projects/{project_id}/tasks/archive")
+async def archive_done_tasks(project_id: int, session: Session) -> dict[str, int]:
+    """Takes all done tickets off the board now."""
+    return {"archived": await board_service.archive_tasks(session, project_id)}
 
 
 @router.post("/projects/{project_id}/tasks", response_model=TaskOut, status_code=201)

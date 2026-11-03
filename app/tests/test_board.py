@@ -123,3 +123,39 @@ def test_public_api_shows_only_customer_texts(client, project):
 
     client.delete(f"/api/projects/{pid}/public-api-key")
     assert client.get(url, headers=headers).status_code == 401
+
+
+def test_done_tickets_are_archived_and_restored(client, project):
+    from datetime import timedelta
+
+    from plainboard.db import sessionmaker
+    from plainboard.models import Task, utcnow
+    from plainboard.services import board as board_service
+    from sqlalchemy import update
+
+    pid = project["id"]
+    assert project["auto_archive_days"] == 14
+    tickets = [client.post(f"/api/projects/{pid}/tasks", json={"title": title, "status": "done"}).json() for title in ("Old", "New")]
+    client.post(f"/api/projects/{pid}/tasks", json={"title": "Open", "status": "todo"})
+
+    async def age_and_auto_archive():
+        async with sessionmaker()() as s:
+            await s.execute(update(Task).where(Task.id == tickets[0]["id"]).values(updated_at=utcnow() - timedelta(days=15)))
+            await s.commit()
+            return await board_service.auto_archive(s)
+
+    assert client.portal.call(age_and_auto_archive) == 1
+    on_board = lambda: [t["title"] for t in client.get(f"/api/projects/{pid}/tasks").json()]  # noqa: E731
+    archived = lambda: [t["title"] for t in client.get(f"/api/projects/{pid}/tasks", params={"archived": True}).json()]  # noqa: E731
+    assert sorted(on_board()) == ["New", "Open"] and archived() == ["Old"]
+    assert client.get(f"/api/tasks/{tickets[0]['id']}").json()["archived_at"].endswith("Z")
+
+    assert client.post(f"/api/projects/{pid}/tasks/archive").json() == {"archived": 1}
+    assert on_board() == ["Open"] and sorted(archived()) == ["New", "Old"]
+
+    assert client.patch(f"/api/tasks/{tickets[0]['id']}", json={"archived": False}).json()["archived_at"] is None
+    client.patch(f"/api/tasks/{tickets[1]['id']}", json={"status": "review"})  # moving it brings it back too
+    assert sorted(on_board()) == ["New", "Old", "Open"] and archived() == []
+
+    client.patch(f"/api/projects/{pid}", json={"auto_archive_days": 0})
+    assert client.portal.call(age_and_auto_archive) == 0

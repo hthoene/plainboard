@@ -19,6 +19,7 @@ class ListTasksArgs(BaseModel):
     priority: Priority | None = None
     label: str | None = None
     query: str | None = Field(default=None, description="Text search in title/description")
+    archived: bool = Field(default=False, description="true = only archived tickets (off the board)")
     limit: int = Field(default=50, ge=1, le=200)
     offset: int = Field(default=0, ge=0)
 
@@ -50,6 +51,7 @@ class UpdateTasksArgs(TicketNumbers):
     priority: Priority | None = None
     add_labels: list[str] = Field(default_factory=list)
     remove_labels: list[str] = Field(default_factory=list)
+    archived: bool | None = Field(default=None, description="true = take off the board, false = restore")
 
 
 class UpdateTaskArgs(BaseModel):
@@ -102,7 +104,7 @@ class ResolveDecisionArgs(BaseModel):
 def ticket_line(task: Task) -> str:
     labels = f" {{{', '.join(task.labels)}}}" if task.labels else ""
     waiting = f" (user to do: {task.user_action})" if task.user_action else ""
-    return f"#{task.number} [{task.status}] ({task.priority}) {task.title}{labels}{waiting}"
+    return f"#{task.number} [{task.status}{', archived' if task.archived_at else ''}] ({task.priority}) {task.title}{labels}{waiting}"
 
 
 def numbers_text(tasks: list[Task]) -> str:
@@ -111,7 +113,9 @@ def numbers_text(tasks: list[Task]) -> str:
 
 @tool("list_tasks", "List tickets on the board (compact). Filter by status, priority, label or text.", ListTasksArgs)
 async def list_tasks(ctx: ToolContext, args: ListTasksArgs) -> str:
-    tasks = await board_service.list_tasks(ctx.session, ctx.project.id, status=args.status, priority=args.priority, label=args.label, query=args.query)
+    tasks = await board_service.list_tasks(
+        ctx.session, ctx.project.id, status=args.status, priority=args.priority, label=args.label, query=args.query, archived=args.archived
+    )
     page = tasks[args.offset : args.offset + args.limit]
     if not page:
         return f"No tickets at offset {args.offset} ({len(tasks)} match)." if tasks else "No tickets."
@@ -123,8 +127,10 @@ async def list_tasks(ctx: ToolContext, args: ListTasksArgs) -> str:
 
 @tool("get_board_summary", "Ticket counts per status plus all open tickets.")
 async def get_board_summary(ctx: ToolContext, _args) -> str:
-    rows = (await ctx.session.execute(select(Task.status, func.count()).where(Task.project_id == ctx.project.id).group_by(Task.status))).all()
-    counts = ", ".join(f"{status}: {n}" for status, n in rows) or "empty board"
+    on_board = select(Task.status, func.count()).where(Task.project_id == ctx.project.id, Task.archived_at.is_(None)).group_by(Task.status)
+    counts = ", ".join(f"{status}: {n}" for status, n in (await ctx.session.execute(on_board)).all()) or "empty board"
+    archived = await ctx.session.scalar(select(func.count()).select_from(Task).where(Task.project_id == ctx.project.id, Task.archived_at.is_not(None)))
+    counts += f", archived: {archived}" if archived else ""
     open_tasks = [t for t in await board_service.list_tasks(ctx.session, ctx.project.id) if t.status != "done"]
     colors = ", ".join(f"{label}={color}" for label, color in ctx.project.label_colors.items())
     more = f"\n(+{len(open_tasks) - 40} more open: list_tasks)" if len(open_tasks) > 40 else ""
@@ -156,7 +162,7 @@ async def update_task(ctx: ToolContext, args: UpdateTaskArgs) -> str:
     return f"Updated: {ticket_line(task)}"
 
 
-@tool("update_tasks", "Apply the same change to many tickets at once: move, set priority, add/remove labels.", UpdateTasksArgs, roles=(MANAGER,))
+@tool("update_tasks", "Apply the same change to many tickets at once: move, set priority, add/remove labels, archive.", UpdateTasksArgs, roles=(MANAGER,))
 async def update_tasks(ctx: ToolContext, args: UpdateTasksArgs) -> str:
     fields = args.model_dump(exclude_unset=True, exclude={"numbers", "add_labels", "remove_labels"})
     if not fields and not args.add_labels and not args.remove_labels:

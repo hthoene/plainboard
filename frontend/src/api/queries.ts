@@ -51,6 +51,9 @@ export const useAgents = (pid: number) =>
   useQuery({ queryKey: qk.agents(pid), queryFn: () => api.get<Agent[]>(`/projects/${pid}/agents`) });
 export const useTasks = (pid: number) =>
   useQuery({ queryKey: qk.tasks(pid), queryFn: () => api.get<Task[]>(`/projects/${pid}/tasks`) });
+// Shares the tasks key, so every ticket event refreshes it too.
+export const useArchivedTasks = (pid: number, enabled = true) =>
+  useQuery({ queryKey: [...qk.tasks(pid), "archived"], queryFn: () => api.get<Task[]>(`/projects/${pid}/tasks?archived=true`), enabled });
 export const useTask = (id: number | null) =>
   useQuery({ queryKey: qk.task(id ?? 0), queryFn: () => api.get<TaskDetail>(`/tasks/${id}`), enabled: id !== null });
 export const useConversation = (agentId: number | null) =>

@@ -41,8 +41,9 @@ How work flows:
 - If something needs a human rather than an answer (e.g. testing on a real device), set user_action
   with update_task: one plain sentence in the user's language. The ticket stays highlighted until the
   user marks it done, and that arrives as an update.
-- For many tickets at once use the batch tools: update_tasks (move, priority, labels), create_tasks,
-  delete_tasks; list_tasks filters by status, priority, label and text.
+- For many tickets at once use the batch tools: update_tasks (move, priority, labels, archive),
+  create_tasks, delete_tasks; list_tasks filters by status, priority, label and text. Done tickets are
+  archived automatically after a while; archived tickets keep their history (list_tasks archived=true).
 - Keep the board readable: sort_tickets puts a column in priority order, top first; color_label gives a
   label one color across the board. Use few colors, each with a clear meaning.
 - Keep questions for the user simple: one short question in plain words, no jargon or internal names,
@@ -279,7 +280,7 @@ def now_line(tz_name: str) -> str:
 def ticket_brief(
     task: Task, attachments: list[Attachment], comments: list[Comment], names: dict[int, str], runner_path, decisions: list[Decision] | None = None
 ) -> str:
-    lines = [f"Ticket #{task.number}: {task.title}", f"Status: {task.status} | Priority: {task.priority}" + (f" | Labels: {', '.join(task.labels)}" if task.labels else "")]
+    lines = [f"Ticket #{task.number}: {task.title}", f"Status: {task.status}{' (archived)' if task.archived_at else ''} | Priority: {task.priority}" + (f" | Labels: {', '.join(task.labels)}" if task.labels else "")]
     if task.description:
         lines += ["", task.description.strip()]
     if task.customer_title:

@@ -13,6 +13,7 @@ export interface Project {
   has_github_token: boolean;
   has_public_api_key: boolean;
   auto_wake_manager: boolean;
+  auto_archive_days: number;
   label_colors: Record<string, string>;
   created_at: string;
 }
@@ -72,6 +73,7 @@ export interface Task {
   priority: Priority;
   labels: string[];
   user_action: string;
+  archived_at: string | null;
   created_by_agent_id: number | null;
   created_at: string;
   updated_at: string;

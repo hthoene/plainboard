@@ -37,6 +37,7 @@ export function ProjectDialog({
     workspace_path: project?.workspace_path ?? "",
     github_token: "",
     auto_wake_manager: project?.auto_wake_manager ?? true,
+    auto_archive_days: project?.auto_archive_days ?? 14,
   });
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
@@ -160,6 +161,16 @@ export function ProjectDialog({
         )}
         <Toggle checked={form.auto_wake_manager} onChange={(v) => set({ auto_wake_manager: v })} label={t("projects.autoWake")} />
         <p className="-mt-2 pl-11 text-xs text-zinc-500">{t("projects.autoWakeHint")}</p>
+        <Field label={t("projects.autoArchive")} hint={t("projects.autoArchiveHint")}>
+          <Input
+            type="number"
+            min={0}
+            max={3650}
+            className="w-28"
+            value={form.auto_archive_days}
+            onChange={(e) => set({ auto_archive_days: Math.max(0, Math.min(3650, Math.round(Number(e.target.value) || 0))) })}
+          />
+        </Field>
         <ErrorText error={error} />
       </div>
     </Modal>

@@ -2,7 +2,7 @@ import clsx from "clsx";
 import { useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useTasks } from "../api/queries";
+import { useArchivedTasks, useTasks } from "../api/queries";
 import { useShell } from "../features/layout/shell-context";
 import { Lightbox } from "./Lightbox";
 
@@ -44,7 +44,11 @@ function linkTickets() {
 
 function TicketLink({ number, children, className }: { number: number; children: ReactNode; className?: string }) {
   const { project, openTask } = useShell();
-  const task = useTasks(project.id).data?.find((t) => t.number === number);
+  const board = useTasks(project.id);
+  const onBoard = board.data?.find((t) => t.number === number);
+  // Older tickets are archived: look there only when a number isn't on the board.
+  const archived = useArchivedTasks(project.id, !!board.data && !onBoard);
+  const task = onBoard ?? archived.data?.find((t) => t.number === number);
   if (!task) return <>{children}</>;
   return (
     <button

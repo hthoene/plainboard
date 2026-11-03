@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import func, or_, select
@@ -26,6 +27,7 @@ from ..models import (
     Task,
     TaskStatus,
     TaskTransition,
+    utcnow,
 )
 from ..schemas import AssignmentOut, AttachmentOut, CommentOut, DecisionOut, PublicBoard, PublicTask, TaskCreate, TaskDetail, TaskOut, TaskUpdate
 from .errors import NotFound, ServiceError
@@ -124,6 +126,11 @@ async def _apply_update(session: AsyncSession, task: Task, fields: dict) -> str:
     previous = task.status
     if "status" in fields and fields["status"] != previous and "position" not in fields:
         fields["position"] = await _next_position(session, task.project_id, fields["status"])
+    archived = fields.pop("archived", None)
+    if archived is not None:
+        task.archived_at = (task.archived_at or utcnow()) if archived else None
+    elif fields.get("status", previous) != previous:
+        task.archived_at = None  # moved again: back on the board
     for key, value in fields.items():
         setattr(task, key, value)
     if task.status != previous:
@@ -147,6 +154,30 @@ async def sort_column(session: AsyncSession, project_id: int, status: str, numbe
     await session.commit()
     for task in changed:
         await publish_task(session, task)
+
+
+async def archive_tasks(session: AsyncSession, project_id: int, *, done_before: datetime | None = None) -> int:
+    """Takes done tickets off the board (all, or those finished before a time). Returns how many."""
+    q = select(Task).where(Task.project_id == project_id, Task.status == TaskStatus.DONE, Task.archived_at.is_(None))
+    if done_before:
+        q = q.where(Task.updated_at < done_before)
+    tasks = (await session.scalars(q)).all()
+    if not tasks:
+        return 0
+    now = utcnow()
+    for task in tasks:
+        task.archived_at = now
+    await session.commit()
+    bus.publish(project_id, "task.archived", {"ids": [t.id for t in tasks]})
+    return len(tasks)
+
+
+async def auto_archive(session: AsyncSession) -> int:
+    """Archives done tickets of every project once its auto_archive_days have passed."""
+    archived = 0
+    for project in (await session.scalars(select(Project).where(Project.auto_archive_days > 0))).all():
+        archived += await archive_tasks(session, project.id, done_before=utcnow() - timedelta(days=project.auto_archive_days))
+    return archived
 
 
 async def finish_user_action(session: AsyncSession, task: Task, note: str = "") -> str:
@@ -223,9 +254,10 @@ async def list_tasks(
     query: str | None = None,
     priority: str | None = None,
     label: str | None = None,
+    archived: bool = False,
     limit: int | None = None,
 ) -> list[Task]:
-    q = select(Task).where(Task.project_id == project_id)
+    q = select(Task).where(Task.project_id == project_id, Task.archived_at.is_not(None) if archived else Task.archived_at.is_(None))
     if status:
         q = q.where(Task.status == status)
     if priority:
@@ -233,7 +265,7 @@ async def list_tasks(
     if query:
         like = f"%{query}%"
         q = q.where(or_(Task.title.ilike(like), Task.description.ilike(like)))
-    q = q.order_by(Task.status, Task.position)
+    q = q.order_by(Task.archived_at.desc(), Task.number.desc()) if archived else q.order_by(Task.status, Task.position)
     if label:  # labels are a JSON list: filtered here, so the limit applies afterwards
         tasks = [t for t in (await session.scalars(q)).all() if label.lower() in (x.lower() for x in t.labels)]
         return tasks[:limit] if limit else tasks

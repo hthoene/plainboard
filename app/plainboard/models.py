@@ -106,6 +106,7 @@ class Project(Timestamps, Base):
     auto_wake_manager: Mapped[bool] = mapped_column(Boolean, default=True)
     task_counter: Mapped[int] = mapped_column(Integer, default=0)
     label_colors: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)  # label name -> color name
+    auto_archive_days: Mapped[int] = mapped_column(Integer, default=14)  # done tickets leave the board after this; 0 = never
 
     agents: Mapped[list[Agent]] = relationship(back_populates="project", cascade="all, delete-orphan", passive_deletes=True)
 
@@ -189,6 +190,8 @@ class Task(Timestamps, Base):
     labels: Mapped[list[str]] = mapped_column(JSON, default=list)
     # What only the user can do for this ticket (e.g. test on a phone). Highlights it until done.
     user_action: Mapped[str] = mapped_column(String(500), default="")
+    # Archived tickets are off the board but keep their history and links.
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
     created_by_agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id", ondelete="SET NULL"))
 
 

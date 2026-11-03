@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Bot, Check, ChevronDown, ChevronRight, FileText, Play, Send, Trash2, Upload, UserRound, X } from "lucide-react";
+import { Archive, ArchiveRestore, Bot, Check, ChevronDown, ChevronRight, FileText, Play, Send, Trash2, Upload, UserRound, X } from "lucide-react";
 import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { api, errorMessage } from "../../api/client";
@@ -10,7 +10,7 @@ import { AttachmentLink } from "../../components/AttachmentLink";
 import { Lightbox } from "../../components/Lightbox";
 import { Markdown, TicketText } from "../../components/Markdown";
 import { AgentDot, Badge, Button, ErrorText, IconButton, Input, Modal, Select, Spinner, Textarea } from "../../components/ui";
-import { formatBytes, timeAgo } from "../../lib/format";
+import { formatBytes, formatDateTime, timeAgo } from "../../lib/format";
 import { useShell } from "../layout/shell-context";
 import { statusColor, STATUSES } from "./Board";
 import { Decisions, isImage, reviewAttachmentIds } from "./Decisions";
@@ -26,7 +26,7 @@ export function TaskModal({ taskId, onClose }: { taskId: number; onClose: () => 
   const [error, setError] = useState<unknown>(null);
   const [viewing, setViewing] = useState<number | null>(null);
 
-  const patch = async (body: Partial<TaskDetail>) => {
+  const patch = async (body: Partial<TaskDetail> & { archived?: boolean }) => {
     setError(null);
     try {
       await api.patch(`/tasks/${taskId}`, body);
@@ -96,6 +96,15 @@ export function TaskModal({ taskId, onClose }: { taskId: number; onClose: () => 
         </div>
       }
     >
+      {data.archived_at && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg bg-zinc-100 px-3 py-2 text-sm text-zinc-600 dark:bg-zinc-800/60 dark:text-zinc-300">
+          <Archive className="size-4 shrink-0" />
+          <span className="flex-1">{t("archive.archivedOn", { date: formatDateTime(data.archived_at) })}</span>
+          <Button size="sm" icon={<ArchiveRestore className="size-3.5" />} onClick={() => patch({ archived: false })}>
+            {t("archive.restore")}
+          </Button>
+        </div>
+      )}
       {data.user_action && <UserAction taskId={taskId} action={data.user_action} />}
       <div className="mb-6 empty:hidden">
         <Decisions decisions={data.decisions} attachments={data.attachments} onView={setViewing} />

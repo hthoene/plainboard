@@ -95,6 +95,7 @@ class ProjectUpdate(BaseModel):
     setup_script: str | None = None
     github_token: str | None = None  # "" clears the override
     auto_wake_manager: bool | None = None
+    auto_archive_days: int | None = Field(default=None, ge=0, le=3650)
 
 
 class ProjectOut(ORM):
@@ -106,6 +107,7 @@ class ProjectOut(ORM):
     has_github_token: bool = False
     has_public_api_key: bool = False
     auto_wake_manager: bool
+    auto_archive_days: int
     label_colors: dict[str, str] = Field(default_factory=dict)
     created_at: UTCDateTime
 
@@ -213,6 +215,7 @@ class TaskUpdate(BaseModel):
     labels: list[str] | None = None
     position: float | None = None
     user_action: str | None = Field(default=None, max_length=USER_ACTION_MAX)
+    archived: bool | None = None
 
 
 class UserActionDone(BaseModel):
@@ -232,6 +235,7 @@ class TaskOut(ORM):
     priority: str
     labels: list[str]
     user_action: str
+    archived_at: UTCDateTime | None = None
     created_by_agent_id: int | None
     created_at: UTCDateTime
     updated_at: UTCDateTime

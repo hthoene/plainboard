@@ -49,6 +49,11 @@ def git_env(creds: Credentials) -> dict[str, str]:
     return env
 
 
+def tool_env(creds: Credentials) -> dict[str, str]:
+    """Environment for the agent's own commands: the user's secrets, then git (git wins)."""
+    return {**creds.secrets, **git_env(creds)}
+
+
 async def run_cmd(args: list[str], cwd: Path | None, env: dict[str, str], timeout: float = 600) -> str:
     proc = await asyncio.create_subprocess_exec(
         *args,
@@ -129,6 +134,6 @@ async def prepare_workspace(spec: WorkspaceSpec, creds: Credentials) -> tuple[Pa
             await run_cmd(args, cwd=None, env=git_env(creds))
         except WorkspaceError as exc:
             problems.append(f"Could not clone '{repo.name}' ({repo.url}): {str(exc)[-300:]}")
-    if spec.setup_script.strip() and (problem := await _run_setup(spec.setup_script, path, git_env(creds))):
+    if spec.setup_script.strip() and (problem := await _run_setup(spec.setup_script, path, tool_env(creds))):
         problems.append(problem)
     return path, problems

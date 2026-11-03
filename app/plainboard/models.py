@@ -397,6 +397,17 @@ class Schedule(Timestamps, Base):
     created_by_agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id", ondelete="SET NULL"))
 
 
+class Secret(Timestamps, Base):
+    """An environment variable for agents (e.g. a CLI token). Encrypted; None project = all projects."""
+
+    __tablename__ = "secrets"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    value_enc: Mapped[str | None] = mapped_column(Text)
+    description: Mapped[str] = mapped_column(String(300), default="")
+
+
 class McpServer(Timestamps, Base):
     __tablename__ = "mcp_servers"
     __table_args__ = (UniqueConstraint("project_id", "name"),)

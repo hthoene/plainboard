@@ -339,6 +339,12 @@ async def test_job_runs_in_workspace_and_reports_exit_code_and_tail(workspaces, 
     assert str(workspaces / "p" / "a") in state.tail and "oops" in state.tail
 
 
+async def test_jobs_get_secrets_but_cannot_replace_git_settings(workspaces, jobs_root):
+    creds = Credentials(github_token="gh-real", secrets={"NPM_TOKEN": "npm-1", "GH_TOKEN": "fake"})
+    await jobs.start(JobSpec(id="a5", command='echo "$NPM_TOKEN $GH_TOKEN"', workspace=str(workspaces / "p" / "a"), credentials=creds))
+    assert (await ended("a5")).tail.strip() == "npm-1 gh-real"
+
+
 async def test_job_status_only_returns_known_jobs(workspaces, jobs_root):
     await jobs.start(job_spec(workspaces, "a2", "true"))
     assert set(jobs.status(["a2", "ffff"])) == {"a2"}

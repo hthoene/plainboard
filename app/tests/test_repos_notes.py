@@ -119,3 +119,33 @@ def test_many_notes_remind_manager(client, project):
     wait_for(lambda: idle(client, pid))
     msg = next(m for m in conversation(client, manager["id"])["messages"] if m["role"] == "user")
     assert any(f"{TIDY_EVERY} notes" in item for item in msg["meta"]["inbox"])
+
+
+def test_secrets_reach_agents_but_never_the_user(client, project):
+    from conftest import idle, wait_for
+
+    pid = project["id"]
+    assert client.post("/api/secrets", json={"name": "NPM_TOKEN", "value": "global-npm-value", "description": "npm publish"}).status_code == 201
+    assert client.post("/api/secrets", json={"name": "SENTRY_TOKEN", "value": "global-sentry"}).status_code == 201
+    created = client.post(f"/api/projects/{pid}/secrets", json={"name": "SENTRY_TOKEN", "value": "project-sentry-value"})
+    assert created.status_code == 201 and "value" not in created.json()
+    assert client.post("/api/secrets", json={"name": "NPM_TOKEN", "value": "x"}).status_code == 409
+    assert client.post("/api/secrets", json={"name": "ANTHROPIC_API_KEY", "value": "x"}).status_code == 400
+    assert client.post("/api/secrets", json={"name": "lower-case", "value": "x"}).status_code == 422
+    assert [s["name"] for s in client.get("/api/secrets").json()] == ["NPM_TOKEN", "SENTRY_TOKEN"]
+    assert [s["name"] for s in client.get(f"/api/projects/{pid}/secrets").json()] == ["SENTRY_TOKEN"]
+
+    manager = client.get(f"/api/projects/{pid}/agents").json()[0]
+    client.post(f"/api/agents/{manager['id']}/messages", json={"text": "SAY token is project-sentry-value"})
+    wait_for(lambda: idle(client, pid))
+    runner = client.app_ref.state.runs.runner
+    spec = runner.specs[-1]
+    assert spec.credentials.secrets == {"NPM_TOKEN": "global-npm-value", "SENTRY_TOKEN": "project-sentry-value"}  # the project wins
+    assert "- NPM_TOKEN: npm publish" in spec.system_prompt and "global-npm-value" not in spec.system_prompt
+    said = client.get(f"/api/agents/{manager['id']}/conversation").json()["messages"][-1]["content"]
+    assert said == "token is [secret SENTRY_TOKEN]"
+
+    secret_id = created.json()["id"]
+    assert client.patch(f"/api/secrets/{secret_id}", json={"description": "errors"}).json()["description"] == "errors"
+    assert client.delete(f"/api/secrets/{secret_id}").status_code == 204
+    assert client.get(f"/api/projects/{pid}/secrets").json() == []

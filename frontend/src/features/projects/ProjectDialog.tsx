@@ -6,6 +6,7 @@ import { checks, qk, useRepositories } from "../../api/queries";
 import type { CheckResult, Project, Repository } from "../../api/types";
 import { Button, ErrorText, Field, Input, Modal, Textarea, Toggle } from "../../components/ui";
 import { CheckBadge } from "../settings/SettingsDialog";
+import { SecretsEditor } from "../settings/SecretsEditor";
 import { RepositoriesEditor, type RepoDraft } from "./RepositoriesEditor";
 
 const toDraft = (r: Repository): RepoDraft => ({
@@ -157,6 +158,11 @@ export function ProjectDialog({
         {project && (
           <Field group label={t("projects.publicApi")} hint={t("projects.publicApiHint")}>
             <PublicApiKeyEditor project={project} />
+          </Field>
+        )}
+        {project && (
+          <Field group label={t("secrets.title")} hint={t("secrets.projectHint")}>
+            <SecretsEditor projectId={project.id} />
           </Field>
         )}
         <Toggle checked={form.auto_wake_manager} onChange={(v) => set({ auto_wake_manager: v })} label={t("projects.autoWake")} />

@@ -52,7 +52,7 @@ from plainboard_protocol import (
 from .. import notices
 from ..config import TOOL_RESULT_PREVIEW_CHARS
 from ..tool_bridge import ToolBridge
-from ..workspace import git_env
+from ..workspace import tool_env
 from .base import Provider
 
 log = logging.getLogger(__name__)
@@ -291,7 +291,7 @@ class ClaudeCodeProvider(Provider):
         return ProviderInfo(name=self.name, label="Claude Agent", models=MODELS, efforts=EFFORTS)
 
     def _options(self, spec: RunSpec, bridge: ToolBridge, stderr_tail: collections.deque[str]) -> ClaudeAgentOptions:
-        env = {**auth_env(spec.credentials), **git_env(spec.credentials), **spec.env}
+        env = {**tool_env(spec.credentials), **auth_env(spec.credentials), **spec.env}
         mcp_servers: dict[str, Any] = {s.name: external_mcp_config(s) for s in spec.mcp_servers if s.name != MCP_SERVER_NAME}
         mcp_servers[MCP_SERVER_NAME] = build_mcp_server(bridge)
         allowed = [f"mcp__{MCP_SERVER_NAME}__{t.name}" for t in bridge.tools] + [f"mcp__{name}" for name in mcp_servers if name != MCP_SERVER_NAME]

@@ -112,6 +112,28 @@ class ProjectOut(ORM):
     created_at: UTCDateTime
 
 
+# --- secrets --------------------------------------------------------------------------------
+
+
+class SecretCreate(BaseModel):
+    name: str = Field(pattern=r"^[A-Z_][A-Z0-9_]*$", max_length=100, description="Environment variable name")
+    value: str = Field(min_length=1)
+    description: str = Field(default="", max_length=300)
+
+
+class SecretUpdate(BaseModel):
+    value: str | None = None  # empty = keep
+    description: str | None = Field(default=None, max_length=300)
+
+
+class SecretOut(ORM):
+    id: int
+    project_id: int | None
+    name: str
+    description: str
+    updated_at: UTCDateTime
+
+
 # --- agents ---------------------------------------------------------------------------------
 
 

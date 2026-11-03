@@ -33,6 +33,7 @@ class Credentials(BaseModel):
     github_token: str | None = None
     git_author_name: str = "PlainBoard Agent"
     git_author_email: str = "agent@plainboard.local"
+    secrets: dict[str, str] = Field(default_factory=dict)  # user-defined environment variables
 
 
 class RepoSpec(BaseModel):

@@ -8,6 +8,7 @@ import { checks, qk, useMeta, useSettings } from "../../api/queries";
 import type { CheckResult } from "../../api/types";
 import { Button, ErrorText, Field, Input, Modal, Select } from "../../components/ui";
 import { ModelSelect } from "../team/AgentEditor";
+import { SecretsEditor } from "./SecretsEditor";
 
 export function CheckBadge({ result }: { result: CheckResult | null }) {
   if (!result) return null;
@@ -167,6 +168,10 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
             </Button>
             <CheckBadge result={githubCheck} />
           </div>
+        </Section>
+
+        <Section title={t("secrets.title")} description={t("secrets.globalHint")}>
+          <SecretsEditor projectId={null} />
         </Section>
 
         <Section title={t("settings.defaults")} description={t("settings.defaultsHint")}>

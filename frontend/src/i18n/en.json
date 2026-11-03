@@ -449,5 +449,18 @@
     "archivedOn": "Archived on {{date}}",
     "restore": "Restore",
     "hintManual": "Archive done tickets with the button on the Done column. Open one to restore it."
+  },
+  "secrets": {
+    "title": "Secrets",
+    "globalHint": "Environment variables for all agents, e.g. tokens for CLI tools. Agents see the names and descriptions, never the values, which are hidden in chats and logs.",
+    "projectHint": "Only for this project's agents. A secret with the same name as a global one replaces it here.",
+    "value": "Value",
+    "newValue": "New value",
+    "description": "What it is for (agents see this)",
+    "add": "Add secret",
+    "replace": "Replace value",
+    "delete": "Delete secret",
+    "confirmDelete": "Delete secret {{name}}?",
+    "updated": "updated {{when}}"
   }
 }

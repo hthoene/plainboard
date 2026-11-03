@@ -22,6 +22,7 @@ from ..schemas import MessageOut
 from ..services import agents as agent_service
 from ..services import notes as notes_service
 from ..services import repositories as repo_service
+from ..services import secrets as secret_service
 from ..services import settings as settings_service
 from ..services.util import truncate
 from . import prompts
@@ -89,6 +90,7 @@ class ContextManager:
         workspace = workspace_path(project, agent)
         project_repos = await repo_service.list_for_project(session, project.id)
         repos_by_agent = {a.id: [r.name for r in repo_service.accessible(a, project_repos)] for a in team} if project_repos else None
+        secrets = [(s.name, s.description) for s in await secret_service.effective(session, project.id)]
 
         def sections() -> dict[str, str]:
             return prompts.system_prompt_sections(
@@ -101,6 +103,7 @@ class ContextManager:
                 my_repos=repo_service.accessible(agent, project_repos),
                 project_repos=project_repos,
                 repos_by_agent=repos_by_agent,
+                secrets=secrets,
             )
 
         if conv.provider_session_id and not conv.system_prompt:

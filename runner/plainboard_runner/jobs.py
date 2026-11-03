@@ -17,7 +17,7 @@ from pathlib import Path
 from plainboard_protocol import JobSpec, JobState, WorkspaceSpec
 
 from .config import JOBS_ROOT
-from .workspace import git_env, resolve_workspace
+from .workspace import resolve_workspace, tool_env
 
 log = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ async def start(spec: JobSpec) -> JobState:
             "-c",
             spec.command,
             cwd=str(cwd),
-            env={**os.environ, **git_env(spec.credentials)},
+            env={**os.environ, **tool_env(spec.credentials)},
             stdin=asyncio.subprocess.DEVNULL,
             stdout=out,
             stderr=asyncio.subprocess.STDOUT,

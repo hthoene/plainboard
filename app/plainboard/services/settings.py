@@ -103,7 +103,7 @@ def effective_auth_mode(values: dict[str, Any]) -> str:
     return "runner_login"
 
 
-def credentials(values: dict[str, Any], github_token_override: str | None = None) -> Credentials:
+def credentials(values: dict[str, Any], github_token_override: str | None = None, secrets: dict[str, str] | None = None) -> Credentials:
     return Credentials(
         claude_auth_mode=effective_auth_mode(values),
         claude_oauth_token=values.get("claude_oauth_token"),
@@ -112,4 +112,5 @@ def credentials(values: dict[str, Any], github_token_override: str | None = None
         github_token=github_token_override or values.get("github_token"),
         git_author_name=values.get("git_author_name") or "PlainBoard Agent",
         git_author_email=values.get("git_author_email") or "agent@plainboard.local",
+        secrets=secrets or {},
     )

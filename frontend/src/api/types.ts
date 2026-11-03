@@ -18,6 +18,14 @@ export interface Project {
   created_at: string;
 }
 
+export interface Secret {
+  id: number;
+  project_id: number | null;
+  name: string;
+  description: string;
+  updated_at: string;
+}
+
 export interface Repository {
   id: number;
   project_id: number;

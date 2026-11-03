@@ -13,6 +13,7 @@ import type {
   Repository,
   Run,
   Schedule,
+  Secret,
   SettingsResponse,
   Stats,
   Task,
@@ -35,6 +36,7 @@ export const qk = {
   schedules: (pid: number) => ["schedules", pid] as const,
   mcp: (pid: number) => ["mcp", pid] as const,
   repos: (pid: number) => ["repos", pid] as const,
+  secrets: (pid: number | null) => ["secrets", pid ?? "global"] as const,
   stats: (pid: number, days: number) => ["stats", pid, days] as const,
 };
 
@@ -46,6 +48,8 @@ export interface AuthStatus {
 export const useAuth = () => useQuery({ queryKey: qk.auth, queryFn: () => api.get<AuthStatus>("/auth/status") });
 export const useMeta = () => useQuery({ queryKey: qk.meta, queryFn: () => api.get<Meta>("/meta"), staleTime: 60_000 });
 export const useSettings = () => useQuery({ queryKey: qk.settings, queryFn: () => api.get<SettingsResponse>("/settings") });
+export const useSecrets = (pid: number | null) =>
+  useQuery({ queryKey: qk.secrets(pid), queryFn: () => api.get<Secret[]>(pid === null ? "/secrets" : `/projects/${pid}/secrets`) });
 export const useProjects = () => useQuery({ queryKey: qk.projects, queryFn: () => api.get<Project[]>("/projects") });
 export const useAgents = (pid: number) =>
   useQuery({ queryKey: qk.agents(pid), queryFn: () => api.get<Agent[]>(`/projects/${pid}/agents`) });

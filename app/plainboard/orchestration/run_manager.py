@@ -16,6 +16,7 @@ import json
 import logging
 import secrets
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from plainboard_protocol import JobSpec, JobState, ResultEvent, RunSpec, ToolBridgeSpec, ToolCallResult, WorkspaceSpec
@@ -49,6 +50,7 @@ from ..services import jobs as job_service
 from ..services import mcp as mcp_service
 from ..services import projects as project_service
 from ..services import repositories as repo_service
+from ..services import secrets as secret_service
 from ..services import limits as limits_service
 from ..services import settings as settings_service
 from ..services.errors import ServiceError
@@ -72,6 +74,7 @@ class RunContext:
     project_id: int
     agent_id: int
     token: str
+    redact: Callable[[str], str] = lambda text: text  # hides secret values in what is stored and shown
 
 
 @dataclass
@@ -533,7 +536,10 @@ class RunManager:
                 message.meta = {**message.meta, "briefing_update": turn.briefing_changes}
                 await s.commit()
                 bus.publish(project.id, "message.updated", MessageOut.model_validate(message))
-            ctx = RunContext(run_id=run.id, project_id=project.id, agent_id=agent.id, token=secrets.token_urlsafe(32))
+            secret_env = secret_service.env(await secret_service.effective(s, project.id))
+            ctx = RunContext(
+                run_id=run.id, project_id=project.id, agent_id=agent.id, token=secrets.token_urlsafe(32), redact=secret_service.redactor(secret_env)
+            )
             self._tokens[ctx.token] = ctx
             spec = RunSpec(
                 run_id=str(run.id),
@@ -551,7 +557,7 @@ class RunManager:
                     shared=bool(project.workspace_path),
                     setup_script=project.setup_script,
                 ),
-                credentials=settings_service.credentials(values, project_service.github_token(project)),
+                credentials=settings_service.credentials(values, project_service.github_token(project), secret_env),
                 bridge=ToolBridgeSpec(
                     base_url=get_config().internal_url, run_id=str(run.id), run_token=ctx.token, tools=registry.tool_defs_for(agent)
                 ),
@@ -567,21 +573,21 @@ class RunManager:
             base = {"agent_id": ctx.agent_id, "conversation_id": conv.id, "run_id": ctx.run_id}
             async for event in self.runner.stream_run(spec):
                 if event.type == "text_delta":
-                    bus.publish(ctx.project_id, "message.delta", {**base, "text": event.text})
+                    bus.publish(ctx.project_id, "message.delta", {**base, "text": ctx.redact(event.text)})
                 elif event.type == "session":
                     conv.provider_session_id = event.session_id
                     await s.commit()
                 elif event.type == "assistant_text":
                     outcome.last_text = event.text
-                    await self._add_message(s, ctx, conv.id, role="assistant", kind="text", content=event.text)
+                    await self._add_message(s, ctx, conv.id, role="assistant", kind="text", content=ctx.redact(event.text))
                 elif event.type == "tool_use":
-                    meta = {"name": event.name, "tool_use_id": event.id, "input": truncate(json.dumps(event.input, ensure_ascii=False), 1500)}
+                    meta = {"name": event.name, "tool_use_id": event.id, "input": truncate(ctx.redact(json.dumps(event.input, ensure_ascii=False)), 1500)}
                     msg = await self._add_message(s, ctx, conv.id, role="assistant", kind="tool", content=event.name, meta=meta)
                     outcome.tool_messages[event.id] = msg.id
                 elif event.type == "tool_result":
                     msg_id = outcome.tool_messages.get(event.tool_use_id)
                     if msg_id and (msg := await s.get(Message, msg_id)):
-                        msg.meta = {**msg.meta, "result": event.content, "is_error": event.is_error}
+                        msg.meta = {**msg.meta, "result": ctx.redact(event.content), "is_error": event.is_error}
                         await s.commit()
                         bus.publish(ctx.project_id, "message.updated", MessageOut.model_validate(msg))
                 elif event.type == "usage":
@@ -751,7 +757,9 @@ class RunManager:
             id=secrets.token_hex(8),
             command=command,
             workspace=workspace_path(project, agent),
-            credentials=settings_service.credentials(values, project_service.github_token(project)),
+            credentials=settings_service.credentials(
+                values, project_service.github_token(project), secret_service.env(await secret_service.effective(s, project.id))
+            ),
         )
         try:
             state = await self.runner.start_job(spec)
@@ -779,7 +787,8 @@ class RunManager:
             text = f"{job_service.label(job)} was lost because its container restarted, and may be half done. Check its state and start it again if needed. Log: {job.log_path}"
         else:
             await job_service.finish(s, job, JobStatus.SUCCEEDED if state.exit_code == 0 else JobStatus.FAILED, state.exit_code)
-            text = f"{job_service.label(job)} finished with exit code {state.exit_code}. Log: {job.log_path}\nLast output:\n{state.tail}"
+            redact = secret_service.redactor(secret_service.env(await secret_service.effective(s, job.project_id)))
+            text = f"{job_service.label(job)} finished with exit code {state.exit_code}. Log: {job.log_path}\nLast output:\n{redact(state.tail)}"
         await inbox.push(s, job.agent_id, text)
         if project:
             await self._maybe_wake(s, project, job.agent_id)

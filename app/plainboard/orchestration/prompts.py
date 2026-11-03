@@ -183,10 +183,11 @@ def system_prompt(
     my_repos: list[Repository] | None = None,
     project_repos: list[Repository] | None = None,
     repos_by_agent: dict[int, list[str]] | None = None,
+    secrets: list[tuple[str, str]] | None = None,
 ) -> str:
     return join_sections(
         system_prompt_sections(
-            project, agent, team, pinned, workspace, memory, my_repos=my_repos, project_repos=project_repos, repos_by_agent=repos_by_agent
+            project, agent, team, pinned, workspace, memory, my_repos=my_repos, project_repos=project_repos, repos_by_agent=repos_by_agent, secrets=secrets
         )
     )
 
@@ -198,6 +199,7 @@ SECTION_TITLES = {
     "environment": "Environment",
     "repositories": "Your repositories",
     "project_repositories": "Project repositories",
+    "secrets": "Secrets",
     "instructions": "Instructions",
     "team": "Team",
     "pinned_notes": "Pinned notes",
@@ -216,6 +218,7 @@ def system_prompt_sections(
     my_repos: list[Repository] | None = None,
     project_repos: list[Repository] | None = None,
     repos_by_agent: dict[int, list[str]] | None = None,
+    secrets: list[tuple[str, str]] | None = None,
 ) -> dict[str, str]:
     """The system prompt as named sections (ordered), so changes can be detected per section."""
     my_repos = my_repos or []
@@ -241,6 +244,12 @@ def system_prompt_sections(
     if agent.is_manager and project_repos:
         lines = [f"- {r.name}: {r.url}" + (f" — {truncate(r.description, 140)}" if r.description else "") for r in project_repos]
         sections["project_repositories"] = "## Project repositories\n" + "\n".join(lines)
+    if secrets:
+        lines = [f"- {name}" + (f": {about}" if about else "") for name, about in secrets]
+        sections["secrets"] = (
+            "## Secrets\nSet as environment variables in your shell, jobs and the setup script. Use them by name "
+            "(e.g. $NAME); never print, log or commit their values.\n" + "\n".join(lines)
+        )
     if agent.instructions:
         sections["instructions"] = f"## Instructions\n{agent.instructions}"
     sections["team"] = f"## Team\n{team_roster(team, agent, repos_by_agent)}"

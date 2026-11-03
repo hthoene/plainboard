@@ -507,7 +507,7 @@ def test_manager_tools_manage_notes_schedules_agents(client, project):
         'TOOL create_agent {"name": "QA", "role": "Tester", "description": "Testing", "model": "claude-haiku-5-5"}',
         'TOOL create_note {"title": "Stack", "content": "FastAPI + React", "pinned": true}',
         'TOOL create_schedule {"name": "Standup", "prompt": "Summarize progress", "cron": "0 9 * * 1-5"}',
-        'TOOL create_task {"title": "Follow-up", "status": "todo"}',
+        'TOOL create_tasks {"tickets": [{"title": "Follow-up", "status": "todo"}]}',
         'TOOL update_task {"number": 1, "status": "review"}',
     ]
     chat(client, manager["id"], "\n".join(lines))
@@ -818,6 +818,32 @@ def test_manager_marks_and_sorts_the_board(client, project):
     assert "Test it on a phone" in client.get(f"/api/tasks/{tickets[0]['id']}").json()["comments"][-1]["body"]
     wait_for(lambda: idle(client, pid))
     assert 'User finished "Test it on a phone" on ticket #1: works' in runner(client).specs[-1].prompt
+
+
+def test_manager_handles_tickets_in_batches(client, project):
+    pid = project["id"]
+    manager = agents_by_slug(client, pid)["manager"]
+    tickets = [{"title": f"T{i}", "labels": ["bug"] if i % 2 else []} for i in range(1, 6)]
+    chat(
+        client,
+        manager["id"],
+        f"TOOL create_tasks {json.dumps({'tickets': tickets})}\n"
+        'TOOL update_tasks {"numbers": [1, 3, 5, 9], "status": "todo", "priority": "high", "add_labels": ["ui"], "remove_labels": ["BUG"]}\n'
+        'TOOL list_tasks {"label": "ui", "limit": 2}\n'
+        'TOOL list_tasks {"priority": "high", "offset": 5}\n'
+        'TOOL update_tasks {"numbers": [2]}\n'
+        'TOOL delete_tasks {"numbers": [2, 4]}',
+    )
+    wait_for(lambda: idle(client, pid))
+    said = conversation(client, manager["id"])["messages"][-1]["content"].split(" | ")
+    assert said[0] == "Created #1, #2, #3, #4, #5."
+    assert said[1] == "Updated #1, #3, #5. Not found: #9."
+    assert said[2].endswith("(showing 1-2 of 3)") and said[2].count("[todo] (high)") == 2
+    assert said[3] == "No tickets at offset 5 (3 match)."
+    assert said[4] == "Nothing to change."
+    assert said[5] == "Deleted #2, #4."
+    board = client.get(f"/api/projects/{pid}/tasks").json()
+    assert [(t["number"], t["status"], t["labels"]) for t in board] == [(1, "todo", ["ui"]), (3, "todo", ["ui"]), (5, "todo", ["ui"])]
 
 
 def test_workers_cannot_sort_or_color(client, project):

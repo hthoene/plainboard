@@ -41,12 +41,14 @@ How work flows:
 - If something needs a human rather than an answer (e.g. testing on a real device), set user_action
   with update_task: one plain sentence in the user's language. The ticket stays highlighted until the
   user marks it done, and that arrives as an update.
+- For many tickets at once use the batch tools: update_tasks (move, priority, labels), create_tasks,
+  delete_tasks; list_tasks filters by status, priority, label and text.
 - Keep the board readable: sort_tickets puts a column in priority order, top first; color_label gives a
   label one color across the board. Use few colors, each with a clear meaning.
 - Keep questions for the user simple: one short question in plain words, no jargon or internal names,
   what each choice means for them, few options with short labels, your recommendation first.
 - Customer texts are public, e.g. on the project's website. If a ticket matters to the product's end
-  users, set them with create_task or update_task, in simple words and the user's language:
+  users, set them with create_tasks or update_task, in simple words and the user's language:
   customer_title says clearly what the point is, even if that takes a few more words;
   customer_description adds one or two short sentences on what they get. No internal names, technical
   details or security issues. Tickets that don't matter to them stay without a customer title, and

@@ -11,13 +11,16 @@ from ..services import board as board_service
 from ..services import decisions as decision_service
 from ..services import projects as project_service
 from ..services.util import truncate
-from .registry import ALL, MANAGER, ToolContext, local_tool, tool
+from .registry import ALL, MANAGER, ToolContext, ToolError, local_tool, tool
 
 
 class ListTasksArgs(BaseModel):
     status: Status | None = None
+    priority: Priority | None = None
+    label: str | None = None
     query: str | None = Field(default=None, description="Text search in title/description")
     limit: int = Field(default=50, ge=1, le=200)
+    offset: int = Field(default=0, ge=0)
 
 
 class TicketRef(BaseModel):
@@ -32,6 +35,21 @@ class CreateTaskArgs(BaseModel):
     status: Status = "backlog"
     priority: Priority = "medium"
     labels: list[str] = Field(default_factory=list)
+
+
+class CreateTasksArgs(BaseModel):
+    tickets: list[CreateTaskArgs] = Field(min_length=1, max_length=50)
+
+
+class TicketNumbers(BaseModel):
+    numbers: list[int] = Field(min_length=1, max_length=200, description="Ticket numbers")
+
+
+class UpdateTasksArgs(TicketNumbers):
+    status: Status | None = None
+    priority: Priority | None = None
+    add_labels: list[str] = Field(default_factory=list)
+    remove_labels: list[str] = Field(default_factory=list)
 
 
 class UpdateTaskArgs(BaseModel):
@@ -87,19 +105,30 @@ def ticket_line(task: Task) -> str:
     return f"#{task.number} [{task.status}] ({task.priority}) {task.title}{labels}{waiting}"
 
 
-@tool("list_tasks", "List tickets on the board (compact). Filter by status or text.", ListTasksArgs)
+def numbers_text(tasks: list[Task]) -> str:
+    return ", ".join(f"#{t.number}" for t in tasks)
+
+
+@tool("list_tasks", "List tickets on the board (compact). Filter by status, priority, label or text.", ListTasksArgs)
 async def list_tasks(ctx: ToolContext, args: ListTasksArgs) -> str:
-    tasks = await board_service.list_tasks(ctx.session, ctx.project.id, status=args.status, query=args.query, limit=args.limit)
-    return "\n".join(ticket_line(t) for t in tasks) or "No tickets."
+    tasks = await board_service.list_tasks(ctx.session, ctx.project.id, status=args.status, priority=args.priority, label=args.label, query=args.query)
+    page = tasks[args.offset : args.offset + args.limit]
+    if not page:
+        return f"No tickets at offset {args.offset} ({len(tasks)} match)." if tasks else "No tickets."
+    text = "\n".join(ticket_line(t) for t in page)
+    if len(page) < len(tasks):
+        text += f"\n(showing {args.offset + 1}-{args.offset + len(page)} of {len(tasks)})"
+    return text
 
 
 @tool("get_board_summary", "Ticket counts per status plus all open tickets.")
 async def get_board_summary(ctx: ToolContext, _args) -> str:
     rows = (await ctx.session.execute(select(Task.status, func.count()).where(Task.project_id == ctx.project.id).group_by(Task.status))).all()
     counts = ", ".join(f"{status}: {n}" for status, n in rows) or "empty board"
-    open_tasks = [t for t in await board_service.list_tasks(ctx.session, ctx.project.id) if t.status != "done"][:40]
+    open_tasks = [t for t in await board_service.list_tasks(ctx.session, ctx.project.id) if t.status != "done"]
     colors = ", ".join(f"{label}={color}" for label, color in ctx.project.label_colors.items())
-    return f"Counts: {counts}\n" + (f"Label colors: {colors}\n" if colors else "") + "\n".join(ticket_line(t) for t in open_tasks)
+    more = f"\n(+{len(open_tasks) - 40} more open: list_tasks)" if len(open_tasks) > 40 else ""
+    return f"Counts: {counts}\n" + (f"Label colors: {colors}\n" if colors else "") + "\n".join(ticket_line(t) for t in open_tasks[:40]) + more
 
 
 @tool("get_task", "Full ticket: description, attachments (paths), recent comments, assignments.", TicketRef)
@@ -112,10 +141,11 @@ async def get_task(ctx: ToolContext, args: TicketRef) -> str:
     return text
 
 
-@tool("create_task", "Create a ticket (e.g. a follow-up you discovered). Lands in backlog unless status given.", CreateTaskArgs)
-async def create_task(ctx: ToolContext, args: CreateTaskArgs) -> str:
-    task = await board_service.create_task(ctx.session, ctx.project.id, TaskCreate(**args.model_dump()), by_agent_id=ctx.agent.id)
-    return f"Created ticket #{task.number}."
+@tool("create_tasks", "Create one or more tickets (e.g. follow-ups you discovered). They land in backlog unless status given.", CreateTasksArgs)
+async def create_tasks(ctx: ToolContext, args: CreateTasksArgs) -> str:
+    items = [TaskCreate(**t.model_dump()) for t in args.tickets]
+    tasks = await board_service.create_tasks(ctx.session, ctx.project.id, items, by_agent_id=ctx.agent.id)
+    return f"Created {numbers_text(tasks)}."
 
 
 @tool("update_task", "Update ticket fields or move it to another status.", UpdateTaskArgs, roles=(MANAGER,))
@@ -124,6 +154,18 @@ async def update_task(ctx: ToolContext, args: UpdateTaskArgs) -> str:
     fields = args.model_dump(exclude_unset=True, exclude={"number"})
     task, _ = await board_service.update_task(ctx.session, task, TaskUpdate(**fields))
     return f"Updated: {ticket_line(task)}"
+
+
+@tool("update_tasks", "Apply the same change to many tickets at once: move, set priority, add/remove labels.", UpdateTasksArgs, roles=(MANAGER,))
+async def update_tasks(ctx: ToolContext, args: UpdateTasksArgs) -> str:
+    fields = args.model_dump(exclude_unset=True, exclude={"numbers", "add_labels", "remove_labels"})
+    if not fields and not args.add_labels and not args.remove_labels:
+        raise ToolError("Nothing to change.")
+    tasks, missing = await board_service.update_tasks(
+        ctx.session, ctx.project.id, args.numbers, TaskUpdate(**fields), add_labels=args.add_labels, remove_labels=args.remove_labels
+    )
+    text = f"Updated {numbers_text(tasks)}." if tasks else "Nothing updated."
+    return text + (f" Not found: {', '.join(f'#{n}' for n in missing)}." if missing else "")
 
 
 @tool("sort_tickets", "Set the order of tickets within a board column.", SortTicketsArgs, roles=(MANAGER,))
@@ -138,11 +180,12 @@ async def color_label(ctx: ToolContext, args: ColorLabelArgs) -> str:
     return f"Label {args.label}: {args.color or 'default'}."
 
 
-@tool("delete_task", "Delete a ticket permanently.", TicketRef, roles=(MANAGER,))
-async def delete_task(ctx: ToolContext, args: TicketRef) -> str:
-    task = await board_service.get_task_by_number(ctx.session, ctx.project.id, args.number)
-    await board_service.delete_task(ctx.session, task)
-    return f"Deleted ticket #{args.number}."
+@tool("delete_tasks", "Delete tickets permanently.", TicketNumbers, roles=(MANAGER,))
+async def delete_tasks(ctx: ToolContext, args: TicketNumbers) -> str:
+    tasks = await board_service.get_tasks_by_number(ctx.session, ctx.project.id, args.numbers)
+    text = numbers_text(tasks)
+    await board_service.delete_tasks(ctx.session, tasks)
+    return f"Deleted {text}."
 
 
 @tool("add_comment", "Comment on a ticket (visible to the user).", CommentArgs, roles=ALL)

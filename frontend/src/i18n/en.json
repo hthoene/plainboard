@@ -447,6 +447,7 @@
     "more": "{{count}} more: refine the search.",
     "archiveDone": "Archive all done tickets now",
     "archivedOn": "Archived on {{date}}",
-    "restore": "Restore"
+    "restore": "Restore",
+    "hintManual": "Archive done tickets with the button on the Done column. Open one to restore it."
   }
 }

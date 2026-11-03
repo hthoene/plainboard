@@ -25,7 +25,7 @@ export function ArchiveDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <Modal open onClose={onClose} title={t("archive.title")}>
-      <p className="mb-3 text-xs text-zinc-500">{t("archive.hint", { days: project.auto_archive_days })}</p>
+      <p className="mb-3 text-xs text-zinc-500">{project.auto_archive_days ? t("archive.hint", { days: project.auto_archive_days }) : t("archive.hintManual")}</p>
       <div className="relative mb-3">
         <Search className="pointer-events-none absolute top-2 left-2.5 size-4 text-zinc-400" />
         <Input autoFocus className="pl-8" placeholder={t("board.filter")} value={filter} onChange={(e) => setFilter(e.target.value)} />

@@ -784,11 +784,12 @@ def test_runs_report_plan_limits(client, project):
     client.put("/api/settings", json={"values": {"claude_auth_mode": "oauth_token"}})
     dev = make_dev(client, pid)
     assert client.get("/api/limits").json()["windows"] == []
-    chat(client, dev["id"], "LIMITS five_hour 0.4 3600\nLIMITS seven_day 0.7 -10")
+    chat(client, dev["id"], "LIMITS five_hour 0.9 3600\nLIMITS seven_day_opus 0.4 3600\nLIMITS seven_day 0.7 -10")
     wait_for(lambda: idle(client, pid))
     body = client.get("/api/limits").json()
     used = {w["name"]: w["utilization"] for w in body["windows"]}
-    assert used == {"five_hour": 0.4, "seven_day": 0.0} and body["updated_at"]  # the weekly window has reset
+    # The weekly window has reset; Claude's old 5-hour window is not shown any more.
+    assert used == {"seven_day_opus": 0.4, "seven_day": 0.0} and body["updated_at"]
     client.put("/api/settings", json={"values": {"claude_auth_mode": "api_key"}})
     body = client.get("/api/limits").json()
     assert body["windows"] == [] and body["available"] is False

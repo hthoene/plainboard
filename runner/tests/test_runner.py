@@ -455,7 +455,8 @@ def test_rate_limit_events_become_limit_windows():
 
     raw = {"unifiedWindows": {"five_hour": {"utilization": 0.4, "resetsAt": 100}, "seven_day": {"utilization": 0.1, "resetsAt": 200}}}
     windows = limit_windows(RateLimitInfo(status="allowed", raw=raw))
-    assert [(w.name, w.utilization, w.resets_at) for w in windows] == [("five_hour", 0.4, 100), ("seven_day", 0.1, 200)]
+    assert [(w.name, w.utilization, w.resets_at) for w in windows] == [("seven_day", 0.1, 200)]  # Claude has no 5-hour limit any more
+    assert limit_windows(RateLimitInfo(status="rejected", rate_limit_type="five_hour", resets_at=5)) == []
     hit = limit_windows(RateLimitInfo(status="rejected", rate_limit_type="seven_day", resets_at=5))
     assert [(w.name, w.utilization, w.status) for w in hit] == [("seven_day", 1.0, "rejected")]
     assert limit_windows(RateLimitInfo(status="allowed")) == []
@@ -467,7 +468,12 @@ def test_usage_answer_becomes_limit_windows():
 
     from plainboard_runner.providers.claude_code import usage_windows
 
-    answer = {"five_hour": {"utilization": 40.0, "resets_at": "2026-10-30T12:00:00+00:00"}, "seven_day": {"utilization": None, "resets_at": None}, "seven_day_opus": None}
+    answer = {
+        "five_hour": {"utilization": 10.0, "resets_at": None},
+        "seven_day": {"utilization": 40.0, "resets_at": "2026-10-30T12:00:00+00:00"},
+        "seven_day_sonnet": {"utilization": None, "resets_at": None},
+        "seven_day_opus": None,
+    }
     (window,) = usage_windows(answer)
-    assert (window.name, window.utilization, window.resets_at) == ("five_hour", 0.4, int(datetime(2026, 10, 30, 12, tzinfo=UTC).timestamp()))
+    assert (window.name, window.utilization, window.resets_at) == ("seven_day", 0.4, int(datetime(2026, 10, 30, 12, tzinfo=UTC).timestamp()))
     assert usage_windows(None) == []

@@ -1,6 +1,6 @@
 """The plan limits of the signed-in subscriptions as last reported. Reading them costs no tokens.
 
-Window names: Claude's as it reports them (five_hour, seven_day ...), Codex's prefixed with codex_.
+Window names: Claude's as it reports them (seven_day, seven_day_opus ...), Codex's prefixed with codex_.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ KEY = "provider_limits"
 DAY = 86400
 WEEKLY_MARK = "seven_day"
 CODEX_PREFIX = "codex_"
+RETIRED = {"five_hour"}  # Claude dropped its 5-hour limit; a window stored from before is not shown
 WEEK_DAYS = 7
 MIN_HISTORY_DAYS = 3
 TIGHT_ABOVE = 0.9
@@ -93,6 +94,8 @@ async def record(session: AsyncSession, windows: list[LimitWindow]) -> None:
         if WEEKLY_MARK in window.name:
             track_growth(growth, window, known.get(window.name), now)
     known.update({w.name: w.model_dump() for w in windows})
+    for name in RETIRED:
+        known.pop(name, None)
     row.value = json.dumps({"windows": known, "growth": growth, "updated_at": int(now)})
     session.add(row)
     await session.commit()
@@ -108,7 +111,7 @@ async def current(session: AsyncSession) -> LimitsOut:
     windows = [
         LimitWindow(**w)
         for w in stored["windows"].values()
-        if not (codex_key if w["name"].startswith(CODEX_PREFIX) else claude_key)
+        if w["name"] not in RETIRED and not (codex_key if w["name"].startswith(CODEX_PREFIX) else claude_key)
     ]
     if not windows:
         return LimitsOut(available=not claude_key)

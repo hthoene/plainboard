@@ -73,6 +73,8 @@ MODELS = [
     ModelInfo(id="claude-fable-5-1", label="Claude Fable 5.1", tier="xlarge"),
 ]
 EFFORTS = ["low", "medium", "high", "xhigh", "max"]
+# Claude no longer has a 5-hour limit; a report of it is ignored.
+RETIRED_WINDOWS = {"five_hour"}
 
 
 def auth_env(creds: Credentials) -> dict[str, str]:
@@ -154,10 +156,11 @@ def limit_windows(info: RateLimitInfo) -> list[LimitWindow]:
     windows = {
         name: LimitWindow(name=name, utilization=window["utilization"], resets_at=window.get("resetsAt"), status=window.get("status"))
         for name, window in (info.raw.get("unifiedWindows") or {}).items()
+        if name not in RETIRED_WINDOWS
     }
     kind = info.rate_limit_type
     known = info.utilization is not None or info.status == "rejected"
-    if kind and kind != "overage" and kind not in windows and known:
+    if kind and kind != "overage" and kind not in RETIRED_WINDOWS and kind not in windows and known:
         used = info.utilization if info.utilization is not None else 1.0
         windows[kind] = LimitWindow(name=kind, utilization=used, resets_at=info.resets_at, status=info.status)
     return list(windows.values())
@@ -166,7 +169,7 @@ def limit_windows(info: RateLimitInfo) -> list[LimitWindow]:
 def usage_windows(rate_limits: dict[str, Any] | None) -> list[LimitWindow]:
     """Limit windows from Claude Code's usage answer, which has percentages and ISO dates."""
     windows = []
-    for name in ("five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet"):
+    for name in ("seven_day", "seven_day_opus", "seven_day_sonnet"):
         window = (rate_limits or {}).get(name) or {}
         if window.get("utilization") is not None:
             resets = window.get("resets_at")

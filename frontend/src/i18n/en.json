@@ -220,7 +220,6 @@
     },
     "limits": {
       "ring": "Plan limit {{percent}}% used",
-      "five_hour": "5-hour limit",
       "seven_day": "Weekly limit",
       "seven_day_opus": "Weekly limit (Opus)",
       "seven_day_sonnet": "Weekly limit (Sonnet)",
@@ -241,7 +240,7 @@
         "basisWeek": "Based on this week so far"
       },
       "unknown": "No usage known yet. It appears after the next agent turn at the latest.",
-      "noPlan": "You are signed in with an API key, which has no 5-hour or weekly limit. Switch to your subscription in Settings to see them here."
+      "noPlan": "You are signed in with an API key, which has no plan limits. Switch to your subscription in Settings to see them here."
     },
     "menu": "Conversation options",
     "compressNow": "Compress context now",

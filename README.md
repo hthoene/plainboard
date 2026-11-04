@@ -49,8 +49,11 @@ Open <http://localhost:8080>, then:
 1. **Settings → Claude**: paste an [Anthropic API key](https://console.anthropic.com/) and click
    **Test connection**. Alternatively you can use your own Claude login (a token from
    `claude setup-token`, or `claude login` inside the runner container) – see *Notes* below.
-2. Optional, **Settings → GitHub**: paste a fine-grained personal access token.
-3. Create a project, describe what you want in the manager chat, or add tickets and move them to
+2. Optional, **Settings → Codex**: sign in with your ChatGPT subscription (a device code you enter
+   on chatgpt.com) or paste an OpenAI API key. Then pick **Codex** as the provider of the agents that
+   should run on it; the others stay on Claude.
+3. Optional, **Settings → GitHub**: paste a fine-grained personal access token.
+4. Create a project, describe what you want in the manager chat, or add tickets and move them to
    **In Progress**.
 
 Optional configuration: copy `.env.example` to `.env` (port, password, workspace folder, credential
@@ -146,7 +149,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the design and extension points.
 - **Claude login vs. API key:** an Anthropic API key is the officially supported way to use the Claude
   Agent SDK. PlainBoard also lets you use your own Claude login (like other open-source agent
   orchestrators do); whether that is permitted depends on Anthropic's terms for your plan – check them
-  before relying on it. PlainBoard is not affiliated with Anthropic.
+  before relying on it. The same applies to a ChatGPT subscription for Codex and OpenAI's terms.
+  PlainBoard is not affiliated with Anthropic or OpenAI.
 - Secrets (tokens, MCP env/headers) are encrypted at rest with a key generated in the `data` volume.
 
 ## License

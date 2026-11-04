@@ -6,7 +6,7 @@ import time
 from collections.abc import AsyncIterator
 
 import httpx
-from plainboard_protocol import CheckResult, CompletionResult, CompletionSpec, Credentials, JobSpec, JobState, LimitWindow, ProviderInfo, RunEvent, RunSpec, parse_event
+from plainboard_protocol import CheckResult, CompletionResult, CompletionSpec, Credentials, JobSpec, JobState, LimitWindow, ProviderAccount, ProviderInfo, RunEvent, RunSpec, parse_event
 
 
 class RunnerError(RuntimeError):
@@ -92,6 +92,19 @@ class RunnerClient:
         providers = [ProviderInfo.model_validate(p) for p in resp.json()]
         self._providers = (time.monotonic(), providers)
         return providers
+
+    async def provider_account(self, provider: str, action: str | None = None) -> ProviderAccount:
+        """The subscription signed in on the runner; ``action`` "login" or "logout" changes it first."""
+        try:
+            if action:
+                resp = await self._client.post(f"/providers/{provider}/{action}", timeout=60)
+            else:
+                resp = await self._client.get(f"/providers/{provider}/account", timeout=60)
+        except httpx.HTTPError as exc:
+            raise RunnerError(f"Runner unreachable: {exc}") from exc
+        if resp.status_code >= 400:
+            raise RunnerError(resp.json().get("detail", resp.text)[:1000] if resp.headers.get("content-type", "").startswith("application/json") else resp.text[:1000])
+        return ProviderAccount.model_validate(resp.json())
 
     async def check_provider(self, spec: CompletionSpec) -> CheckResult:
         try:

@@ -98,7 +98,7 @@ export function useApiMutation<TVars, TResult = unknown>(
 }
 
 export const checks = {
-  provider: (provider = "claude_code") => api.post<CheckResult>("/settings/check/provider", { provider }),
+  provider: (provider = "claude_code", model?: string) => api.post<CheckResult>("/settings/check/provider", { provider, model }),
   github: (token?: string) => api.post<CheckResult>("/settings/check/github", token ? { token } : {}),
   projectGithub: (pid: number) => api.post<CheckResult>(`/projects/${pid}/check-github`),
 };

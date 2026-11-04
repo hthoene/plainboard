@@ -8,6 +8,7 @@ so new providers or services can reuse it.
 from .models import (
     AssistantTextEvent,
     CheckResult,
+    ProviderAccount,
     CompactionEvent,
     CompletionResult,
     CompletionSpec,
@@ -40,6 +41,7 @@ from .models import (
 __all__ = [
     "AssistantTextEvent",
     "CheckResult",
+    "ProviderAccount",
     "CompactionEvent",
     "CompletionResult",
     "CompletionSpec",

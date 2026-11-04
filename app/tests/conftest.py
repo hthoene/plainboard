@@ -110,7 +110,18 @@ class FakeRunner:
         return bool(job and job.running)
 
     async def providers(self) -> list[ProviderInfo]:
-        return [ProviderInfo(name="claude_code", label="Claude Code", models=[ModelInfo(id="claude-sonnet-5-5", label="Sonnet")])]
+        return [
+            ProviderInfo(
+                name="claude_code",
+                label="Claude Code",
+                models=[ModelInfo(id="claude-sonnet-5-5", label="Sonnet", tier="medium"), ModelInfo(id="claude-haiku-5-5", label="Haiku", tier="small")],
+            ),
+            ProviderInfo(
+                name="codex",
+                label="Codex",
+                models=[ModelInfo(id="gpt-6.1-sol", label="Sol", tier="large"), ModelInfo(id="gpt-6.1-terra", label="Terra", tier="medium"), ModelInfo(id="gpt-6-luna", label="Luna", tier="small")],
+            ),
+        ]
 
     async def check_provider(self, spec):
         return CheckResult(ok=True, detail="fake")

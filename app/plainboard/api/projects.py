@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter
+from plainboard_protocol import ProviderInfo
 from sqlalchemy import select
 
 from ..models import ACTIVE_RUN_STATUSES, Run
@@ -73,30 +74,30 @@ async def list_agents(project_id: int, session: Session) -> list[AgentOut]:
     return await agent_service.to_out(session, await agent_service.list_for_project(session, project_id))
 
 
-async def _validate_model(runner: Runner, provider: str | None, model: str | None) -> None:
-    if not provider:
-        return
+async def _catalog(runner: Runner, provider: str | None) -> list[ProviderInfo] | None:
+    """The runner's providers, after checking that ``provider`` is one of them. None if the runner is down."""
     try:
-        names = {p.name for p in await runner.providers()}
+        catalog = await runner.providers()
     except RunnerError:
-        return
-    if provider not in names:
+        return None
+    if provider and provider not in {p.name for p in catalog}:
         raise ServiceError(f"Unknown provider '{provider}'")
+    return catalog
 
 
 @router.post("/projects/{project_id}/agents", response_model=AgentOut, status_code=201)
 async def create_agent(project_id: int, body: AgentCreate, session: Session, runner: Runner) -> AgentOut:
     await project_service.get(session, project_id)
-    await _validate_model(runner, body.provider, body.model)
-    agent = await agent_service.create(session, project_id, body)
+    catalog = await _catalog(runner, body.provider)
+    agent = await agent_service.create(session, project_id, body, catalog=catalog)
     (out,) = await agent_service.to_out(session, [agent])
     return out
 
 
 @router.patch("/agents/{agent_id}", response_model=AgentOut)
 async def update_agent(agent_id: int, body: AgentUpdate, session: Session, runner: Runner, runs: Runs) -> AgentOut:
-    await _validate_model(runner, body.provider, body.model)
-    agent = await agent_service.update(session, await agent_service.get(session, agent_id), body)
+    catalog = await _catalog(runner, body.provider)
+    agent = await agent_service.update(session, await agent_service.get(session, agent_id), body, catalog)
     if body.enabled is False:
         await runs.wind_down(session, agent)
     (out,) = await agent_service.to_out(session, [agent])

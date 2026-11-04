@@ -18,6 +18,7 @@ services:
       # purpose, so keys that happen to be exported in your shell are never picked up silently.
       CLAUDE_CODE_OAUTH_TOKEN: ${PLAINBOARD_CLAUDE_CODE_OAUTH_TOKEN:-}
       ANTHROPIC_API_KEY: ${PLAINBOARD_ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${PLAINBOARD_OPENAI_API_KEY:-}
       GITHUB_TOKEN: ${PLAINBOARD_GITHUB_TOKEN:-}
     volumes:
       - data:/data

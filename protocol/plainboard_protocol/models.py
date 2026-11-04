@@ -30,6 +30,8 @@ class Credentials(BaseModel):
     claude_oauth_token: str | None = None
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None
+    # "chatgpt": the ChatGPT subscription signed in on the runner; "api_key": openai_api_key.
+    codex_auth_mode: Literal["chatgpt", "api_key"] = "chatgpt"
     github_token: str | None = None
     git_author_name: str = "PlainBoard Agent"
     git_author_email: str = "agent@plainboard.local"
@@ -114,6 +116,16 @@ class CompletionResult(BaseModel):
 class CheckResult(BaseModel):
     ok: bool
     detail: str
+
+
+class ProviderAccount(BaseModel):
+    """A subscription signed in on the runner, and a sign-in in progress, if any."""
+
+    signed_in: bool = False
+    detail: str = ""  # e.g. the account's email and plan
+    login_url: str | None = None  # device sign-in: open this ...
+    login_code: str | None = None  # ... and enter this code
+    login_error: str | None = None
 
 
 class ToolCallResult(BaseModel):

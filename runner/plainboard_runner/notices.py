@@ -19,6 +19,10 @@ def drain(run_id: str) -> list[str]:
     return _pending.pop(run_id, [])
 
 
+def pending(run_id: str) -> bool:
+    return bool(_pending.get(run_id))
+
+
 def urgent_waiting(run_id: str) -> float:
     """Seconds an urgent message has been waiting to be picked up; 0 if there is none."""
     since = _urgent_since.get(run_id)

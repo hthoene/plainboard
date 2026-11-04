@@ -27,6 +27,7 @@ SETTINGS: dict[str, SettingDef] = {
     "claude_oauth_token": SettingDef(None, secret=True, env="CLAUDE_CODE_OAUTH_TOKEN"),
     "anthropic_api_key": SettingDef(None, secret=True, env="ANTHROPIC_API_KEY"),
     "openai_api_key": SettingDef(None, secret=True, env="OPENAI_API_KEY"),
+    "codex_auth_mode": SettingDef("chatgpt"),  # chatgpt (subscription signed in on the runner) | api_key
     "github_token": SettingDef(None, secret=True, env="GITHUB_TOKEN"),
     "git_author_name": SettingDef("PlainBoard Agent"),
     "git_author_email": SettingDef("agent@plainboard.local"),
@@ -109,6 +110,7 @@ def credentials(values: dict[str, Any], github_token_override: str | None = None
         claude_oauth_token=values.get("claude_oauth_token"),
         anthropic_api_key=values.get("anthropic_api_key"),
         openai_api_key=values.get("openai_api_key"),
+        codex_auth_mode="api_key" if values.get("codex_auth_mode") == "api_key" else "chatgpt",
         github_token=github_token_override or values.get("github_token"),
         git_author_name=values.get("git_author_name") or "PlainBoard Agent",
         git_author_email=values.get("git_author_email") or "agent@plainboard.local",

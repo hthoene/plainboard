@@ -11,7 +11,7 @@
 │        │ POST /runs  (RunSpec → NDJSON RunEvents)      ▲ tool calls       │
 │        ▼                                               │ (per-run token)  │
 │ runner  (internal only; user `agent` with sudo)                          │
-│  providers/      claude_code (Claude Agent SDK) · mock · (openai later)  │
+│  providers/      claude_code (Agent SDK) · codex (app server) · mock     │
 │  tool_bridge.py  proxies tool calls to the app; local tools (files)      │
 │  workspace.py    /workspaces/<project>/<agent>/<repo> or a shared folder  │
 └──────────────────────────────────────────────────────────────────────────┘
@@ -112,11 +112,22 @@ The schema is derived from the args model, stripped of titles, and sent with eve
 needs no change. Tools that need the agent's filesystem are declared with `local_tool(...)` and
 implemented in `runner/plainboard_runner/tool_bridge.py`.
 
-**Add a provider (e.g. OpenAI).**
+**Add a provider.**
 1. Implement `Provider` in `runner/plainboard_runner/providers/<name>.py`: `info()` (models and efforts),
    `run(spec, bridge)` yielding `RunEvent`s and ending with a `ResultEvent`, and `complete(spec)`.
+   Optional: `catalog()` (models the account offers), `limits()`, and `account()`/`login()`/`logout()`
+   for a subscription signed in on the runner (the UI's device sign-in uses them).
 2. Register it in `providers/registry.py`.
-3. Credentials are already part of `Credentials` (`openai_api_key`, settings key `openai_api_key`).
+3. Add its credentials to `Credentials` and the settings.
+
+A provider that can't call Python tools in-process can serve the bridge as a stdio MCP server
+(`plainboard_runner/mcp_stdio.py`), as Codex does. Agents choose their provider; models of the same
+`tier` stand in for each other when an agent changes provider (`services/agents.equivalent_model`).
+
+**Codex.** `providers/codex.py` drives `codex app-server` (JSON-RPC over stdio; the CLI version is
+pinned in the runner's Dockerfile), one process per run. Board tools come from `mcp_stdio`, messages
+for a running turn go in with `turn/steer`, and the thread id is the session id. A ChatGPT sign-in
+lives in `~/.codex` (agent-home volume); an API key is signed in to a separate Codex home.
 
 The UI picks up models from `/api/meta`. If the provider has no server-side sessions, return no
 `session_id`: the context manager then rebuilds every turn from summary + recent messages.

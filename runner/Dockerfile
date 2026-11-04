@@ -23,6 +23,10 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
+# Codex CLI for the Codex provider. Pinned: PlainBoard talks to its app server protocol.
+ARG CODEX_VERSION=0.166.0
+RUN npm install -g --no-audit --no-fund @openai/codex@${CODEX_VERSION} && codex --version
+
 # Git talks to GitHub through the gh credential helper (uses GH_TOKEN from each run).
 RUN git config --system credential.https://github.com.helper '!gh auth git-credential' \
     && git config --system init.defaultBranch main \

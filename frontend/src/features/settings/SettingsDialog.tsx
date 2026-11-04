@@ -7,7 +7,9 @@ import { api, errorMessage } from "../../api/client";
 import { checks, qk, useMeta, useSettings } from "../../api/queries";
 import type { CheckResult } from "../../api/types";
 import { Button, ErrorText, Field, Input, Modal, Select } from "../../components/ui";
+import { equivalentModel, smallModel } from "../../lib/models";
 import { ModelSelect } from "../team/AgentEditor";
+import { CodexSignIn } from "./CodexSignIn";
 import { SecretsEditor } from "./SecretsEditor";
 
 export function CheckBadge({ result }: { result: CheckResult | null }) {
@@ -34,6 +36,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const [claudeCheck, setClaudeCheck] = useState<CheckResult | null>(null);
+  const [codexCheck, setCodexCheck] = useState<CheckResult | null>(null);
   const [githubCheck, setGithubCheck] = useState<CheckResult | null>(null);
 
   useEffect(() => {
@@ -41,6 +44,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
       setValues(settings.data.values);
       setSecrets({});
       setClaudeCheck(null);
+      setCodexCheck(null);
       setGithubCheck(null);
     }
   }, [open, settings.data]);
@@ -48,8 +52,17 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
   if (!settings.data) return null;
   const set = (patch: Values) => setValues((v) => ({ ...v, ...patch }));
   const setSecret = (patch: Values) => setSecrets((s) => ({ ...s, ...patch }));
-  const provider = meta.data?.providers.find((p) => p.name === (values.default_provider ?? "claude_code"));
+  const providers = meta.data?.providers ?? [];
+  const provider = providers.find((p) => p.name === (values.default_provider ?? "claude_code"));
   const authMode = values.claude_auth_mode ?? values.claude_auth_mode_effective;
+  const codexMode = values.codex_auth_mode ?? "chatgpt";
+  const setDefaultProvider = (name: string) =>
+    set({
+      default_provider: name,
+      default_manager_model: equivalentModel(providers, values.default_manager_model ?? "", name),
+      default_worker_model: equivalentModel(providers, values.default_worker_model ?? "", name),
+      default_summary_model: equivalentModel(providers, values.default_summary_model ?? "", name),
+    });
 
   const persist = async () => {
     const editable = Object.fromEntries(Object.entries(values).filter(([k]) => !settings.data!.secrets.includes(k) && k !== "claude_auth_mode_effective"));
@@ -72,12 +85,12 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
     }
   };
 
-  const runCheck = async (kind: "claude" | "github") => {
-    const setter = kind === "claude" ? setClaudeCheck : setGithubCheck;
+  const runCheck = async (kind: "claude_code" | "codex" | "github") => {
+    const setter = { claude_code: setClaudeCheck, codex: setCodexCheck, github: setGithubCheck }[kind];
     setter({ ok: true, detail: t("settings.testing") });
     try {
       await persist();
-      setter(kind === "claude" ? await checks.provider(values.default_provider) : await checks.github());
+      setter(kind === "github" ? await checks.github() : await checks.provider(kind, smallModel(providers.find((p) => p.name === kind))));
     } catch (err) {
       setter({ ok: false, detail: errorMessage(err) });
     }
@@ -145,12 +158,46 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
             </p>
           )}
           <div className="flex items-center gap-3">
-            <Button size="sm" onClick={() => runCheck("claude")}>
+            <Button size="sm" onClick={() => runCheck("claude_code")}>
               {t("settings.test")}
             </Button>
             <CheckBadge result={claudeCheck} />
           </div>
         </Section>
+
+        {providers.some((p) => p.name === "codex") && (
+          <Section title={t("settings.codex")} description={t("settings.codexHint")}>
+            <div className="grid grid-cols-2 gap-2">
+              {(["chatgpt", "api_key"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  onClick={() => set({ codex_auth_mode: mode })}
+                  className={clsx(
+                    "rounded-lg px-3 py-2 text-left text-xs ring-1 transition-colors",
+                    codexMode === mode ? "bg-indigo-50 ring-indigo-400 dark:bg-indigo-950/40" : "ring-zinc-200 hover:bg-zinc-50 dark:ring-zinc-800 dark:hover:bg-zinc-800",
+                  )}
+                >
+                  <div className="font-medium">{t(`settings.codexAuth.${mode}`)}</div>
+                  <div className="text-zinc-500">{t(`settings.codexAuth.${mode}Hint`)}</div>
+                </button>
+              ))}
+            </div>
+            {codexMode === "api_key" ? (
+              secretField("openai_api_key", t("settings.openaiApiKey"))
+            ) : (
+              <>
+                <CodexSignIn />
+                <p className="text-xs text-amber-700 dark:text-amber-400">{t("settings.codexOwnLoginNotice")}</p>
+              </>
+            )}
+            <div className="flex items-center gap-3">
+              <Button size="sm" onClick={() => runCheck("codex")}>
+                {t("settings.test")}
+              </Button>
+              <CheckBadge result={codexCheck} />
+            </div>
+          </Section>
+        )}
 
         <Section title={t("settings.github")} description={t("settings.githubHint")}>
           {secretField("github_token", t("settings.githubToken"))}
@@ -177,8 +224,8 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
         <Section title={t("settings.defaults")} description={t("settings.defaultsHint")}>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label={t("settings.defaultProvider")}>
-              <Select value={values.default_provider ?? "claude_code"} onChange={(e) => set({ default_provider: e.target.value })}>
-                {(meta.data?.providers ?? []).map((p) => (
+              <Select value={values.default_provider ?? "claude_code"} onChange={(e) => setDefaultProvider(e.target.value)}>
+                {providers.map((p) => (
                   <option key={p.name} value={p.name}>
                     {p.label}
                   </option>

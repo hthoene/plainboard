@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 
-from plainboard_protocol import CheckResult, CompletionResult, CompletionSpec, Credentials, LimitWindow, ProviderInfo, RunEvent, RunSpec
+from plainboard_protocol import CheckResult, CompletionResult, CompletionSpec, Credentials, LimitWindow, ProviderAccount, ProviderInfo, RunEvent, RunSpec
 
 from ..tool_bridge import ToolBridge
 
@@ -21,6 +21,10 @@ class Provider(ABC):
     @abstractmethod
     def info(self) -> ProviderInfo: ...
 
+    async def catalog(self) -> ProviderInfo:
+        """Like :meth:`info`, but may ask the provider which models the account offers."""
+        return self.info()
+
     @abstractmethod
     def run(self, spec: RunSpec, bridge: ToolBridge) -> AsyncIterator[RunEvent]:
         """Execute one agent turn (may include many tool calls). Must end with a ResultEvent."""
@@ -32,6 +36,16 @@ class Provider(ABC):
     async def limits(self, credentials: Credentials) -> list[LimitWindow]:
         """The account's plan limits, without using the model. Empty if it has none or they are unknown."""
         return []
+
+    async def account(self) -> ProviderAccount | None:
+        """The subscription signed in on the runner. None: the provider has no sign-in of its own."""
+        return None
+
+    async def login(self) -> ProviderAccount:
+        raise NotImplementedError(f"{self.name} has no sign-in")
+
+    async def logout(self) -> ProviderAccount:
+        raise NotImplementedError(f"{self.name} has no sign-in")
 
     async def check(self, spec: CompletionSpec) -> CheckResult:
         try:

@@ -1,4 +1,7 @@
-"""The account's plan limits as last reported by a run. Reading them costs no tokens."""
+"""The plan limits of the signed-in subscriptions as last reported. Reading them costs no tokens.
+
+Window names: Claude's as it reports them (five_hour, seven_day ...), Codex's prefixed with codex_.
+"""
 
 from __future__ import annotations
 
@@ -16,7 +19,8 @@ from . import settings as settings_service
 
 KEY = "provider_limits"
 DAY = 86400
-WEEKLY_PREFIX = "seven_day"
+WEEKLY_MARK = "seven_day"
+CODEX_PREFIX = "codex_"
 WEEK_DAYS = 7
 MIN_HISTORY_DAYS = 3
 TIGHT_ABOVE = 0.9
@@ -86,7 +90,7 @@ async def record(session: AsyncSession, windows: list[LimitWindow]) -> None:
     known, growth = stored.get("windows", {}), stored.get("growth", {})
     now = time.time()
     for window in windows:
-        if window.name.startswith(WEEKLY_PREFIX):
+        if WEEKLY_MARK in window.name:
             track_growth(growth, window, known.get(window.name), now)
     known.update({w.name: w.model_dump() for w in windows})
     row.value = json.dumps({"windows": known, "growth": growth, "updated_at": int(now)})
@@ -96,17 +100,22 @@ async def record(session: AsyncSession, windows: list[LimitWindow]) -> None:
 
 async def current(session: AsyncSession) -> LimitsOut:
     # An API key has no plan limits, so what a subscription reported earlier no longer applies.
-    if settings_service.effective_auth_mode(await settings_service.get_all(session)) == "api_key":
-        return LimitsOut(available=False)
+    values = await settings_service.get_all(session)
+    claude_key = settings_service.effective_auth_mode(values) == "api_key"
+    codex_key = values.get("codex_auth_mode") == "api_key"
     row = await session.get(Setting, KEY)
-    if not row or not row.value:
-        return LimitsOut()
-    stored = json.loads(row.value)
-    windows = [LimitWindow(**w) for w in stored["windows"].values()]
+    stored = json.loads(row.value) if row and row.value else {"windows": {}}
+    windows = [
+        LimitWindow(**w)
+        for w in stored["windows"].values()
+        if not (codex_key if w["name"].startswith(CODEX_PREFIX) else claude_key)
+    ]
+    if not windows:
+        return LimitsOut(available=not claude_key)
     now = time.time()
     for window in windows:
         if window.resets_at and window.resets_at <= now:  # it has reset since the last run
             window.utilization, window.resets_at, window.status = 0.0, None, None
     growth = stored.get("growth", {})
-    forecasts = [forecast(w, growth.get(w.name, {}).get("days", {}), now) for w in windows if w.name.startswith(WEEKLY_PREFIX)]
+    forecasts = [forecast(w, growth.get(w.name, {}).get("days", {}), now) for w in windows if WEEKLY_MARK in w.name]
     return LimitsOut(windows=windows, forecasts=[f for f in forecasts if f], updated_at=stored["updated_at"])

@@ -1,4 +1,4 @@
-"""Provider registry. To add a provider (e.g. OpenAI): implement ``Provider`` and register it here."""
+"""Provider registry. To add a provider: implement ``Provider`` and register it here."""
 
 from __future__ import annotations
 
@@ -24,9 +24,11 @@ def list_providers() -> list[Provider]:
 
 def _register_builtin() -> None:
     from .claude_code import ClaudeCodeProvider
+    from .codex import CodexProvider
     from .mock import MockProvider
 
     register_provider(ClaudeCodeProvider())
+    register_provider(CodexProvider())
     register_provider(MockProvider())
 
 

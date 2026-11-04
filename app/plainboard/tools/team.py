@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
+from plainboard_protocol import ProviderInfo
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -14,6 +15,7 @@ from ..services import board as board_service
 from ..services import repositories as repo_service
 from ..services.errors import NotFound
 from ..orchestration.context import render_message
+from ..orchestration.runner_client import RunnerError
 from ..services.util import truncate
 from .registry import ALL, MANAGER, ToolContext, ToolError, tool
 from .repos import apply_repo_access
@@ -28,7 +30,8 @@ class CreateAgentArgs(BaseModel):
     role: str = Field(description="Short job title, e.g. 'Backend Developer'")
     description: str = Field(description="Area of responsibility; keep it narrow")
     instructions: str = Field(default="", description="Extra standing instructions")
-    model: str | None = Field(default=None, description="Model id; default from settings")
+    provider: str | None = Field(default=None, description="claude_code or codex; default from settings")
+    model: str | None = Field(default=None, description="Model id of that provider; default from settings")
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
     toolset: ToolsetName = Field(default="full", description="full = coding agent; board = coordination and small tasks, smaller prompt")
     context_limit_tokens: int | None = Field(default=None, ge=5000, description="Compress context above this size")
@@ -41,6 +44,7 @@ class UpdateAgentArgs(BaseModel):
     role: str | None = None
     description: str | None = None
     instructions: str | None = None
+    provider: str | None = Field(default=None, description="claude_code or codex")
     model: str | None = None
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
     toolset: ToolsetName | None = None
@@ -100,6 +104,18 @@ class ListRunsArgs(BaseModel):
     limit: int = Field(default=10, ge=1, le=50)
 
 
+async def _catalog(ctx: ToolContext, provider: str | None) -> list[ProviderInfo] | None:
+    if not provider:
+        return None
+    try:
+        catalog = await ctx.runs.runner.providers()
+    except RunnerError:
+        return None
+    if provider not in {p.name for p in catalog}:
+        raise ToolError(f"Unknown provider '{provider}'. Available: {', '.join(p.name for p in catalog)}")
+    return catalog
+
+
 @tool("list_agents", "List the team: slug, role, model, status and area.")
 async def list_agents(ctx: ToolContext, _args) -> str:
     agents = await agent_service.list_for_project(ctx.session, ctx.project.id)
@@ -122,7 +138,7 @@ async def get_agent(ctx: ToolContext, args: AgentRef) -> str:
 
 @tool("create_agent", "Add a specialised agent to the team.", CreateAgentArgs, roles=(MANAGER,))
 async def create_agent(ctx: ToolContext, args: CreateAgentArgs) -> str:
-    agent = await agent_service.create(ctx.session, ctx.project.id, AgentCreate(**args.model_dump(exclude={"repositories"})))
+    agent = await agent_service.create(ctx.session, ctx.project.id, AgentCreate(**args.model_dump(exclude={"repositories"})), catalog=await _catalog(ctx, args.provider))
     access = await apply_repo_access(ctx, agent, args.repositories) if args.repositories is not None else "all repositories"
     return f"Created agent {agent.slug} ({agent.model}; {access})."
 
@@ -130,7 +146,9 @@ async def create_agent(ctx: ToolContext, args: CreateAgentArgs) -> str:
 @tool("update_agent", "Change an agent's configuration (model, role, instructions, enabled ...).", UpdateAgentArgs, roles=(MANAGER,))
 async def update_agent(ctx: ToolContext, args: UpdateAgentArgs) -> str:
     agent = await agent_service.resolve(ctx.session, ctx.project.id, args.agent)
-    agent = await agent_service.update(ctx.session, agent, AgentUpdate(**args.model_dump(exclude_unset=True, exclude={"agent", "repositories"})))
+    agent = await agent_service.update(
+        ctx.session, agent, AgentUpdate(**args.model_dump(exclude_unset=True, exclude={"agent", "repositories"})), await _catalog(ctx, args.provider)
+    )
     if args.repositories is not None:
         await apply_repo_access(ctx, agent, args.repositories)
     if args.enabled is False and agent.id != ctx.agent.id:

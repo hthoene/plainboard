@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
-from plainboard_protocol import CheckResult, CompletionResult, CompletionSpec, Credentials, ErrorEvent, JobSpec, JobState, LimitWindow, ProviderInfo, RunSpec
+from plainboard_protocol import CheckResult, CompletionResult, CompletionSpec, Credentials, ErrorEvent, JobSpec, JobState, LimitWindow, ProviderAccount, ProviderInfo, RunSpec
 from pydantic import BaseModel
 
 from . import jobs
@@ -34,7 +34,45 @@ async def health() -> dict[str, str]:
 
 @app.get("/providers", response_model=list[ProviderInfo])
 async def providers() -> list[ProviderInfo]:
-    return [p.info() for p in list_providers()]
+    return list(await asyncio.gather(*(p.catalog() for p in list_providers())))
+
+
+def _signin_provider(name: str):
+    try:
+        return get_provider(name)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.get("/providers/{name}/account", response_model=ProviderAccount)
+async def provider_account(name: str) -> ProviderAccount:
+    try:
+        account = await _signin_provider(name).account()
+    except Exception as exc:
+        raise HTTPException(502, str(exc)[:1000]) from exc
+    if account is None:
+        raise HTTPException(404, f"{name} has no sign-in")
+    return account
+
+
+@app.post("/providers/{name}/login", response_model=ProviderAccount)
+async def provider_login(name: str) -> ProviderAccount:
+    try:
+        return await _signin_provider(name).login()
+    except NotImplementedError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, str(exc)[:1000]) from exc
+
+
+@app.post("/providers/{name}/logout", response_model=ProviderAccount)
+async def provider_logout(name: str) -> ProviderAccount:
+    try:
+        return await _signin_provider(name).logout()
+    except NotImplementedError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, str(exc)[:1000]) from exc
 
 
 async def _execute(spec: RunSpec, queue: asyncio.Queue[str | None]) -> None:

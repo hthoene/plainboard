@@ -286,6 +286,14 @@ export interface CheckResult {
   detail: string;
 }
 
+export interface ProviderAccount {
+  signed_in: boolean;
+  detail: string;
+  login_url: string | null;
+  login_code: string | null;
+  login_error: string | null;
+}
+
 export interface LimitWindow {
   name: string;
   utilization: number;

@@ -7,6 +7,7 @@ import { qk, useMcpServers, useMeta, useRepositories, useSettings } from "../../
 import type { Agent, ProviderInfo } from "../../api/types";
 import { Button, ErrorText, Field, Input, Modal, Select, Textarea, Toggle } from "../../components/ui";
 import { formatTokens } from "../../lib/format";
+import { equivalentModel } from "../../lib/models";
 import { useShell } from "../layout/shell-context";
 
 const CUSTOM = "__custom__";
@@ -152,7 +153,14 @@ export function AgentEditor({ agent, onClose }: { agent?: Agent; onClose: () => 
         <fieldset className="grid gap-4 rounded-lg bg-zinc-50 p-4 sm:grid-cols-2 dark:bg-zinc-800/40">
           <legend className="sr-only">{t("team.modelSection")}</legend>
           <Field label={t("team.provider")}>
-            <Select value={form.provider} onChange={(e) => set({ provider: e.target.value, model: "", summary_model: "" })}>
+            <Select
+              value={form.provider}
+              onChange={(e) => {
+                const all = meta.data?.providers ?? [];
+                const to = e.target.value;
+                set({ provider: to, model: form.model && equivalentModel(all, form.model, to), summary_model: form.summary_model && equivalentModel(all, form.summary_model, to) });
+              }}
+            >
               {(meta.data?.providers ?? [{ name: form.provider, label: form.provider }]).map((p) => (
                 <option key={p.name} value={p.name}>
                   {p.label}

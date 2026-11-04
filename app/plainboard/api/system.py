@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter
-from plainboard_protocol import CompletionSpec
+from plainboard_protocol import CompletionSpec, ProviderAccount
 from pydantic import BaseModel
 
 from ..models import TaskStatus
@@ -81,6 +81,29 @@ async def check_provider(body: ProviderCheckIn, session: Session, runner: Runner
     )
     result = await runner.check_provider(spec)
     return CheckOut(ok=result.ok, detail=result.detail)
+
+
+async def _account(runner: Runner, provider: str, action: str | None = None) -> ProviderAccount:
+    try:
+        return await runner.provider_account(provider, action)
+    except RunnerError as exc:
+        raise ServiceError(str(exc), 502) from exc
+
+
+@router.get("/providers/{provider}/account", response_model=ProviderAccount)
+async def provider_account(provider: str, runner: Runner) -> ProviderAccount:
+    return await _account(runner, provider)
+
+
+@router.post("/providers/{provider}/login", response_model=ProviderAccount)
+async def provider_login(provider: str, runner: Runner) -> ProviderAccount:
+    """Starts a device sign-in: the answer has the URL to open and the code to enter."""
+    return await _account(runner, provider, "login")
+
+
+@router.post("/providers/{provider}/logout", response_model=ProviderAccount)
+async def provider_logout(provider: str, runner: Runner) -> ProviderAccount:
+    return await _account(runner, provider, "logout")
 
 
 class GithubCheckIn(BaseModel):

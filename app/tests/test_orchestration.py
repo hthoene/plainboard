@@ -906,3 +906,29 @@ def test_asking_a_busy_teammate_notifies_it_and_does_not_block_for_long(client, 
     runner(client).released = True
     wait_for(lambda: idle(client, pid))
     assert any(r["trigger"] == "ask" and r["status"] == "succeeded" for r in runs_of(client, pid, agent_id=dev["id"]))
+
+
+def test_agents_on_another_provider_get_its_models(client, project):
+    pid = project["id"]
+    dev = make_dev(client, pid, provider="codex")
+    assert (dev["provider"], dev["model"], dev["summary_model"]) == ("codex", "gpt-6.1-terra", "gpt-6-luna")
+    other = make_dev(client, pid, name="Other")
+    assert (other["provider"], other["model"]) == ("claude_code", "claude-sonnet-5-5")
+    chat(client, other["id"], "SAY hi")
+    wait_for(lambda: idle(client, pid))
+    assert client.get(f"/api/agents/{other['id']}/conversation").json()["provider_session_id"]
+    moved = client.patch(f"/api/agents/{other['id']}", json={"provider": "codex"}).json()
+    assert (moved["model"], moved["summary_model"]) == ("gpt-6.1-terra", "gpt-6-luna")
+    conv = client.get(f"/api/agents/{other['id']}/conversation").json()
+    assert conv["provider_session_id"] is None  # a Claude session means nothing to Codex
+    assert client.post(f"/api/projects/{pid}/agents", json={"name": "X", "provider": "nope"}).status_code == 400
+
+
+def test_codex_limits_are_kept_apart_from_claude(client, project):
+    client.put("/api/settings", json={"values": {"claude_auth_mode": "api_key", "codex_auth_mode": "chatgpt"}})
+    runner(client).limit_windows = [LimitWindow(name="seven_day", utilization=0.2), LimitWindow(name="codex_seven_day", utilization=0.5)]
+    wait_for(lambda: client.get("/api/limits").json()["windows"])
+    assert [w["name"] for w in client.get("/api/limits").json()["windows"]] == ["codex_seven_day"]  # Claude uses an API key
+    client.put("/api/settings", json={"values": {"codex_auth_mode": "api_key"}})
+    body = client.get("/api/limits").json()
+    assert body["windows"] == [] and body["available"] is False

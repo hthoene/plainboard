@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from plainboard_protocol import ProviderInfo
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +13,18 @@ from .util import slugify
 
 NULLABLE_FIELDS = {"effort", "max_turns"}
 PALETTE = ["#6366f1", "#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#84cc16", "#f97316"]
+
+
+def equivalent_model(catalog: list[ProviderInfo], model: str, target: str) -> str | None:
+    """The target provider's model of the same size (tier) as ``model``, which may belong to any provider."""
+    providers = {p.name: p for p in catalog}
+    if target not in providers or not providers[target].models:
+        return None
+    models = providers[target].models
+    if any(m.id == model for m in models):
+        return model
+    tier = next((m.tier for p in catalog for m in p.models if m.id == model), None)
+    return next((m.id for m in models if m.tier == tier), models[0].id)
 
 
 async def _unique_slug(session: AsyncSession, project_id: int, name: str, exclude_id: int | None = None) -> str:
@@ -41,8 +54,17 @@ async def _set_repositories(session: AsyncSession, agent: Agent, ids: list[int])
     agent.repositories = list(repos)
 
 
-async def create(session: AsyncSession, project_id: int, data: AgentCreate, *, is_manager: bool = False) -> Agent:
+async def create(
+    session: AsyncSession, project_id: int, data: AgentCreate, *, is_manager: bool = False, catalog: list[ProviderInfo] | None = None
+) -> Agent:
+    """``catalog`` (the runner's providers) lets an agent on another provider than the default get that provider's models."""
     s = await settings_service.get_all(session)
+    provider = data.provider or s["default_provider"]
+    model = data.model or (s["default_manager_model"] if is_manager else s["default_worker_model"])
+    summary_model = data.summary_model or s["default_summary_model"]
+    if catalog and provider != s["default_provider"]:
+        model = data.model or equivalent_model(catalog, model, provider) or model
+        summary_model = data.summary_model or equivalent_model(catalog, summary_model, provider) or summary_model
     count = await session.scalar(select(func.count(Agent.id)).where(Agent.project_id == project_id)) or 0
     agent = Agent(
         project_id=project_id,
@@ -52,13 +74,13 @@ async def create(session: AsyncSession, project_id: int, data: AgentCreate, *, i
         is_manager=is_manager,
         description=data.description,
         instructions=data.instructions,
-        provider=data.provider or s["default_provider"],
-        model=data.model or (s["default_manager_model"] if is_manager else s["default_worker_model"]),
+        provider=provider,
+        model=model,
         effort=data.effort if data.effort is not None else s["default_effort"],
         toolset=data.toolset,
         context_limit_tokens=data.context_limit_tokens or int(s["default_context_limit"]),
         keep_recent_messages=data.keep_recent_messages if data.keep_recent_messages is not None else int(s["default_keep_recent"]),
-        summary_model=data.summary_model or s["default_summary_model"],
+        summary_model=summary_model,
         max_turns=data.max_turns,
         color=data.color or PALETTE[count % len(PALETTE)],
         all_repos=data.all_repos,
@@ -77,8 +99,16 @@ async def create(session: AsyncSession, project_id: int, data: AgentCreate, *, i
     return agent
 
 
-async def update(session: AsyncSession, agent: Agent, data: AgentUpdate) -> Agent:
+async def update(session: AsyncSession, agent: Agent, data: AgentUpdate, catalog: list[ProviderInfo] | None = None) -> Agent:
     fields = data.model_dump(exclude_unset=True)
+    if fields.get("provider") and fields["provider"] != agent.provider:
+        if catalog:  # keep the models' size on the new provider
+            for key in ("model", "summary_model"):
+                if not fields.get(key):
+                    fields[key] = equivalent_model(catalog, getattr(agent, key), fields["provider"]) or getattr(agent, key)
+        # The old provider's session means nothing to the new one: start fresh from summary + recent messages.
+        conv = await conversation_for(session, agent.id)
+        conv.provider_session_id, conv.context_tokens, conv.session_cost_usd = None, 0, 0.0
     mcp_ids = fields.pop("mcp_server_ids", None)
     repo_ids = fields.pop("repository_ids", None)
     if "name" in fields and fields["name"] != agent.name:

@@ -1,4 +1,4 @@
-import { GitBranch, MessageSquare, Plus, Shield } from "lucide-react";
+import { GitBranch, ListTodo, MessageSquare, Plus, Shield } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useRepositories } from "../../api/queries";
@@ -7,6 +7,7 @@ import { AgentDot, Badge, Button } from "../../components/ui";
 import { formatCost, formatTokens } from "../../lib/format";
 import { useShell } from "../layout/shell-context";
 import { AgentEditor } from "./AgentEditor";
+import { TodoDialog } from "./TodoDialog";
 
 export function TeamView() {
   const { t } = useTranslation();
@@ -15,6 +16,8 @@ export function TeamView() {
   const repoNames = (agent: Agent) =>
     agent.all_repos ? (repos.data ?? []).map((r) => r.name) : (repos.data ?? []).filter((r) => agent.repository_ids.includes(r.id)).map((r) => r.name);
   const [editing, setEditing] = useState<Agent | "new" | null>(null);
+  const [todosOf, setTodosOf] = useState<number | null>(null);
+  const todoAgent = agents.find((a) => a.id === todosOf);
 
   return (
     <div className="scroll-thin h-full overflow-y-auto">
@@ -68,22 +71,37 @@ export function TeamView() {
                 <span title={t("team.contextTitle")}>
                   {formatTokens(agent.context_tokens)} / {formatTokens(agent.context_limit_tokens)} · {formatCost(agent.total_cost_usd)}
                 </span>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  icon={<MessageSquare className="size-3.5" />}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    openChat(agent.id);
-                  }}
-                >
-                  {t("team.chat")}
-                </Button>
+                <div className="flex items-center gap-1">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    icon={<ListTodo className="size-3.5" />}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setTodosOf(agent.id);
+                    }}
+                  >
+                    {t("todos.button")}
+                    {agent.open_todos > 0 && <span className="text-zinc-400">{agent.open_todos}</span>}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    icon={<MessageSquare className="size-3.5" />}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openChat(agent.id);
+                    }}
+                  >
+                    {t("team.chat")}
+                  </Button>
+                </div>
               </div>
             </article>
           ))}
         </div>
       </div>
+      {todoAgent && <TodoDialog agent={todoAgent} onClose={() => setTodosOf(null)} />}
       {editing && <AgentEditor agent={editing === "new" ? undefined : editing} onClose={() => setEditing(null)} />}
     </div>
   );

@@ -149,7 +149,7 @@ async def execute(name: str, ctx: ToolContext, raw_args: dict[str, Any] | None) 
 
 
 def _load_modules() -> None:
-    from . import automation, board, integrations, jobs, knowledge, project, repos, team  # noqa: F401
+    from . import automation, board, integrations, jobs, knowledge, project, repos, team, todos  # noqa: F401
 
 
 _load_modules()

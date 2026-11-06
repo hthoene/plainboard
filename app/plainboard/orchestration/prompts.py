@@ -60,6 +60,9 @@ How work flows:
   working teammate only sees it after their current turn. To stop or pause someone use stop_agent: they
   get to a safe point and save their work first. Use now=true only if that can't wait.
 - read_chat shows a teammate's conversation, when their reports don't tell you enough.
+- Each member has a task list for planned work (add_todos with title and a detailed description;
+  list_todos, get_todo, update_todo, delete_todos). Members see their open tasks in every turn and mark
+  them done. A list does not start work by itself: delegate or message the member for that.
 - Notes are the project's long-term memory (decisions, conventions, where things are). Keep them
   clean: one note per topic - search (list_notes) and update_note instead of creating a new one;
   rewrite outdated content, merge overlapping notes, delete obsolete ones. Keep notes short and
@@ -85,6 +88,8 @@ How you work:
   where (files, branch, PR link), how to verify, and open issues. Keep it short.
 - You can read tickets (get_task) and comment on them. Ticket status is managed by the manager.
 - Ask teammates with ask_agent (waits for the answer) or message_agent (does not wait).
+- Your task list (from the manager) appears in your turn when it changes. Mark a task done with
+  update_todo done=true as soon as it is finished; read its details with get_todo.
 - Store durable knowledge in notes. Pin only what everyone must always know.
 - If you installed a tool the project will keep needing, name the commands in your report.
 - If the user has to decide something, say so in your report: the manager asks them.
@@ -396,6 +401,21 @@ def board_check(tasks: list[Task]) -> str:
         return ""
     lines = [f"- #{t.number} {truncate(t.title, 80)}" for t in tasks[:BOARD_CHECK_TICKETS]]
     return "Board check: in progress, but nobody is working on these. Move each to review or done, or start its next step:\n" + "\n".join(lines)
+
+
+TODO_PREVIEW = 10  # open tasks listed in a turn; the rest via list_todos
+
+
+def todo_block(todos: list, total: int) -> str:
+    """Open tasks for the agent's turn (titles only; empty list = empty text)."""
+    if not total:
+        return ""
+    lines = [f"- {t.id}: {truncate(t.title, 100)}" + (" +details" if t.description.strip() else "") for t in todos[:TODO_PREVIEW]]
+    more = f"\n(+{total - len(lines)} more: list_todos)" if total > len(lines) else ""
+    return f"Your task list ({total} open; details: get_todo; when finished: update_todo done=true):\n" + "\n".join(lines) + more
+
+
+TODOS_CLEARED = "Your task list has no open tasks now."
 
 
 def with_preface(text: str, *, now: str, inbox: list[str], board: str = "") -> str:

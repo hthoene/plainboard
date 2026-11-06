@@ -61,6 +61,10 @@ function handle(qc: QueryClient, pid: number, event: ServerEvent) {
       qc.invalidateQueries({ queryKey: qk.tasks(pid) });
       qc.invalidateQueries({ queryKey: ["task"] });
       break;
+    case "todo":
+      qc.invalidateQueries({ queryKey: ["todos"] });
+      qc.invalidateQueries({ queryKey: qk.agents(pid) });
+      break;
     case "assignment":
       qc.invalidateQueries({ queryKey: qk.assignments(pid) });
       qc.invalidateQueries({ queryKey: ["task"] });

@@ -8,6 +8,7 @@ from ..events import bus
 from ..models import ACTIVE_RUN_STATUSES, Agent, Conversation, Job, JobStatus, McpServer, Message, Repository, Run, RunStatus
 from ..schemas import AgentCreate, AgentOut, AgentUpdate
 from . import settings as settings_service
+from . import todos as todo_service
 from .errors import NotFound, ServiceError
 from .util import slugify
 
@@ -202,6 +203,7 @@ async def to_out(session: AsyncSession, agents: list[Agent]) -> list[AgentOut]:
         if run_status == RunStatus.RUNNING or agent_id not in status:
             status[agent_id] = "running" if run_status == RunStatus.RUNNING else "queued"
     jobs = dict((await session.execute(select(Job.agent_id, func.count(Job.id)).where(Job.agent_id.in_(ids), Job.status == JobStatus.RUNNING).group_by(Job.agent_id))).all())
+    todos = await todo_service.open_counts(session, ids)
     convs = {c.agent_id: c for c in (await session.scalars(select(Conversation).where(Conversation.agent_id.in_(ids)))).all()}
     out = []
     for agent in agents:
@@ -211,6 +213,7 @@ async def to_out(session: AsyncSession, agents: list[Agent]) -> list[AgentOut]:
         item.repository_ids = [r.id for r in agent.repositories]
         item.status = status.get(agent.id, "idle")  # type: ignore[assignment]
         item.running_jobs = jobs.get(agent.id, 0)
+        item.open_todos = todos.get(agent.id, 0)
         if conv:
             item.context_tokens = conv.context_tokens
             item.base_context_tokens = conv.session_base_tokens

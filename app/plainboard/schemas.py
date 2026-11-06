@@ -201,6 +201,7 @@ class AgentOut(ORM):
     # live state
     status: Literal["idle", "queued", "running"] = "idle"
     running_jobs: int = 0
+    open_todos: int = 0
     context_tokens: int = 0
     base_context_tokens: int = 0  # fixed part of the context (system prompt, tools, memory)
     total_cost_usd: float = 0.0
@@ -479,6 +480,38 @@ class NoteOut(ORM):
     created_by_agent_id: int | None
     created_at: UTCDateTime
     updated_at: UTCDateTime
+
+
+TodoState = Literal["open", "done", "archived"]
+
+
+class TodoCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    description: str = Field(default="", description="Markdown, as detailed as needed")
+
+
+class TodoUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=300)
+    description: str | None = None
+    done: bool | None = None
+    agent_id: int | None = None
+
+
+class TodoOut(ORM):
+    id: int
+    project_id: int
+    agent_id: int
+    title: str
+    description: str
+    done_at: UTCDateTime | None
+    created_by_agent_id: int | None
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
+
+
+class TodoPage(BaseModel):
+    items: list[TodoOut]
+    total: int
 
 
 class ScheduleCreate(BaseModel):

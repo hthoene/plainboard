@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import type {
   Limits,
@@ -18,6 +18,8 @@ import type {
   Stats,
   Task,
   TaskDetail,
+  TodoPage,
+  TodoState,
 } from "./types";
 
 export const qk = {
@@ -29,6 +31,7 @@ export const qk = {
   agents: (pid: number) => ["agents", pid] as const,
   tasks: (pid: number) => ["tasks", pid] as const,
   task: (id: number) => ["task", id] as const,
+  todos: (agentId: number, state: TodoState) => ["todos", agentId, state] as const,
   conversation: (agentId: number) => ["conversation", agentId] as const,
   runs: (pid: number) => ["runs", pid] as const,
   assignments: (pid: number) => ["assignments", pid] as const,
@@ -60,6 +63,18 @@ export const useArchivedTasks = (pid: number, enabled = true) =>
   useQuery({ queryKey: [...qk.tasks(pid), "archived"], queryFn: () => api.get<Task[]>(`/projects/${pid}/tasks?archived=true`), enabled });
 export const useTask = (id: number | null) =>
   useQuery({ queryKey: qk.task(id ?? 0), queryFn: () => api.get<TaskDetail>(`/tasks/${id}`), enabled: id !== null });
+export const TODO_PAGE = 50;
+// Paged, so long lists stay fast: the next page loads on demand.
+export const useTodos = (agentId: number, state: TodoState) =>
+  useInfiniteQuery({
+    queryKey: qk.todos(agentId, state),
+    queryFn: ({ pageParam }) => api.get<TodoPage>(`/agents/${agentId}/todos?state=${state}&limit=${TODO_PAGE}&offset=${pageParam}`),
+    initialPageParam: 0,
+    getNextPageParam: (last, pages) => {
+      const loaded = pages.reduce((n, p) => n + p.items.length, 0);
+      return loaded < last.total ? loaded : undefined;
+    },
+  });
 export const useConversation = (agentId: number | null) =>
   useQuery({
     queryKey: qk.conversation(agentId ?? 0),

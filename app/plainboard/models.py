@@ -287,6 +287,8 @@ class Conversation(Base):
     system_prompt: Mapped[str | None] = mapped_column(Text)
     prompt_sections: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     session_sections: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # The task list as last sent in this session: it is only sent again when it changed.
+    todos_shown: Mapped[str | None] = mapped_column(Text)
     summary: Mapped[str | None] = mapped_column(Text)
     summary_until_message_id: Mapped[int] = mapped_column(Integer, default=0)
     compressions: Mapped[int] = mapped_column(Integer, default=0)
@@ -377,6 +379,20 @@ class Note(Timestamps, Base):
     content: Mapped[str] = mapped_column(Text, default="")
     pinned: Mapped[bool] = mapped_column(Boolean, default=False)  # pinned notes are in every agent's prompt
     created_by_agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id", ondelete="SET NULL"))
+
+
+class Todo(Timestamps, Base):
+    """An item on a team member's task list. Done items move to the archive and are later deleted
+    (services/todos.py), so agents only ever see the open ones."""
+
+    __tablename__ = "todos"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(300))
+    description: Mapped[str] = mapped_column(Text, default="")
+    done_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    created_by_agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id", ondelete="SET NULL"))  # None = the user
 
 
 class Schedule(Timestamps, Base):

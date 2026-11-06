@@ -286,6 +286,30 @@
       "memory": "memory"
     }
   },
+  "todos": {
+    "button": "Tasks",
+    "title": "Tasks of {{name}}",
+    "open": "Open",
+    "done": "Done",
+    "archived": "Archive",
+    "doneHint": "Done tasks move to the archive after 7 days and are deleted after 90 days. Agents only see open tasks.",
+    "empty": "No tasks here.",
+    "newTitle": "New task…",
+    "newDescription": "Description (Markdown, as detailed as needed)",
+    "add": "Add task",
+    "markDone": "Mark as done",
+    "reopen": "Open again",
+    "edit": "Edit",
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "confirmDelete": "Delete this task?",
+    "moveTo": "Move to",
+    "doneOn": "Done {{when}}",
+    "byUser": "Added by you",
+    "byAgent": "Added by {{name}}",
+    "loadMore": "Load more ({{count}} left)"
+  },
   "team": {
     "title": "Team",
     "subtitle": "Each agent owns a narrow area so its context stays small. The manager can change the team, too.",

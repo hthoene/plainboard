@@ -24,6 +24,7 @@ from ..services import notes as notes_service
 from ..services import repositories as repo_service
 from ..services import secrets as secret_service
 from ..services import settings as settings_service
+from ..services import todos as todo_service
 from ..services.util import truncate
 from . import prompts
 from .runner_client import RunnerClient
@@ -91,6 +92,10 @@ class ContextManager:
         project_repos = await repo_service.list_for_project(session, project.id)
         repos_by_agent = {a.id: [r.name for r in repo_service.accessible(a, project_repos)] for a in team} if project_repos else None
         secrets = [(s.name, s.description) for s in await secret_service.effective(session, project.id)]
+        # The task list is volatile, so it never enters the (cached) system prompt: it goes into the turn,
+        # and within a session only when it changed since the agent last saw it.
+        todo_items, todo_total = await todo_service.page(session, project.id, agent_id=agent.id, limit=prompts.TODO_PREVIEW)
+        todos = prompts.todo_block(todo_items, todo_total)
 
         def sections() -> dict[str, str]:
             return prompts.system_prompt_sections(
@@ -115,10 +120,15 @@ class ContextManager:
             # Keep the frozen system prompt (prompt cache stays valid); send only what changed.
             current = sections()
             update, changed = prompts.briefing_update(conv.prompt_sections or {}, current)
+            todo_note = ""
+            if todos != (conv.todos_shown or ""):
+                todo_note, conv.todos_shown = todos or prompts.TODOS_CLEARED, todos
             if changed:
                 conv.prompt_sections = current
+            if changed or todo_note:
                 await session.commit()
-            return Turn(conv.system_prompt, f"{update}\n\n{text}" if update else text, conv.provider_session_id, changed)
+            prompt = "\n\n".join(part for part in (update, todo_note, text) if part)
+            return Turn(conv.system_prompt, prompt, conv.provider_session_id, changed)
 
         uncovered = await self._uncovered(session, conv, before_id=message_id, text_only=True)
         if len(uncovered) > agent.keep_recent_messages:
@@ -130,8 +140,9 @@ class ContextManager:
         conv.system_prompt = prompts.join_sections(current)
         conv.prompt_sections = current
         conv.session_sections = current
+        conv.todos_shown = todos
         await session.commit()
-        return Turn(conv.system_prompt, prompts.fresh_session_prompt(recent, text), None)
+        return Turn(conv.system_prompt, prompts.fresh_session_prompt(recent, f"{todos}\n\n{text}" if todos else text), None)
 
     async def maybe_compress(self, session: AsyncSession, agent: Agent, conv: Conversation) -> bool:
         if not should_compress(conv.context_tokens, conv.session_base_tokens, agent.context_limit_tokens):
@@ -143,6 +154,7 @@ class ContextManager:
         """Record a compaction done by the provider itself. The session continues, but briefing
         updates from it may be lost: the next turn re-sends what differs from the frozen prompt."""
         conv.prompt_sections = conv.session_sections
+        conv.todos_shown = None
         conv.compressions += 1
         return Message(conversation_id=conv.id, role="system", kind="summary", content="", meta={"tokens_before": tokens_before, "provider": True})
 

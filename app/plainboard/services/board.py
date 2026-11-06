@@ -315,7 +315,8 @@ async def task_detail(session: AsyncSession, task: Task) -> TaskDetail:
     (base,) = await task_outs(session, [task])
     detail = TaskDetail.model_validate({**dict(base), "comments": [], "attachments": [], "assignments": [], "decisions": []})
     detail.decisions = [DecisionOut.model_validate(d) for d in await list_decisions(session, task.id)]
-    detail.comments = [CommentOut.model_validate(c) for c in (await session.scalars(select(Comment).where(Comment.task_id == task.id).order_by(Comment.id))).all()]
+    # Only the newest comments; older ones are paged in via GET /tasks/{id}/comments.
+    detail.comments = [CommentOut.model_validate(c) for c in await recent_comments(session, task.id, UI_COMMENT_PAGE)]
     detail.attachments = [AttachmentOut.model_validate(a) for a in await list_attachments(session, task.id)]
     detail.assignments = [
         AssignmentOut.model_validate(a)
@@ -352,9 +353,21 @@ async def add_comment(
     return comment
 
 
-async def recent_comments(session: AsyncSession, task_id: int, limit: int = 5) -> list[Comment]:
-    q = select(Comment).where(Comment.task_id == task_id).order_by(Comment.id.desc()).limit(limit)
+COMMENT_PAGE = 10  # what agents see by default
+UI_COMMENT_PAGE = 20  # what the ticket view loads at first
+
+
+async def recent_comments(session: AsyncSession, task_id: int, limit: int = COMMENT_PAGE, *, offset: int = 0, before: int | None = None) -> list[Comment]:
+    """The newest `limit` comments (after skipping `offset` newer ones, or older than id `before`), oldest first."""
+    q = select(Comment).where(Comment.task_id == task_id)
+    if before is not None:
+        q = q.where(Comment.id < before)
+    q = q.order_by(Comment.id.desc()).offset(offset).limit(limit)
     return list(reversed((await session.scalars(q)).all()))
+
+
+async def count_comments(session: AsyncSession, task_id: int) -> int:
+    return await session.scalar(select(func.count()).select_from(Comment).where(Comment.task_id == task_id)) or 0
 
 
 # --- attachments ----------------------------------------------------------------------------
@@ -440,11 +453,16 @@ def is_open(task: Task) -> bool:
     return task.status not in (TaskStatus.DONE,)
 
 
-async def ticket_text(session: AsyncSession, task: Task, comment_limit: int = 5) -> str:
+async def agent_names(session: AsyncSession, project_id: int) -> dict[int, str]:
+    return {a.id: a.name for a in (await session.scalars(select(Agent).where(Agent.project_id == project_id))).all()}
+
+
+async def ticket_text(session: AsyncSession, task: Task, comment_limit: int = COMMENT_PAGE) -> str:
     """Compact ticket description for prompts and tools."""
     from ..orchestration.prompts import ticket_brief
 
-    agents = (await session.scalars(select(Agent).where(Agent.project_id == task.project_id))).all()
-    names = {a.id: a.name for a in agents}
+    names = await agent_names(session, task.project_id)
     decisions = await list_decisions(session, task.id)
-    return ticket_brief(task, await list_attachments(session, task.id), await recent_comments(session, task.id, comment_limit), names, runner_path, decisions)
+    comments = await recent_comments(session, task.id, comment_limit)
+    total = await count_comments(session, task.id)
+    return ticket_brief(task, await list_attachments(session, task.id), comments, names, runner_path, decisions, comment_total=total)

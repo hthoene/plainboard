@@ -100,6 +100,13 @@ async def task_runs(task_id: int, session: Session) -> list[RunOut]:
 # --- comments & attachments -----------------------------------------------------------------
 
 
+@router.get("/tasks/{task_id}/comments", response_model=list[CommentOut])
+async def list_comments(task_id: int, session: Session, before: int | None = None, limit: int = Query(default=50, ge=1, le=200)) -> list[CommentOut]:
+    """Comments older than id `before` (or the newest), oldest first. The ticket view pages with it."""
+    task = await board_service.get_task(session, task_id)
+    return [CommentOut.model_validate(c) for c in await board_service.recent_comments(session, task.id, limit, before=before)]
+
+
 @router.post("/tasks/{task_id}/comments", response_model=CommentOut, status_code=201)
 async def add_comment(task_id: int, body: CommentCreate, session: Session) -> CommentOut:
     task = await board_service.get_task(session, task_id)

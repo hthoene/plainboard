@@ -165,6 +165,8 @@
     "comments": "Comments",
     "commentPlaceholder": "Write a comment… (Ctrl+Enter to send)",
     "sendComment": "Send comment",
+    "olderComments_one": "Show 1 older comment",
+    "olderComments_other": "Show {{count}} older comments ({{total}} hidden)",
     "you": "You",
     "agent": "Agent",
     "system": "System",

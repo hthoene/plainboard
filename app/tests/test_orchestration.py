@@ -933,3 +933,22 @@ def test_codex_limits_are_kept_apart_from_claude(client, project):
     client.put("/api/settings", json={"values": {"codex_auth_mode": "api_key"}})
     body = client.get("/api/limits").json()
     assert body["windows"] == [] and body["available"] is False
+
+
+def test_long_comment_threads_are_paged(client, project):
+    pid = project["id"]
+    manager = agents_by_slug(client, pid)["manager"]
+    ticket = client.post(f"/api/projects/{pid}/tasks", json={"title": "Chatty"}).json()
+    for i in range(1, 26):
+        client.post(f"/api/tasks/{ticket['id']}/comments", json={"body": f"note {i}"})
+
+    detail = client.get(f"/api/tasks/{ticket['id']}").json()
+    assert detail["comment_count"] == 25 and [c["body"] for c in detail["comments"]][0] == "note 6" and len(detail["comments"]) == 20
+    older = client.get(f"/api/tasks/{ticket['id']}/comments?before={detail['comments'][0]['id']}").json()
+    assert [c["body"] for c in older] == [f"note {i}" for i in range(1, 6)]
+
+    chat(client, manager["id"], f'TOOL get_task {{"number": {ticket["number"]}}}\nTOOL get_comments {{"number": {ticket["number"]}, "offset": 10, "limit": 10}}')
+    wait_for(lambda: idle(client, pid))
+    first, second = [m["meta"]["result"] for m in conversation(client, manager["id"])["messages"] if m["kind"] == "tool"][-2:]
+    assert "(last 10 of 25; 15 older: get_comments)" in first and "note 16" in first and "note 15" not in first
+    assert second.startswith("Comments 6-15 of 25 (oldest first); 5 older: offset=20:") and "note 6" in second and "note 16" not in second

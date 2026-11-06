@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type 
 import { useTranslation } from "react-i18next";
 import { api, errorMessage } from "../../api/client";
 import { qk, useTask } from "../../api/queries";
-import type { Assignment, Attachment, Priority, TaskDetail, TaskStatus } from "../../api/types";
+import type { Assignment, Attachment, Comment, Priority, TaskDetail, TaskStatus } from "../../api/types";
 import { AttachmentLink } from "../../components/AttachmentLink";
 import { Lightbox } from "../../components/Lightbox";
 import { Markdown, TicketText } from "../../components/Markdown";
@@ -115,7 +115,7 @@ export function TaskModal({ taskId, onClose }: { taskId: number; onClose: () => 
           <CustomerTexts title={data.customer_title} description={data.customer_description} onSave={patch} />
           <Attachments attachments={data.attachments} reviewIds={reviewAttachmentIds(data.decisions)} onUpload={upload} onView={setViewing} />
           <Assignments assignments={data.assignments} />
-          <Comments taskId={taskId} comments={data.comments} />
+          <Comments key={taskId} taskId={taskId} comments={data.comments} total={data.comment_count} />
         </div>
         <aside className="order-first space-y-4 text-sm md:order-none">
           <Button variant="primary" className="w-full" icon={<Play className="size-3.5" />} onClick={handToManager} disabled={data.manager_active}>
@@ -494,12 +494,41 @@ function Assignments({ assignments }: { assignments: Assignment[] }) {
   );
 }
 
-function Comments({ taskId, comments }: { taskId: number; comments: TaskDetail["comments"] }) {
+const OLDER_PAGE = 50;
+
+function mergeComments(a: Comment[], b: Comment[]) {
+  const byId = new Map(a.map((c) => [c.id, c]));
+  for (const c of b) byId.set(c.id, c);
+  return [...byId.values()].sort((x, y) => x.id - y.id);
+}
+
+// The ticket only carries the newest comments; older ones are paged in on demand.
+function Comments({ taskId, comments, total }: { taskId: number; comments: Comment[]; total: number }) {
   const { t } = useTranslation();
   const { agentById } = useShell();
   const qc = useQueryClient();
   const [body, setBody] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [seen, setSeen] = useState<Comment[]>([]);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const shown = mergeComments(seen, comments);
+  const hidden = Math.max(0, total - shown.length);
+
+  // Keep comments that slide out of the newest page while the ticket is open.
+  useEffect(() => setSeen((prev) => mergeComments(prev, comments)), [comments]);
+
+  const loadOlder = async () => {
+    if (!shown.length) return;
+    setLoadingOlder(true);
+    try {
+      const older = await api.get<Comment[]>(`/tasks/${taskId}/comments?before=${shown[0].id}&limit=${OLDER_PAGE}`);
+      setSeen((prev) => mergeComments(prev, older));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
 
   const send = async () => {
     if (!body.trim()) return;
@@ -516,7 +545,12 @@ function Comments({ taskId, comments }: { taskId: number; comments: TaskDetail["
     <section>
       <SectionTitle>{t("ticket.comments")}</SectionTitle>
       <div className="space-y-3">
-        {comments.map((c) => {
+        {hidden > 0 && (
+          <Button size="sm" variant="ghost" className="w-full" loading={loadingOlder} onClick={loadOlder}>
+            {t("ticket.olderComments", { count: Math.min(hidden, OLDER_PAGE), total: hidden })}
+          </Button>
+        )}
+        {shown.map((c) => {
           const agent = agentById(c.author_agent_id);
           const author = c.author_kind === "agent" ? (agent?.name ?? t("ticket.agent")) : c.author_kind === "system" ? t("ticket.system") : t("ticket.you");
           return (

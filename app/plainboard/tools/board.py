@@ -81,6 +81,12 @@ class CommentArgs(BaseModel):
     body: str = Field(description="Markdown")
 
 
+class GetCommentsArgs(BaseModel):
+    number: int
+    offset: int = Field(default=0, ge=0, description="Skip this many newest comments (get_task shows the newest 10)")
+    limit: int = Field(default=10, ge=1, le=50)
+
+
 class AttachFileArgs(BaseModel):
     task_number: int
     path: str = Field(description="File path, absolute or relative to your workspace")
@@ -137,7 +143,7 @@ async def get_board_summary(ctx: ToolContext, _args) -> str:
     return f"Counts: {counts}\n" + (f"Label colors: {colors}\n" if colors else "") + "\n".join(ticket_line(t) for t in open_tasks[:40]) + more
 
 
-@tool("get_task", "Full ticket: description, attachments (paths), recent comments, assignments.", TicketRef)
+@tool("get_task", "Full ticket: description, attachments (paths), last 10 comments, assignments.", TicketRef)
 async def get_task(ctx: ToolContext, args: TicketRef) -> str:
     task = await board_service.get_task_by_number(ctx.session, ctx.project.id, args.number)
     text = await board_service.ticket_text(ctx.session, task, comment_limit=10)
@@ -145,6 +151,21 @@ async def get_task(ctx: ToolContext, args: TicketRef) -> str:
     if assignments:
         text += "\n\nAssignments:\n" + "\n".join(f"- #{a.id} [{a.status}] agent {a.agent_id}: {a.title}" + (f" → {truncate(a.result, 200)}" if a.result else "") for a in assignments)
     return text
+
+
+@tool("get_comments", "Older ticket comments, page by page (newest first by offset).", GetCommentsArgs)
+async def get_comments(ctx: ToolContext, args: GetCommentsArgs) -> str:
+    from ..orchestration.prompts import comment_lines
+
+    task = await board_service.get_task_by_number(ctx.session, ctx.project.id, args.number)
+    total = await board_service.count_comments(ctx.session, task.id)
+    comments = await board_service.recent_comments(ctx.session, task.id, args.limit, offset=args.offset)
+    if not comments:
+        return f"No comments at offset {args.offset} ({total} total)."
+    names = await board_service.agent_names(ctx.session, ctx.project.id)
+    first = total - args.offset - len(comments) + 1
+    head = f"Comments {first}-{first + len(comments) - 1} of {total} (oldest first)" + (f"; {first - 1} older: offset={args.offset + len(comments)}" if first > 1 else "")
+    return head + ":\n" + "\n".join(comment_lines(comments, names, 2000))
 
 
 @tool("create_tasks", "Create one or more tickets (e.g. follow-ups you discovered). They land in backlog unless status given.", CreateTasksArgs)

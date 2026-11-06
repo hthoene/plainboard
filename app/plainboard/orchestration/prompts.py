@@ -287,7 +287,13 @@ def now_line(tz_name: str) -> str:
 
 
 def ticket_brief(
-    task: Task, attachments: list[Attachment], comments: list[Comment], names: dict[int, str], runner_path, decisions: list[Decision] | None = None
+    task: Task,
+    attachments: list[Attachment],
+    comments: list[Comment],
+    names: dict[int, str],
+    runner_path,
+    decisions: list[Decision] | None = None,
+    comment_total: int | None = None,
 ) -> str:
     lines = [f"Ticket #{task.number}: {task.title}", f"Status: {task.status}{' (archived)' if task.archived_at else ''} | Priority: {task.priority}" + (f" | Labels: {', '.join(task.labels)}" if task.labels else "")]
     if task.description:
@@ -306,11 +312,18 @@ def ticket_brief(
             options = "; ".join(f"{i}. {o['label']}" for i, o in enumerate(d.options, 1))
             lines.append(f"- Decision {d.id}: {d.question}" + (f" ({options})" if options else ""))
     if comments:
-        lines += ["", "Recent comments:"]
-        for c in comments:
-            author = names.get(c.author_agent_id or 0, c.author_kind) if c.author_kind == "agent" else c.author_kind
-            lines.append(f"- {author}: {truncate(c.body, 600)}")
+        older = (comment_total or 0) - len(comments)
+        more = f" (last {len(comments)} of {comment_total}; {older} older: get_comments)" if older > 0 else ""
+        lines += ["", f"Recent comments{more}:"] + comment_lines(comments, names, 600)
     return "\n".join(lines)
+
+
+def comment_lines(comments: list[Comment], names: dict[int, str], max_len: int) -> list[str]:
+    out = []
+    for c in comments:
+        author = names.get(c.author_agent_id or 0, c.author_kind) if c.author_kind == "agent" else c.author_kind
+        out.append(f"- {author}: {truncate(c.body, max_len)}")
+    return out
 
 
 def ticket_handoff(brief: str) -> str:

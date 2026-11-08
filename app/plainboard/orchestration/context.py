@@ -23,6 +23,7 @@ from ..services import agents as agent_service
 from ..services import notes as notes_service
 from ..services import repositories as repo_service
 from ..services import secrets as secret_service
+from ..services import accounts as account_service
 from ..services import settings as settings_service
 from ..services import todos as todo_service
 from ..services.util import truncate
@@ -171,7 +172,8 @@ class ContextManager:
             return False
 
         values = await settings_service.get_all(session)
-        credentials = settings_service.credentials(values)
+        account = await account_service.pick(session, agent.provider, agent, conv)
+        credentials = settings_service.credentials(values, account=account_service.fields(account))
         summary = conv.summary
         cost = 0.0
         tokens_in = tokens_out = 0

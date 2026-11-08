@@ -26,7 +26,7 @@
   },
   "status": {
     "runnerDown": "Runner not reachable",
-    "noCredentials": "Connect Claude in Settings"
+    "noCredentials": "Add an account in Settings"
   },
   "taskStatus": {
     "backlog": "Backlog",
@@ -242,7 +242,9 @@
         "basisWeek": "Based on this week so far"
       },
       "unknown": "No usage known yet. It appears after the next agent turn at the latest.",
-      "noPlan": "You are signed in with an API key, which has no plan limits. Switch to your subscription in Settings to see them here."
+      "noPlan": "You are signed in with an API key, which has no plan limits. Add a subscription in Settings to see them here.",
+      "unknownShort": "No usage known yet.",
+      "apiKey": "API key: no plan limits."
     },
     "menu": "Conversation options",
     "compressNow": "Compress context now",
@@ -330,6 +332,10 @@
     "instructionsHint": "Added to the agent's system prompt.",
     "modelSection": "Model",
     "provider": "Provider",
+    "account": "Account",
+    "accountHint": "Automatic: the subscription with the most room left; API keys only when every subscription is nearly used up.",
+    "accountAuto": "Automatic",
+    "accountDisabled": "disabled",
     "model": "Model",
     "defaultModel": "Default from settings",
     "customModel": "Custom model id…",
@@ -427,6 +433,14 @@
     "globalToggle": "Available in all projects",
     "confirmDelete": "Delete MCP server \"{{name}}\"?"
   },
+  "accounts": {
+    "add": "Add account",
+    "label": "Account name",
+    "enabled": "Active",
+    "delete": "Delete account",
+    "confirmDelete": "Delete account \"{{name}}\"? A ChatGPT sign-in on the runner is signed out.",
+    "rotationHint": "Each agent stays on its account while that one has room, then moves to the subscription with the most room. You can pin an agent to an account in the team editor."
+  },
   "settings": {
     "title": "Settings",
     "test": "Test connection",
@@ -436,7 +450,7 @@
     "secretFromEnv": "Using value from environment",
     "secretUnset": "Not set",
     "claude": "Claude",
-    "claudeHint": "Agents with the Claude Agent provider run on Claude via the Claude Agent SDK. Use an Anthropic API key or your own Claude login.",
+    "claudeHint": "Agents with the Claude Agent provider run on Claude via the Claude Agent SDK. Add one or more Anthropic API keys or Claude logins.",
     "auth": {
       "api_key": "API key",
       "api_keyHint": "Recommended · Anthropic Console",
@@ -449,7 +463,7 @@
     "apiKey": "Anthropic API key",
     "runnerLoginHint": "Log in once inside the runner container; the login is kept in a volume:",
     "codex": "Codex",
-    "codexHint": "Agents with the Codex provider run on OpenAI models via the Codex CLI. Use your ChatGPT subscription or an OpenAI API key. Pick the provider per agent.",
+    "codexHint": "Agents with the Codex provider run on OpenAI models via the Codex CLI. Add one or more ChatGPT subscriptions or OpenAI API keys. Pick the provider per agent.",
     "codexAuth": {
       "chatgpt": "ChatGPT subscription",
       "chatgptHint": "Sign in with your ChatGPT plan",
@@ -464,7 +478,6 @@
     "codexDeviceCode": "Open this page, sign in with your ChatGPT account and enter the code:",
     "codexWaiting": "Waiting for the sign-in…",
     "codexCancel": "Cancel",
-    "codexShellHint": "Or sign in inside the runner container:",
     "codexOwnLoginNotice": "Uses your own ChatGPT account. Whether this is allowed for third-party tools depends on OpenAI's terms for your plan.",
     "github": "GitHub",
     "githubHint": "Optional. A fine-grained personal access token lets agents clone, push, open PRs and use the gh CLI.",

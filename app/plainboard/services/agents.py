@@ -7,12 +7,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..events import bus
 from ..models import ACTIVE_RUN_STATUSES, Agent, Conversation, Job, JobStatus, McpServer, Message, Repository, Run, RunStatus
 from ..schemas import AgentCreate, AgentOut, AgentUpdate
+from . import accounts as account_service
 from . import settings as settings_service
 from . import todos as todo_service
 from .errors import NotFound, ServiceError
 from .util import slugify
 
-NULLABLE_FIELDS = {"effort", "max_turns"}
+NULLABLE_FIELDS = {"effort", "max_turns", "account_id"}
 PALETTE = ["#6366f1", "#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#84cc16", "#f97316"]
 
 
@@ -66,6 +67,7 @@ async def create(
     if catalog and provider != s["default_provider"]:
         model = data.model or equivalent_model(catalog, model, provider) or model
         summary_model = data.summary_model or equivalent_model(catalog, summary_model, provider) or summary_model
+    await account_service.check_pin(session, data.account_id, provider)
     count = await session.scalar(select(func.count(Agent.id)).where(Agent.project_id == project_id)) or 0
     agent = Agent(
         project_id=project_id,
@@ -85,6 +87,7 @@ async def create(
         max_turns=data.max_turns,
         color=data.color or PALETTE[count % len(PALETTE)],
         all_repos=data.all_repos,
+        account_id=data.account_id,
     )
     agent.mcp_servers = []
     agent.repositories = []
@@ -110,6 +113,10 @@ async def update(session: AsyncSession, agent: Agent, data: AgentUpdate, catalog
         # The old provider's session means nothing to the new one: start fresh from summary + recent messages.
         conv = await conversation_for(session, agent.id)
         conv.provider_session_id, conv.context_tokens, conv.session_cost_usd = None, 0, 0.0
+        if "account_id" not in fields and agent.account_id:
+            fields["account_id"] = None  # the pinned account belongs to the old provider
+    if fields.get("account_id") is not None:
+        await account_service.check_pin(session, fields["account_id"], fields.get("provider") or agent.provider)
     mcp_ids = fields.pop("mcp_server_ids", None)
     repo_ids = fields.pop("repository_ids", None)
     if "name" in fields and fields["name"] != agent.name:

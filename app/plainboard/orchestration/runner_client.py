@@ -64,10 +64,10 @@ class RunnerClient:
         except (httpx.HTTPError, ValueError):
             return False
 
-    async def limits(self, credentials: Credentials) -> list[LimitWindow]:
-        """The account's plan limits; empty if they can't be read right now."""
+    async def limits(self, provider: str, credentials: Credentials) -> list[LimitWindow]:
+        """The plan limits of the account in ``credentials``; empty if they can't be read right now."""
         try:
-            resp = await self._client.post("/limits", json=credentials.model_dump(mode="json"), timeout=30)
+            resp = await self._client.post(f"/providers/{provider}/limits", json=credentials.model_dump(mode="json"), timeout=30)
             return [LimitWindow.model_validate(w) for w in resp.json()]
         except (httpx.HTTPError, ValueError):
             return []
@@ -93,13 +93,13 @@ class RunnerClient:
         self._providers = (time.monotonic(), providers)
         return providers
 
-    async def provider_account(self, provider: str, action: str | None = None) -> ProviderAccount:
-        """The subscription signed in on the runner; ``action`` "login" or "logout" changes it first."""
+    async def provider_account(self, provider: str, key: str, action: str | None = None) -> ProviderAccount:
+        """The subscription of account ``key`` signed in on the runner; ``action`` "login" or "logout" changes it first."""
         try:
             if action:
-                resp = await self._client.post(f"/providers/{provider}/{action}", timeout=60)
+                resp = await self._client.post(f"/providers/{provider}/{action}", params={"key": key}, timeout=60)
             else:
-                resp = await self._client.get(f"/providers/{provider}/account", timeout=60)
+                resp = await self._client.get(f"/providers/{provider}/account", params={"key": key}, timeout=60)
         except httpx.HTTPError as exc:
             raise RunnerError(f"Runner unreachable: {exc}") from exc
         if resp.status_code >= 400:

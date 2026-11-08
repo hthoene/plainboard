@@ -3,7 +3,7 @@ import { AlertTriangle, BarChart3, CalendarClock, FolderKanban, MessageSquare, N
 import { useCallback, useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useProjectEvents } from "../../api/events";
-import { useAgents, useMeta, useProjects, useSettings } from "../../api/queries";
+import { useAccounts, useAgents, useMeta, useProjects } from "../../api/queries";
 import { Button, EmptyState, IconButton, Spinner } from "../../components/ui";
 import { useIsDesktop, useStored } from "../../lib/hooks";
 import { Logo } from "../auth/Login";
@@ -152,7 +152,7 @@ export function Shell() {
 function StatusHints({ onOpenSettings }: { onOpenSettings: () => void }) {
   const { t } = useTranslation();
   const meta = useMeta();
-  const settings = useSettings();
+  const accounts = useAccounts();
   if (meta.data && !meta.data.runner_ok) {
     return (
       <span className="flex items-center gap-1.5 text-xs text-amber-600" title={t("status.runnerDown")}>
@@ -160,9 +160,7 @@ function StatusHints({ onOpenSettings }: { onOpenSettings: () => void }) {
       </span>
     );
   }
-  const values = settings.data?.values;
-  const missing = values && values.claude_auth_mode_effective === "runner_login" && !values.claude_auth_mode;
-  if (missing) {
+  if (accounts.data && !accounts.data.some((a) => a.enabled)) {
     return (
       <button onClick={onOpenSettings} className="flex items-center gap-1.5 text-xs text-amber-600 hover:underline" title={t("status.noCredentials")}>
         <AlertTriangle className="size-3.5" /> <span className="hidden sm:inline">{t("status.noCredentials")}</span>

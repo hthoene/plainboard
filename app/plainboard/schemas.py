@@ -56,11 +56,45 @@ class LimitForecast(BaseModel):
     basis_days: int = 0  # complete days behind `daily`; 0: the pace of this week so far
 
 
-class LimitsOut(BaseModel):
-    available: bool = True  # False: this login has no plan limits at all
+class AccountLimits(BaseModel):
+    account_id: int
+    provider: str
+    label: str
+    available: bool = True  # False: this login has no plan limits at all (an API key)
     windows: list[LimitWindow] = Field(default_factory=list)
     forecasts: list[LimitForecast] = Field(default_factory=list)
     updated_at: int | None = None  # unix seconds, like the windows' resets_at
+
+
+class LimitsOut(BaseModel):
+    accounts: list[AccountLimits] = Field(default_factory=list)  # the enabled accounts
+
+
+# --- provider accounts ----------------------------------------------------------------------
+
+
+class AccountCreate(BaseModel):
+    provider: str
+    label: str = Field(default="", max_length=100)
+    auth_mode: str
+    secret: str | None = None  # token or API key
+
+
+class AccountUpdate(BaseModel):
+    label: str | None = Field(default=None, max_length=100)
+    auth_mode: str | None = None
+    secret: str | None = None  # None = keep, "" = clear (then the environment's applies)
+    enabled: bool | None = None
+
+
+class AccountOut(ORM):
+    id: int
+    provider: str
+    label: str
+    auth_mode: str
+    enabled: bool
+    secret_set: bool = False
+    secret_from_env: bool = False  # no own secret, but the environment has one for this mode
 
 
 class RepositoryOut(ORM):
@@ -154,6 +188,7 @@ class AgentCreate(BaseModel):
     mcp_server_ids: list[int] | None = None
     all_repos: bool = True
     repository_ids: list[int] | None = None
+    account_id: int | None = None  # None = automatic
 
 
 class AgentUpdate(BaseModel):
@@ -174,6 +209,7 @@ class AgentUpdate(BaseModel):
     mcp_server_ids: list[int] | None = None
     all_repos: bool | None = None
     repository_ids: list[int] | None = None
+    account_id: int | None = None  # None = automatic
 
 
 class AgentOut(ORM):
@@ -198,6 +234,7 @@ class AgentOut(ORM):
     mcp_server_ids: list[int] = Field(default_factory=list)
     all_repos: bool = True
     repository_ids: list[int] = Field(default_factory=list)
+    account_id: int | None = None
     # live state
     status: Literal["idle", "queued", "running"] = "idle"
     running_jobs: int = 0

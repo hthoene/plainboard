@@ -37,14 +37,14 @@ class Provider(ABC):
         """The account's plan limits, without using the model. Empty if it has none or they are unknown."""
         return []
 
-    async def account(self) -> ProviderAccount | None:
-        """The subscription signed in on the runner. None: the provider has no sign-in of its own."""
+    async def account(self, key: str) -> ProviderAccount | None:
+        """The subscription signed in on the runner for account ``key``. None: the provider has no sign-in of its own."""
         return None
 
-    async def login(self) -> ProviderAccount:
+    async def login(self, key: str) -> ProviderAccount:
         raise NotImplementedError(f"{self.name} has no sign-in")
 
-    async def logout(self) -> ProviderAccount:
+    async def logout(self, key: str) -> ProviderAccount:
         raise NotImplementedError(f"{self.name} has no sign-in")
 
     async def check(self, spec: CompletionSpec) -> CheckResult:

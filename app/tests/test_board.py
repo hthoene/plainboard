@@ -55,11 +55,10 @@ def test_local_workspace_folder(client):
 
 
 def test_settings_mask_secrets(client):
-    client.put("/api/settings", json={"values": {"claude_oauth_token": "sk-secret", "max_parallel_runs": 2}})
+    client.put("/api/settings", json={"values": {"github_token": "sk-secret", "max_parallel_runs": 2}})
     body = client.get("/api/settings").json()
-    assert body["values"]["claude_oauth_token"] is True
+    assert body["values"]["github_token"] is True
     assert body["values"]["max_parallel_runs"] == 2
-    assert body["values"]["claude_auth_mode_effective"] == "oauth_token"
     assert "sk-secret" not in client.get("/api/settings").text
     assert client.put("/api/settings", json={"values": {"bogus": 1}}).status_code == 400
 

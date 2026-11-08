@@ -59,6 +59,7 @@ export interface Agent {
   mcp_server_ids: number[];
   all_repos: boolean;
   repository_ids: number[];
+  account_id: number | null;
   status: "idle" | "queued" | "running";
   running_jobs: number;
   open_todos: number;
@@ -331,11 +332,29 @@ export interface LimitForecast {
   basis_days: number;
 }
 
-export interface Limits {
+export interface AccountLimits {
+  account_id: number;
+  provider: string;
+  label: string;
   available: boolean;
   windows: LimitWindow[];
   forecasts: LimitForecast[];
   updated_at: number | null;
+}
+
+export interface Limits {
+  accounts: AccountLimits[];
+}
+
+/** A subscription or API key of a provider. */
+export interface Account {
+  id: number;
+  provider: string;
+  label: string;
+  auth_mode: string;
+  enabled: boolean;
+  secret_set: boolean;
+  secret_from_env: boolean;
 }
 
 export interface StatsDay {

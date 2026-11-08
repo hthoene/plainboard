@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import auth, chat, internal, knowledge, projects, public, repositories, secrets, system, tasks, todos, ws
+from .api import accounts, auth, chat, internal, knowledge, projects, public, repositories, secrets, system, tasks, todos, ws
 from .config import get_config
 from .db import dispose_engine, init_engine, sessionmaker
 from .migrate import upgrade
@@ -67,7 +67,7 @@ def create_app() -> FastAPI:
     async def service_error(_request: Request, exc: ServiceError) -> JSONResponse:
         return JSONResponse({"detail": str(exc)}, status_code=exc.status_code)
 
-    for module in (auth, system, projects, public, repositories, secrets, tasks, todos, chat, knowledge, internal, ws):
+    for module in (auth, system, accounts, projects, public, repositories, secrets, tasks, todos, chat, knowledge, internal, ws):
         app.include_router(module.router)
 
     _mount_spa(app, get_config().static_dir)

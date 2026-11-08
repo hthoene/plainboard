@@ -43,6 +43,7 @@ class FakeRunner:
         self.completions: list[CompletionSpec] = []
         self.notices: list[tuple[int, str]] = []
         self.limit_windows: list[LimitWindow] = []
+        self.limit_calls: list = []
         self.jobs: dict[str, JobState] = {}
         self.job_specs: list[JobSpec] = []
         self.reachable = True
@@ -88,8 +89,9 @@ class FakeRunner:
     async def cancel(self, run_id: int) -> None:
         pass
 
-    async def limits(self, credentials) -> list[LimitWindow]:
-        return self.limit_windows
+    async def limits(self, provider, credentials) -> list[LimitWindow]:
+        self.limit_calls.append((provider, credentials))
+        return [w for w in self.limit_windows if w.name.startswith("codex_") == (provider == "codex")]
 
     async def notify_run(self, run_id: int, text: str, urgent: bool = False) -> bool:
         self.notices.append((run_id, text))
@@ -146,7 +148,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("PLAINBOARD_STATIC_DIR", str(tmp_path / "static"))
     monkeypatch.setenv("PLAINBOARD_SCHEDULER_INTERVAL_SECONDS", "3600")
     monkeypatch.setenv("PLAINBOARD_JOB_WATCH_INTERVAL_SECONDS", "3600")
-    for var in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "GITHUB_TOKEN", "PLAINBOARD_PASSWORD"):
+    for var in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GITHUB_TOKEN", "PLAINBOARD_PASSWORD"):
         monkeypatch.delenv(var, raising=False)
     from plainboard import config, main
 

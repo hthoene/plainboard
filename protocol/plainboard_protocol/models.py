@@ -8,6 +8,10 @@ from pydantic import BaseModel, Field, TypeAdapter
 # "board": PlainBoard tools + shell and file editing. Much smaller prompt -> fewer tokens.
 Toolset = Literal["full", "board"]
 
+# A provider account's key on the runner. The default account keeps the sign-in from before accounts existed.
+DEFAULT_ACCOUNT = "default"
+ACCOUNT_KEY_PATTERN = r"^[A-Za-z0-9_-]{1,40}$"
+
 
 class ModelInfo(BaseModel):
     id: str
@@ -32,6 +36,8 @@ class Credentials(BaseModel):
     openai_api_key: str | None = None
     # "chatgpt": the ChatGPT subscription signed in on the runner; "api_key": openai_api_key.
     codex_auth_mode: Literal["chatgpt", "api_key"] = "chatgpt"
+    # Which of the runner's Codex sign-ins to use: every account has its own Codex home.
+    codex_account: str = Field(default=DEFAULT_ACCOUNT, pattern=ACCOUNT_KEY_PATTERN)
     github_token: str | None = None
     git_author_name: str = "PlainBoard Agent"
     git_author_email: str = "agent@plainboard.local"

@@ -1,6 +1,7 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import type {
+  Account,
   Limits,
   Agent,
   Assignment,
@@ -27,6 +28,7 @@ export const qk = {
   meta: ["meta"] as const,
   settings: ["settings"] as const,
   limits: ["limits"] as const,
+  accounts: ["accounts"] as const,
   projects: ["projects"] as const,
   agents: (pid: number) => ["agents", pid] as const,
   tasks: (pid: number) => ["tasks", pid] as const,
@@ -51,6 +53,7 @@ export interface AuthStatus {
 export const useAuth = () => useQuery({ queryKey: qk.auth, queryFn: () => api.get<AuthStatus>("/auth/status") });
 export const useMeta = () => useQuery({ queryKey: qk.meta, queryFn: () => api.get<Meta>("/meta"), staleTime: 60_000 });
 export const useSettings = () => useQuery({ queryKey: qk.settings, queryFn: () => api.get<SettingsResponse>("/settings") });
+export const useAccounts = () => useQuery({ queryKey: qk.accounts, queryFn: () => api.get<Account[]>("/accounts") });
 export const useSecrets = (pid: number | null) =>
   useQuery({ queryKey: qk.secrets(pid), queryFn: () => api.get<Secret[]>(pid === null ? "/secrets" : `/projects/${pid}/secrets`) });
 export const useProjects = () => useQuery({ queryKey: qk.projects, queryFn: () => api.get<Project[]>("/projects") });
@@ -113,7 +116,7 @@ export function useApiMutation<TVars, TResult = unknown>(
 }
 
 export const checks = {
-  provider: (provider = "claude_code", model?: string) => api.post<CheckResult>("/settings/check/provider", { provider, model }),
+  account: (id: number, model: string) => api.post<CheckResult>(`/accounts/${id}/check`, { model }),
   github: (token?: string) => api.post<CheckResult>("/settings/check/github", token ? { token } : {}),
   projectGithub: (pid: number) => api.post<CheckResult>(`/projects/${pid}/check-github`),
 };

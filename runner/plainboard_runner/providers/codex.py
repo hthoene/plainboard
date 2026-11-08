@@ -1,8 +1,9 @@
 """Codex provider built on the Codex CLI's app server (``codex app-server``: JSON-RPC over stdio).
 
 Auth: a ChatGPT subscription signed in on the runner (device code from Settings, or
-``codex login --device-auth`` in the runner container), or an OpenAI API key. The two use separate
-Codex homes, so an API key never replaces the subscription's sign-in.
+``codex login --device-auth`` in the runner container), or an OpenAI API key. Every account
+(``Credentials.codex_account``) and an API key each have their own Codex home, so one sign-in never
+replaces another. Homes share their ``sessions`` folder, so a thread resumes under any account.
 
 Each run starts its own app server. PlainBoard's tools reach Codex as a stdio MCP server
 (:mod:`plainboard_runner.mcp_stdio`); messages for a running turn are steered into it.
@@ -17,6 +18,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sys
 import tempfile
 import time
@@ -26,6 +28,8 @@ from pathlib import Path
 from typing import Any
 
 from plainboard_protocol import (
+    ACCOUNT_KEY_PATTERN,
+    DEFAULT_ACCOUNT,
     AssistantTextEvent,
     CompactionEvent,
     CompletionResult,
@@ -59,6 +63,7 @@ log = logging.getLogger(__name__)
 CODEX_BIN = os.environ.get("PLAINBOARD_CODEX_BIN", "codex")
 SUBSCRIPTION_HOME = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
 API_KEY_HOME = Path.home() / ".plainboard" / "codex-api-key"
+ACCOUNTS_HOME = Path.home() / ".plainboard" / "codex-accounts"  # further accounts, one home each
 BRIDGE_DIR = Path(tempfile.gettempdir()) / "plainboard-bridge"
 MCP_SERVER_NAME = "plainboard"
 MAX_LINE_BYTES = 64 * 1024 * 1024  # one line holds a whole item, e.g. a long command output
@@ -98,6 +103,26 @@ def toml_value(value: Any) -> str:
     if isinstance(value, dict):
         return "{" + ", ".join(f"{json.dumps(str(k), ensure_ascii=False)} = {toml_value(v)}" for k, v in value.items()) + "}"
     raise TypeError(f"No TOML form for {type(value).__name__}")
+
+
+def account_home(key: str, api_key: bool = False) -> Path:
+    """The Codex home of an account. The default account keeps the homes from before accounts existed."""
+    if not re.fullmatch(ACCOUNT_KEY_PATTERN, key):
+        raise ValueError(f"Invalid account key: {key!r}")
+    if key == DEFAULT_ACCOUNT:
+        return API_KEY_HOME if api_key else SUBSCRIPTION_HOME
+    return ACCOUNTS_HOME / (f"{key}-api-key" if api_key else key)
+
+
+def share_sessions(home: Path) -> None:
+    """Point a further account's sessions at the subscription home's, so an agent's thread survives
+    a switch of account. Homes that have sessions of their own keep them."""
+    link = home / "sessions"
+    if home in (SUBSCRIPTION_HOME, API_KEY_HOME) or link.exists() or link.is_symlink():
+        return
+    target = SUBSCRIPTION_HOME / "sessions"
+    target.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(target, target_is_directory=True)
 
 
 def guess_tier(model_id: str) -> str:
@@ -170,6 +195,7 @@ class AppServer:
 
     async def __aenter__(self) -> AppServer:
         self.home.mkdir(parents=True, exist_ok=True)
+        share_sessions(self.home)
         args = [CODEX_BIN, "app-server"]
         for key, value in {**BASE_CONFIG, **self.config}.items():
             args += ["-c", f"{key}={toml_value(value)}"]
@@ -482,7 +508,8 @@ class TurnRunner:
 class DeviceLogin:
     """A ChatGPT sign-in with a device code, kept alive in the background until it completes."""
 
-    def __init__(self) -> None:
+    def __init__(self, home: Path) -> None:
+        self.home = home
         self.server: AppServer | None = None
         self.task: asyncio.Task[None] | None = None
         self.url: str | None = None
@@ -497,7 +524,7 @@ class DeviceLogin:
     async def start(self) -> None:
         await self.cancel()
         self.error = None
-        server = AppServer(SUBSCRIPTION_HOME)
+        server = AppServer(self.home)
         await server.__aenter__()
         try:
             started = await server.request("account/login/start", {"type": "chatgptDeviceCode"})
@@ -541,7 +568,7 @@ class CodexProvider(Provider):
 
     def __init__(self) -> None:
         self._models: tuple[float, list[ModelInfo]] | None = None
-        self._login = DeviceLogin()
+        self._logins: dict[str, DeviceLogin] = {}
         self._api_key_lock = asyncio.Lock()
 
     def info(self) -> ProviderInfo:
@@ -561,20 +588,26 @@ class CodexProvider(Provider):
                 self._models = (time.monotonic() - MODELS_TTL_SECONDS + 300, self._models[1] if self._models else MODELS)  # retry in 5 minutes
         return self.info()
 
+    def _device_login(self, key: str) -> DeviceLogin:
+        if key not in self._logins:
+            self._logins[key] = DeviceLogin(account_home(key))
+        return self._logins[key]
+
     async def _home(self, creds: Credentials) -> Path:
         """The Codex home for these credentials. An API key is signed in to its own home."""
         if creds.codex_auth_mode != "api_key":
-            return SUBSCRIPTION_HOME
+            return account_home(creds.codex_account)
         if not creds.openai_api_key:
             raise RuntimeError("OpenAI API key is not configured (Settings → Codex).")
-        marker = API_KEY_HOME / ".plainboard-key"
+        home = account_home(creds.codex_account, api_key=True)
+        marker = home / ".plainboard-key"
         digest = hashlib.sha256(creds.openai_api_key.encode()).hexdigest()
         async with self._api_key_lock:
             if not marker.is_file() or marker.read_text().strip() != digest:
-                async with AppServer(API_KEY_HOME) as server:
+                async with AppServer(home) as server:
                     await server.request("account/login/start", {"type": "apiKey", "apiKey": creds.openai_api_key})
                 marker.write_text(digest)
-        return API_KEY_HOME
+        return home
 
     async def run(self, spec: RunSpec, bridge: ToolBridge) -> AsyncIterator[RunEvent]:
         home = await self._home(spec.credentials)
@@ -651,19 +684,21 @@ class CodexProvider(Provider):
         )
 
     async def limits(self, credentials: Credentials) -> list[LimitWindow]:
-        if credentials.codex_auth_mode == "api_key" or not (SUBSCRIPTION_HOME / "auth.json").is_file():
+        home = account_home(credentials.codex_account)
+        if credentials.codex_auth_mode == "api_key" or not (home / "auth.json").is_file():
             return []
-        async with AppServer(SUBSCRIPTION_HOME) as server:
+        async with AppServer(home) as server:
             if not (await server.request("account/read", {"refreshToken": False})).get("account"):
                 return []
             answer = await server.request("account/rateLimits/read", None, timeout=30)
         return limit_windows((answer or {}).get("rateLimits"))
 
-    async def account(self) -> ProviderAccount:
-        state = ProviderAccount(login_url=self._login.url, login_code=self._login.code, login_error=self._login.error)
-        if self._login.active:
+    async def account(self, key: str) -> ProviderAccount:
+        login = self._device_login(key)
+        state = ProviderAccount(login_url=login.url, login_code=login.code, login_error=login.error)
+        if login.active:
             return state
-        async with AppServer(SUBSCRIPTION_HOME) as server:
+        async with AppServer(login.home) as server:
             account = (await server.request("account/read", {"refreshToken": False})).get("account") or {}
         if account.get("type") == "chatgpt":
             state.signed_in = True
@@ -672,12 +707,14 @@ class CodexProvider(Provider):
             state.signed_in, state.detail = True, str(account["type"])
         return state
 
-    async def login(self) -> ProviderAccount:
-        await self._login.start()
-        return ProviderAccount(login_url=self._login.url, login_code=self._login.code)
+    async def login(self, key: str) -> ProviderAccount:
+        login = self._device_login(key)
+        await login.start()
+        return ProviderAccount(login_url=login.url, login_code=login.code)
 
-    async def logout(self) -> ProviderAccount:
-        await self._login.cancel()
-        async with AppServer(SUBSCRIPTION_HOME) as server:
+    async def logout(self, key: str) -> ProviderAccount:
+        login = self._device_login(key)
+        await login.cancel()
+        async with AppServer(login.home) as server:
             await server.request("account/logout", None)
         return ProviderAccount()

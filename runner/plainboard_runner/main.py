@@ -9,9 +9,9 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from plainboard_protocol import CheckResult, CompletionResult, CompletionSpec, Credentials, ErrorEvent, JobSpec, JobState, LimitWindow, ProviderAccount, ProviderInfo, RunSpec
+from plainboard_protocol import ACCOUNT_KEY_PATTERN, DEFAULT_ACCOUNT, CheckResult, CompletionResult, CompletionSpec, Credentials, ErrorEvent, JobSpec, JobState, LimitWindow, ProviderAccount, ProviderInfo, RunSpec
 from pydantic import BaseModel
 
 from . import jobs
@@ -44,10 +44,13 @@ def _signin_provider(name: str):
         raise HTTPException(404, str(exc)) from exc
 
 
+AccountKey = Query(DEFAULT_ACCOUNT, pattern=ACCOUNT_KEY_PATTERN)
+
+
 @app.get("/providers/{name}/account", response_model=ProviderAccount)
-async def provider_account(name: str) -> ProviderAccount:
+async def provider_account(name: str, key: str = AccountKey) -> ProviderAccount:
     try:
-        account = await _signin_provider(name).account()
+        account = await _signin_provider(name).account(key)
     except Exception as exc:
         raise HTTPException(502, str(exc)[:1000]) from exc
     if account is None:
@@ -56,9 +59,9 @@ async def provider_account(name: str) -> ProviderAccount:
 
 
 @app.post("/providers/{name}/login", response_model=ProviderAccount)
-async def provider_login(name: str) -> ProviderAccount:
+async def provider_login(name: str, key: str = AccountKey) -> ProviderAccount:
     try:
-        return await _signin_provider(name).login()
+        return await _signin_provider(name).login(key)
     except NotImplementedError as exc:
         raise HTTPException(404, str(exc)) from exc
     except Exception as exc:
@@ -66,9 +69,9 @@ async def provider_login(name: str) -> ProviderAccount:
 
 
 @app.post("/providers/{name}/logout", response_model=ProviderAccount)
-async def provider_logout(name: str) -> ProviderAccount:
+async def provider_logout(name: str, key: str = AccountKey) -> ProviderAccount:
     try:
-        return await _signin_provider(name).logout()
+        return await _signin_provider(name).logout(key)
     except NotImplementedError as exc:
         raise HTTPException(404, str(exc)) from exc
     except Exception as exc:
@@ -159,15 +162,15 @@ async def notify_run(run_id: str, body: RunNotice) -> dict[str, bool]:
     return {"delivered": True}
 
 
-@app.post("/limits", response_model=list[LimitWindow])
-async def limits(credentials: Credentials) -> list[LimitWindow]:
-    windows: list[LimitWindow] = []
-    for provider in list_providers():
-        try:
-            windows += await provider.limits(credentials)
-        except Exception as exc:
-            log.warning("No limits from %s: %s", provider.name, exc)
-    return windows
+@app.post("/providers/{name}/limits", response_model=list[LimitWindow])
+async def limits(name: str, credentials: Credentials) -> list[LimitWindow]:
+    """The plan limits of the account in ``credentials``; empty if they can't be read."""
+    provider = _signin_provider(name)
+    try:
+        return await provider.limits(credentials)
+    except Exception as exc:
+        log.warning("No limits from %s: %s", provider.name, exc)
+        return []
 
 
 @app.post("/complete", response_model=CompletionResult)

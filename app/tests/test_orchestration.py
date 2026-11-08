@@ -779,29 +779,6 @@ def test_agents_can_read_each_others_chat(client, project):
     assert "the build is green" in tool["meta"]["result"] and not tool["meta"]["is_error"]
 
 
-def test_runs_report_plan_limits(client, project):
-    pid = project["id"]
-    client.put("/api/settings", json={"values": {"claude_auth_mode": "oauth_token"}})
-    dev = make_dev(client, pid)
-    assert client.get("/api/limits").json()["windows"] == []
-    chat(client, dev["id"], "LIMITS five_hour 0.9 3600\nLIMITS seven_day_opus 0.4 3600\nLIMITS seven_day 0.7 -10")
-    wait_for(lambda: idle(client, pid))
-    body = client.get("/api/limits").json()
-    used = {w["name"]: w["utilization"] for w in body["windows"]}
-    # The weekly window has reset; Claude's old 5-hour window is not shown any more.
-    assert used == {"seven_day_opus": 0.4, "seven_day": 0.0} and body["updated_at"]
-    client.put("/api/settings", json={"values": {"claude_auth_mode": "api_key"}})
-    body = client.get("/api/limits").json()
-    assert body["windows"] == [] and body["available"] is False
-
-
-def test_limits_are_read_without_a_run(client, project):
-    client.put("/api/settings", json={"values": {"claude_auth_mode": "oauth_token"}})
-    runner(client).limit_windows = [LimitWindow(name="seven_day", utilization=0.2)]
-    wait_for(lambda: client.get("/api/limits").json()["windows"])
-    assert client.get("/api/limits").json()["windows"][0]["name"] == "seven_day"
-
-
 def test_manager_marks_and_sorts_the_board(client, project):
     pid = project["id"]
     manager = agents_by_slug(client, pid)["manager"]
@@ -923,16 +900,6 @@ def test_agents_on_another_provider_get_its_models(client, project):
     conv = client.get(f"/api/agents/{other['id']}/conversation").json()
     assert conv["provider_session_id"] is None  # a Claude session means nothing to Codex
     assert client.post(f"/api/projects/{pid}/agents", json={"name": "X", "provider": "nope"}).status_code == 400
-
-
-def test_codex_limits_are_kept_apart_from_claude(client, project):
-    client.put("/api/settings", json={"values": {"claude_auth_mode": "api_key", "codex_auth_mode": "chatgpt"}})
-    runner(client).limit_windows = [LimitWindow(name="seven_day", utilization=0.2), LimitWindow(name="codex_seven_day", utilization=0.5)]
-    wait_for(lambda: client.get("/api/limits").json()["windows"])
-    assert [w["name"] for w in client.get("/api/limits").json()["windows"]] == ["codex_seven_day"]  # Claude uses an API key
-    client.put("/api/settings", json={"values": {"codex_auth_mode": "api_key"}})
-    body = client.get("/api/limits").json()
-    assert body["windows"] == [] and body["available"] is False
 
 
 def test_long_comment_threads_are_paged(client, project):

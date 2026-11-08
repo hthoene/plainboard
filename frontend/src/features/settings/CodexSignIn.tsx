@@ -5,17 +5,17 @@ import { api, errorMessage } from "../../api/client";
 import type { ProviderAccount } from "../../api/types";
 import { Button } from "../../components/ui";
 
-const KEY = ["providerAccount", "codex"];
-
-/** The ChatGPT subscription signed in on the runner, with a device-code sign-in. */
-export function CodexSignIn() {
+/** The ChatGPT subscription of an account, signed in on the runner with a device code. */
+export function CodexSignIn({ accountId }: { accountId: number }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
+  const KEY = ["accountSignIn", accountId];
+  const url = `/accounts/${accountId}/signin`;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const account = useQuery({
     queryKey: KEY,
-    queryFn: () => api.get<ProviderAccount>("/providers/codex/account"),
+    queryFn: () => api.get<ProviderAccount>(url),
     refetchInterval: (query) => (query.state.data?.login_code ? 3000 : false),
   });
 
@@ -23,7 +23,7 @@ export function CodexSignIn() {
     setBusy(true);
     setError(null);
     try {
-      qc.setQueryData(KEY, await api.post<ProviderAccount>(`/providers/codex/${action}`));
+      qc.setQueryData(KEY, await (action === "login" ? api.post<ProviderAccount>(url) : api.del<ProviderAccount>(url)));
       if (action === "logout") await qc.invalidateQueries({ queryKey: KEY });
     } catch (err) {
       setError(errorMessage(err));
@@ -59,11 +59,6 @@ export function CodexSignIn() {
         </div>
       )}
       {problem && <p className="text-red-600">{problem}</p>}
-      {!data?.signed_in && !data?.login_code && (
-        <p>
-          {t("settings.codexShellHint")} <code className="font-mono">docker compose exec -it runner codex login --device-auth</code>
-        </p>
-      )}
     </div>
   );
 }

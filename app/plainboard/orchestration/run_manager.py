@@ -51,6 +51,7 @@ from ..services import mcp as mcp_service
 from ..services import projects as project_service
 from ..services import repositories as repo_service
 from ..services import secrets as secret_service
+from ..services import accounts as account_service
 from ..services import limits as limits_service
 from ..services import settings as settings_service
 from ..services.errors import ServiceError
@@ -75,6 +76,7 @@ class RunContext:
     agent_id: int
     token: str
     redact: Callable[[str], str] = lambda text: text  # hides secret values in what is stored and shown
+    account_key: str | None = None  # the provider account the run uses (its limit reports belong to it)
 
 
 @dataclass
@@ -350,9 +352,14 @@ class RunManager:
 
     async def _refresh_limits(self) -> None:
         async with self._sm() as s:
-            windows = await self.runner.limits(settings_service.credentials(await settings_service.get_all(s)))
-            if windows:
-                await limits_service.record(s, windows)
+            values = await settings_service.get_all(s)
+            accounts = [a for a in await account_service.list_accounts(s) if a.enabled and account_service.has_plan(a)]
+            found = await asyncio.gather(
+                *(self.runner.limits(a.provider, settings_service.credentials(values, account=account_service.fields(a))) for a in accounts)
+            )
+            for account, windows in zip(accounts, found):
+                if windows:
+                    await limits_service.record(s, account.key, windows)
 
     async def wind_down(self, s: AsyncSession, agent: Agent, reason: str = "") -> bool:
         """Let an agent finish safely: drop what it has not started and tell its running turn to wrap up.
@@ -537,8 +544,17 @@ class RunManager:
                 await s.commit()
                 bus.publish(project.id, "message.updated", MessageOut.model_validate(message))
             secret_env = secret_service.env(await secret_service.effective(s, project.id))
+            account = await account_service.pick(s, agent.provider, agent, conv)
+            if account and account.key != conv.account_key:
+                conv.account_key = account.key
+                await s.commit()
             ctx = RunContext(
-                run_id=run.id, project_id=project.id, agent_id=agent.id, token=secrets.token_urlsafe(32), redact=secret_service.redactor(secret_env)
+                run_id=run.id,
+                project_id=project.id,
+                agent_id=agent.id,
+                token=secrets.token_urlsafe(32),
+                redact=secret_service.redactor(secret_env),
+                account_key=account.key if account else None,
             )
             self._tokens[ctx.token] = ctx
             spec = RunSpec(
@@ -557,7 +573,7 @@ class RunManager:
                     shared=bool(project.workspace_path),
                     setup_script=project.setup_script,
                 ),
-                credentials=settings_service.credentials(values, project_service.github_token(project), secret_env),
+                credentials=settings_service.credentials(values, project_service.github_token(project), secret_env, account_service.fields(account)),
                 bridge=ToolBridgeSpec(
                     base_url=get_config().internal_url, run_id=str(run.id), run_token=ctx.token, tools=registry.tool_defs_for(agent)
                 ),
@@ -597,8 +613,8 @@ class RunManager:
                     conv.context_tokens = event.context_tokens
                     await s.commit()
                     bus.publish(ctx.project_id, "conversation.updated", {"agent_id": ctx.agent_id, "context_tokens": event.context_tokens})
-                elif event.type == "limits":
-                    await limits_service.record(s, event.windows)
+                elif event.type == "limits" and ctx.account_key:
+                    await limits_service.record(s, ctx.account_key, event.windows)
                 elif event.type == "compaction":
                     marker = self.context.provider_compacted(conv, event.tokens_before)
                     marker.run_id = ctx.run_id

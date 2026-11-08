@@ -6,6 +6,8 @@ so new providers or services can reuse it.
 """
 
 from .models import (
+    ACCOUNT_KEY_PATTERN,
+    DEFAULT_ACCOUNT,
     AssistantTextEvent,
     CheckResult,
     ProviderAccount,
@@ -39,6 +41,8 @@ from .models import (
 )
 
 __all__ = [
+    "ACCOUNT_KEY_PATTERN",
+    "DEFAULT_ACCOUNT",
     "AssistantTextEvent",
     "CheckResult",
     "ProviderAccount",

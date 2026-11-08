@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter
-from plainboard_protocol import CompletionSpec, ProviderAccount
 from pydantic import BaseModel
 
 from ..models import TaskStatus
@@ -62,48 +61,6 @@ async def put_settings(body: SettingsUpdate, session: Session) -> SettingsOut:
     except ValueError as exc:
         raise ServiceError(str(exc)) from exc
     return await get_settings(session)
-
-
-class ProviderCheckIn(BaseModel):
-    provider: str = "claude_code"
-    model: str | None = None
-
-
-@router.post("/settings/check/provider", response_model=CheckOut)
-async def check_provider(body: ProviderCheckIn, session: Session, runner: Runner) -> CheckOut:
-    values = await settings_service.get_all(session)
-    spec = CompletionSpec(
-        provider=body.provider,
-        model=body.model or values["default_summary_model"],
-        system_prompt="You are a connectivity check. Reply with exactly: OK",
-        prompt="Reply with OK.",
-        credentials=settings_service.credentials(values),
-    )
-    result = await runner.check_provider(spec)
-    return CheckOut(ok=result.ok, detail=result.detail)
-
-
-async def _account(runner: Runner, provider: str, action: str | None = None) -> ProviderAccount:
-    try:
-        return await runner.provider_account(provider, action)
-    except RunnerError as exc:
-        raise ServiceError(str(exc), 502) from exc
-
-
-@router.get("/providers/{provider}/account", response_model=ProviderAccount)
-async def provider_account(provider: str, runner: Runner) -> ProviderAccount:
-    return await _account(runner, provider)
-
-
-@router.post("/providers/{provider}/login", response_model=ProviderAccount)
-async def provider_login(provider: str, runner: Runner) -> ProviderAccount:
-    """Starts a device sign-in: the answer has the URL to open and the code to enter."""
-    return await _account(runner, provider, "login")
-
-
-@router.post("/providers/{provider}/logout", response_model=ProviderAccount)
-async def provider_logout(provider: str, runner: Runner) -> ProviderAccount:
-    return await _account(runner, provider, "logout")
 
 
 class GithubCheckIn(BaseModel):

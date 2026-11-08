@@ -80,6 +80,19 @@ ACTIVE_RUN_STATUSES = (RunStatus.QUEUED, RunStatus.RUNNING)
 # --- settings -------------------------------------------------------------------------------
 
 
+class Account(Timestamps, Base):
+    """A subscription or API key of a provider. Agents use the one with the most room left unless pinned."""
+
+    __tablename__ = "accounts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(50))
+    label: Mapped[str] = mapped_column(String(100))
+    key: Mapped[str] = mapped_column(String(40), unique=True)  # the account on the runner (e.g. its Codex home)
+    auth_mode: Mapped[str] = mapped_column(String(20))
+    secret_enc: Mapped[str | None] = mapped_column(Text)  # token or API key; None = the environment's
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
 class Setting(Base):
     __tablename__ = "settings"
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
@@ -161,6 +174,7 @@ class Agent(Timestamps, Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     color: Mapped[str] = mapped_column(String(20), default="#6366f1")
     all_repos: Mapped[bool] = mapped_column(Boolean, default=True)  # False = only `repositories`
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"))  # None = automatic
 
     project: Mapped[Project] = relationship(back_populates="agents")
     repositories: Mapped[list[Repository]] = relationship(secondary=agent_repositories, lazy="selectin")
@@ -289,6 +303,7 @@ class Conversation(Base):
     session_sections: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     # The task list as last sent in this session: it is only sent again when it changed.
     todos_shown: Mapped[str | None] = mapped_column(Text)
+    account_key: Mapped[str | None] = mapped_column(String(40))  # the provider account of the last run
     summary: Mapped[str | None] = mapped_column(Text)
     summary_until_message_id: Mapped[int] = mapped_column(Integer, default=0)
     compressions: Mapped[int] = mapped_column(Integer, default=0)

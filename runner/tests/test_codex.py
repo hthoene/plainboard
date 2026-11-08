@@ -97,6 +97,23 @@ def test_rate_limits_become_codex_windows():
     assert EventMapper("th").map("account/rateLimits/updated", {"rateLimits": {"limitId": "other", "primary": {"usedPercent": 5}}}) == []
 
 
+
+def test_every_account_has_its_own_codex_home_with_shared_sessions(tmp_path, monkeypatch):
+    monkeypatch.setattr(codex, "SUBSCRIPTION_HOME", tmp_path / "codex")
+    monkeypatch.setattr(codex, "API_KEY_HOME", tmp_path / "api-key")
+    monkeypatch.setattr(codex, "ACCOUNTS_HOME", tmp_path / "accounts")
+    assert codex.account_home("default") == tmp_path / "codex"
+    assert codex.account_home("default", api_key=True) == tmp_path / "api-key"
+    assert codex.account_home("ab12", api_key=True) == tmp_path / "accounts" / "ab12-api-key"
+    with pytest.raises(ValueError):
+        codex.account_home("../escape")
+    home = codex.account_home("ab12")
+    home.mkdir(parents=True)
+    codex.share_sessions(home)
+    (home / "sessions" / "rollout.jsonl").write_text("{}")
+    assert (tmp_path / "codex" / "sessions" / "rollout.jsonl").is_file()
+    codex.share_sessions(home)  # idempotent
+
 class FakeServer:
     """Plays a Codex app server: answers requests and feeds scripted notifications."""
 

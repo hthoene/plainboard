@@ -39,6 +39,7 @@ token that is valid only while the run lasts and only for that run's project and
 | Board check | `services/board.idle_in_progress`, `prompts.board_check` | Keeps the board current: `delegate` moves a ticket to in progress, and every manager turn lists tickets in progress without an active run, running job, open decision or user action. |
 | Statistics | `services/stats.py`, `task_transitions`, `features/stats/` | Tickets per day come from `TaskTransition`, written on every status change and kept after a ticket is deleted. Turns, tokens and cost come from `Run`. Tickets from before the table existed were backfilled: a done ticket counts as finished at its `updated_at`. |
 | Archive | `task.archived_at`, `project.auto_archive_days`, `services/board.archive_tasks` | Done tickets leave the board after the project's days (the scheduler checks) or by hand. They keep their history and links; moving or restoring one brings it back. |
+| Account | `models.Account`, `services/accounts.py`, `features/settings/AccountsEditor.tsx` | Several subscriptions or API keys per provider (encrypted, write-only). `accounts.pick` chooses per turn: the agent's pinned account, else the one of its last turn while it is below 95 % (the prompt cache is per account), else the subscription with the most room; API keys only when every subscription is that full. Plan limits are stored and shown per account. On the runner each Codex account has its own Codex home (`Credentials.codex_account`) whose `sessions` link to the default home's, so threads resume under any account. Claude accounts differ only in their token. |
 | Secrets | `models.Secret`, `services/secrets.py`, `Credentials.secrets` | User-defined environment variables for agents (global or per project; the project wins). Encrypted, write-only in the API. The runner sets them for the agent's shell, jobs and setup script, below git and auth variables. Agents see names and descriptions in the system prompt; values are replaced by `[secret NAME]` in stored messages and job reports. |
 | Chat attachment | `services/board.py`, `api/chat.py` | A file sent with a chat message: an `Attachment` without a ticket, listed on the `Run` and in the user message's meta. The agent gets its path under `/uploads` in the turn and opens it with its file tools. |
 | Run | `run_manager.py` | One agent turn. Triggers: chat, ticket, assignment, ask, message, schedule, wake. |
@@ -119,7 +120,8 @@ implemented in `runner/plainboard_runner/tool_bridge.py`.
    Optional: `catalog()` (models the account offers), `limits()`, and `account()`/`login()`/`logout()`
    for a subscription signed in on the runner (the UI's device sign-in uses them).
 2. Register it in `providers/registry.py`.
-3. Add its credentials to `Credentials` and the settings.
+3. Add its credentials to `Credentials`, its sign-in kinds to `services/accounts.py` (`AUTH_MODES`, `fields`)
+   and the accounts editor.
 
 A provider that can't call Python tools in-process can serve the bridge as a stdio MCP server
 (`plainboard_runner/mcp_stdio.py`), as Codex does. Agents choose their provider; models of the same
@@ -127,8 +129,9 @@ A provider that can't call Python tools in-process can serve the bridge as a std
 
 **Codex.** `providers/codex.py` drives `codex app-server` (JSON-RPC over stdio; the CLI version is
 pinned in the runner's Dockerfile), one process per run. Board tools come from `mcp_stdio`, messages
-for a running turn go in with `turn/steer`, and the thread id is the session id. A ChatGPT sign-in
-lives in `~/.codex` (agent-home volume); an API key is signed in to a separate Codex home.
+for a running turn go in with `turn/steer`, and the thread id is the session id. The default account's ChatGPT
+sign-in lives in `~/.codex` (agent-home volume), further accounts in `~/.plainboard/codex-accounts/<key>`;
+an API key is signed in to a separate Codex home.
 
 The UI picks up models from `/api/meta`. If the provider has no server-side sessions, return no
 `session_id`: the context manager then rebuilds every turn from summary + recent messages.

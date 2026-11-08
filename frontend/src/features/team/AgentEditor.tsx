@@ -3,7 +3,7 @@ import clsx from "clsx";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../../api/client";
-import { qk, useMcpServers, useMeta, useRepositories, useSettings } from "../../api/queries";
+import { qk, useAccounts, useMcpServers, useMeta, useRepositories, useSettings } from "../../api/queries";
 import type { Agent, ProviderInfo } from "../../api/types";
 import { Button, ErrorText, Field, Input, Modal, Select, Textarea, Toggle } from "../../components/ui";
 import { formatTokens } from "../../lib/format";
@@ -49,6 +49,7 @@ export function AgentEditor({ agent, onClose }: { agent?: Agent; onClose: () => 
   const settings = useSettings();
   const mcp = useMcpServers(project.id);
   const repos = useRepositories(project.id);
+  const accounts = useAccounts();
   const defaults = settings.data?.values ?? {};
 
   const [form, setForm] = useState(() => ({
@@ -69,12 +70,14 @@ export function AgentEditor({ agent, onClose }: { agent?: Agent; onClose: () => 
     mcp_server_ids: agent?.mcp_server_ids ?? [],
     all_repos: agent?.all_repos ?? true,
     repository_ids: agent?.repository_ids ?? [],
+    account_id: agent?.account_id ?? null,
   }));
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const set = (patch: Partial<typeof form>) => setForm((f) => ({ ...f, ...patch }));
   const provider = useMemo(() => meta.data?.providers.find((p) => p.name === form.provider), [meta.data, form.provider]);
   const selectableServers = (mcp.data ?? []).filter((s) => !s.all_agents);
+  const providerAccounts = (accounts.data ?? []).filter((a) => a.provider === form.provider);
 
   const save = async () => {
     setBusy(true);
@@ -158,7 +161,12 @@ export function AgentEditor({ agent, onClose }: { agent?: Agent; onClose: () => 
               onChange={(e) => {
                 const all = meta.data?.providers ?? [];
                 const to = e.target.value;
-                set({ provider: to, model: form.model && equivalentModel(all, form.model, to), summary_model: form.summary_model && equivalentModel(all, form.summary_model, to) });
+                set({
+                  provider: to,
+                  model: form.model && equivalentModel(all, form.model, to),
+                  summary_model: form.summary_model && equivalentModel(all, form.summary_model, to),
+                  account_id: null,
+                });
               }}
             >
               {(meta.data?.providers ?? [{ name: form.provider, label: form.provider }]).map((p) => (
@@ -171,6 +179,19 @@ export function AgentEditor({ agent, onClose }: { agent?: Agent; onClose: () => 
           <Field label={t("team.model")}>
             <ModelSelect provider={provider} value={form.model} onChange={(model) => set({ model })} />
           </Field>
+          {(providerAccounts.length > 1 || form.account_id !== null) && (
+            <Field label={t("team.account")} hint={t("team.accountHint")} className="sm:col-span-2">
+              <Select value={form.account_id ?? ""} onChange={(e) => set({ account_id: e.target.value ? Number(e.target.value) : null })}>
+                <option value="">{t("team.accountAuto")}</option>
+                {providerAccounts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.label}
+                    {a.enabled ? "" : ` (${t("team.accountDisabled")})`}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          )}
           <Field label={t("team.effort")} hint={t("team.effortHint")}>
             <Select value={form.effort ?? ""} onChange={(e) => set({ effort: e.target.value })}>
               <option value="">{t("team.effortDefault")}</option>

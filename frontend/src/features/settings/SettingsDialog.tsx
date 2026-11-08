@@ -7,9 +7,9 @@ import { api, errorMessage } from "../../api/client";
 import { checks, qk, useMeta, useSettings } from "../../api/queries";
 import type { CheckResult } from "../../api/types";
 import { Button, ErrorText, Field, Input, Modal, Select } from "../../components/ui";
-import { equivalentModel, smallModel } from "../../lib/models";
+import { equivalentModel } from "../../lib/models";
 import { ModelSelect } from "../team/AgentEditor";
-import { CodexSignIn } from "./CodexSignIn";
+import { AccountsEditor } from "./AccountsEditor";
 import { SecretsEditor } from "./SecretsEditor";
 
 export function CheckBadge({ result }: { result: CheckResult | null }) {
@@ -35,16 +35,12 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
   const [secrets, setSecrets] = useState<Values>({});
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
-  const [claudeCheck, setClaudeCheck] = useState<CheckResult | null>(null);
-  const [codexCheck, setCodexCheck] = useState<CheckResult | null>(null);
   const [githubCheck, setGithubCheck] = useState<CheckResult | null>(null);
 
   useEffect(() => {
     if (open && settings.data) {
       setValues(settings.data.values);
       setSecrets({});
-      setClaudeCheck(null);
-      setCodexCheck(null);
       setGithubCheck(null);
     }
   }, [open, settings.data]);
@@ -54,8 +50,6 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
   const setSecret = (patch: Values) => setSecrets((s) => ({ ...s, ...patch }));
   const providers = meta.data?.providers ?? [];
   const provider = providers.find((p) => p.name === (values.default_provider ?? "claude_code"));
-  const authMode = values.claude_auth_mode ?? values.claude_auth_mode_effective;
-  const codexMode = values.codex_auth_mode ?? "chatgpt";
   const setDefaultProvider = (name: string) =>
     set({
       default_provider: name,
@@ -65,9 +59,9 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
     });
 
   const persist = async () => {
-    const editable = Object.fromEntries(Object.entries(values).filter(([k]) => !settings.data!.secrets.includes(k) && k !== "claude_auth_mode_effective"));
+    const editable = Object.fromEntries(Object.entries(values).filter(([k]) => !settings.data!.secrets.includes(k)));
     const changedSecrets = Object.fromEntries(Object.entries(secrets).filter(([, v]) => v !== undefined));
-    await api.put("/settings", { values: { ...editable, claude_auth_mode: authMode, ...changedSecrets } });
+    await api.put("/settings", { values: { ...editable, ...changedSecrets } });
     setSecrets({});
     await qc.invalidateQueries({ queryKey: qk.settings });
   };
@@ -85,14 +79,13 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
     }
   };
 
-  const runCheck = async (kind: "claude_code" | "codex" | "github") => {
-    const setter = { claude_code: setClaudeCheck, codex: setCodexCheck, github: setGithubCheck }[kind];
-    setter({ ok: true, detail: t("settings.testing") });
+  const checkGithub = async () => {
+    setGithubCheck({ ok: true, detail: t("settings.testing") });
     try {
       await persist();
-      setter(kind === "github" ? await checks.github() : await checks.provider(kind, smallModel(providers.find((p) => p.name === kind))));
+      setGithubCheck(await checks.github());
     } catch (err) {
-      setter({ ok: false, detail: errorMessage(err) });
+      setGithubCheck({ ok: false, detail: errorMessage(err) });
     }
   };
 
@@ -134,68 +127,12 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
     >
       <div className="space-y-7">
         <Section title={t("settings.claude")} description={t("settings.claudeHint")}>
-          <div className="grid grid-cols-3 gap-2">
-            {(["api_key", "oauth_token", "runner_login"] as const).map((mode) => (
-              <button
-                key={mode}
-                onClick={() => set({ claude_auth_mode: mode })}
-                className={clsx(
-                  "rounded-lg px-3 py-2 text-left text-xs ring-1 transition-colors",
-                  authMode === mode ? "bg-indigo-50 ring-indigo-400 dark:bg-indigo-950/40" : "ring-zinc-200 hover:bg-zinc-50 dark:ring-zinc-800 dark:hover:bg-zinc-800",
-                )}
-              >
-                <div className="font-medium">{t(`settings.auth.${mode}`)}</div>
-                <div className="text-zinc-500">{t(`settings.auth.${mode}Hint`)}</div>
-              </button>
-            ))}
-          </div>
-          {authMode === "oauth_token" && secretField("claude_oauth_token", t("settings.oauthToken"), <code>claude setup-token</code>)}
-          {authMode === "api_key" && secretField("anthropic_api_key", t("settings.apiKey"))}
-          {authMode !== "api_key" && <p className="text-xs text-amber-700 dark:text-amber-400">{t("settings.ownLoginNotice")}</p>}
-          {authMode === "runner_login" && (
-            <p className="rounded-md bg-zinc-50 p-3 text-xs text-zinc-600 dark:bg-zinc-800/50 dark:text-zinc-400">
-              {t("settings.runnerLoginHint")} <code className="font-mono">docker compose exec -it runner claude</code>
-            </p>
-          )}
-          <div className="flex items-center gap-3">
-            <Button size="sm" onClick={() => runCheck("claude_code")}>
-              {t("settings.test")}
-            </Button>
-            <CheckBadge result={claudeCheck} />
-          </div>
+          <AccountsEditor provider="claude_code" />
         </Section>
 
         {providers.some((p) => p.name === "codex") && (
           <Section title={t("settings.codex")} description={t("settings.codexHint")}>
-            <div className="grid grid-cols-2 gap-2">
-              {(["chatgpt", "api_key"] as const).map((mode) => (
-                <button
-                  key={mode}
-                  onClick={() => set({ codex_auth_mode: mode })}
-                  className={clsx(
-                    "rounded-lg px-3 py-2 text-left text-xs ring-1 transition-colors",
-                    codexMode === mode ? "bg-indigo-50 ring-indigo-400 dark:bg-indigo-950/40" : "ring-zinc-200 hover:bg-zinc-50 dark:ring-zinc-800 dark:hover:bg-zinc-800",
-                  )}
-                >
-                  <div className="font-medium">{t(`settings.codexAuth.${mode}`)}</div>
-                  <div className="text-zinc-500">{t(`settings.codexAuth.${mode}Hint`)}</div>
-                </button>
-              ))}
-            </div>
-            {codexMode === "api_key" ? (
-              secretField("openai_api_key", t("settings.openaiApiKey"))
-            ) : (
-              <>
-                <CodexSignIn />
-                <p className="text-xs text-amber-700 dark:text-amber-400">{t("settings.codexOwnLoginNotice")}</p>
-              </>
-            )}
-            <div className="flex items-center gap-3">
-              <Button size="sm" onClick={() => runCheck("codex")}>
-                {t("settings.test")}
-              </Button>
-              <CheckBadge result={codexCheck} />
-            </div>
+            <AccountsEditor provider="codex" />
           </Section>
         )}
 
@@ -210,7 +147,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
             </Field>
           </div>
           <div className="flex items-center gap-3">
-            <Button size="sm" onClick={() => runCheck("github")}>
+            <Button size="sm" onClick={checkGithub}>
               {t("settings.test")}
             </Button>
             <CheckBadge result={githubCheck} />

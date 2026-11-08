@@ -1,6 +1,7 @@
-"""The plan limits of the signed-in subscriptions as last reported. Reading them costs no tokens.
+"""The plan limits of every provider account as last reported. Reading them costs no tokens.
 
-Window names: Claude's as it reports them (seven_day, seven_day_opus ...), Codex's prefixed with codex_.
+Stored per account key. Window names: Claude's as it reports them (seven_day, seven_day_opus ...),
+Codex's prefixed with codex_.
 """
 
 from __future__ import annotations
@@ -11,16 +12,15 @@ from datetime import UTC, datetime
 from statistics import median
 
 from plainboard_protocol import LimitWindow
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import Setting
-from ..schemas import LimitForecast, LimitsOut
-from . import settings as settings_service
+from ..models import Account, Setting
+from ..schemas import AccountLimits, LimitForecast, LimitsOut
 
 KEY = "provider_limits"
 DAY = 86400
 WEEKLY_MARK = "seven_day"
-CODEX_PREFIX = "codex_"
 RETIRED = {"five_hour"}  # Claude dropped its 5-hour limit; a window stored from before is not shown
 WEEK_DAYS = 7
 MIN_HISTORY_DAYS = 3
@@ -85,9 +85,14 @@ def forecast(window: LimitWindow, days: dict[str, float], now: float) -> LimitFo
     )
 
 
-async def record(session: AsyncSession, windows: list[LimitWindow]) -> None:
+async def _stored(session: AsyncSession) -> tuple[Setting, dict]:
     row = await session.get(Setting, KEY) or Setting(key=KEY, secret=False)
-    stored = json.loads(row.value) if row.value else {}
+    return row, (json.loads(row.value) if row.value else {}).get("accounts", {})
+
+
+async def record(session: AsyncSession, account_key: str, windows: list[LimitWindow]) -> None:
+    row, accounts = await _stored(session)
+    stored = accounts.setdefault(account_key, {})
     known, growth = stored.get("windows", {}), stored.get("growth", {})
     now = time.time()
     for window in windows:
@@ -96,29 +101,43 @@ async def record(session: AsyncSession, windows: list[LimitWindow]) -> None:
     known.update({w.name: w.model_dump() for w in windows})
     for name in RETIRED:
         known.pop(name, None)
-    row.value = json.dumps({"windows": known, "growth": growth, "updated_at": int(now)})
+    accounts[account_key] = {"windows": known, "growth": growth, "updated_at": int(now)}
+    row.value = json.dumps({"accounts": accounts})
     session.add(row)
     await session.commit()
 
 
-async def current(session: AsyncSession) -> LimitsOut:
-    # An API key has no plan limits, so what a subscription reported earlier no longer applies.
-    values = await settings_service.get_all(session)
-    claude_key = settings_service.effective_auth_mode(values) == "api_key"
-    codex_key = values.get("codex_auth_mode") == "api_key"
-    row = await session.get(Setting, KEY)
-    stored = json.loads(row.value) if row and row.value else {"windows": {}}
-    windows = [
-        LimitWindow(**w)
-        for w in stored["windows"].values()
-        if w["name"] not in RETIRED and not (codex_key if w["name"].startswith(CODEX_PREFIX) else claude_key)
-    ]
-    if not windows:
-        return LimitsOut(available=not claude_key)
-    now = time.time()
+def _windows(stored: dict, now: float) -> list[LimitWindow]:
+    windows = [LimitWindow(**w) for w in stored.get("windows", {}).values() if w["name"] not in RETIRED]
     for window in windows:
-        if window.resets_at and window.resets_at <= now:  # it has reset since the last run
+        if window.resets_at and window.resets_at <= now:  # it has reset since the last report
             window.utilization, window.resets_at, window.status = 0.0, None, None
-    growth = stored.get("growth", {})
-    forecasts = [forecast(w, growth.get(w.name, {}).get("days", {}), now) for w in windows if WEEKLY_MARK in w.name]
-    return LimitsOut(windows=windows, forecasts=[f for f in forecasts if f], updated_at=stored["updated_at"])
+    return windows
+
+
+async def usage(session: AsyncSession) -> dict[str, float]:
+    """How full each account is: its fullest window, 1 if the provider turned it away."""
+    _, accounts = await _stored(session)
+    now = time.time()
+    used = {}
+    for key, stored in accounts.items():
+        windows = _windows(stored, now)
+        used[key] = max([1.0 if w.status == "rejected" else w.utilization for w in windows], default=0.0)
+    return used
+
+
+async def current(session: AsyncSession) -> LimitsOut:
+    _, stored = await _stored(session)
+    accounts = (await session.scalars(select(Account).where(Account.enabled.is_(True)).order_by(Account.id))).all()
+    now = time.time()
+    out = []
+    for account in accounts:
+        # An API key has no plan limits, so what a subscription reported earlier no longer applies.
+        entry = AccountLimits(account_id=account.id, provider=account.provider, label=account.label, available=account.auth_mode != "api_key")
+        data = stored.get(account.key, {})
+        if entry.available and (windows := _windows(data, now)):
+            growth = data.get("growth", {})
+            forecasts = [forecast(w, growth.get(w.name, {}).get("days", {}), now) for w in windows if WEEKLY_MARK in w.name]
+            entry.windows, entry.forecasts, entry.updated_at = windows, [f for f in forecasts if f], data.get("updated_at")
+        out.append(entry)
+    return LimitsOut(accounts=out)

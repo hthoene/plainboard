@@ -11,29 +11,22 @@ const bar = { red: "bg-red-500", amber: "bg-amber-500", indigo: "bg-indigo-500" 
 const percent = (used: number) => Math.round(used * 100);
 const fromUnix = (seconds: number) => new Date(seconds * 1000).toISOString();
 
-const PROVIDERS = [
-  { key: "claude_code", labelKey: "settings.claude" },
-  { key: "codex", labelKey: "settings.codex" },
-];
-const fullest = (account: AccountLimits) => Math.max(0, ...account.windows.map((w) => w.utilization));
-
-/** Plan limits (5-hour, weekly) as one ring per provider over all its accounts; click for details. */
+/** Plan limits (5-hour, weekly) as one ring per account; click for details. */
 export function LimitsRing() {
-  const { t } = useTranslation();
   const { data } = useLimits();
   if (!data) return null;
-  const rings = PROVIDERS.map((p) => ({ ...p, accounts: data.accounts.filter((a) => a.provider === p.key) })).filter((p) => p.accounts.some((a) => a.windows.length));
-  if (!rings.length) return <Ring accounts={data.accounts} />;
+  const known = data.accounts.filter((a) => a.windows.length);
+  if (!known.length) return <Ring available={data.accounts.some((a) => a.available)} />;
   return (
     <>
-      {rings.map((ring) => (
-        <Ring key={ring.key} label={t(ring.labelKey)} accounts={ring.accounts} />
+      {known.map((account) => (
+        <Ring key={account.account_id} account={account} />
       ))}
     </>
   );
 }
 
-function Ring({ label: provider, accounts }: { label?: string; accounts: AccountLimits[] }) {
+function Ring({ account, available = true }: { account?: AccountLimits; available?: boolean }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -45,39 +38,31 @@ function Ring({ label: provider, accounts }: { label?: string; accounts: Account
     return () => document.removeEventListener("mousedown", close);
   }, [open]);
 
-  const known = accounts.filter((a) => a.windows.length);
-  // Agents move to the account with the most room, so the ring shows how full the accounts are together.
-  const used = known.length ? known.reduce((sum, a) => sum + Math.min(fullest(a), 1), 0) / known.length : 0;
-  const slowDown = known.length > 0 && known.every((a) => a.forecasts.some((f) => f.status === "over"));
-  const ringTone = tone(used) === "indigo" && slowDown ? "amber" : tone(used);
-  const ringLabel = t("chat.limits.ring", { percent: percent(used) });
-  const label = (provider ? `${provider}: ${ringLabel}` : ringLabel) + (slowDown ? ` · ${t("chat.limits.slowDown")}` : "");
-  const several = accounts.length > 1;
+  const windows = account?.windows ?? [];
+  const forecasts = account?.forecasts ?? [];
+  const highest = Math.max(0, ...windows.map((w) => w.utilization));
+  const slowDown = forecasts.some((f) => f.status === "over");
+  const ringTone = tone(highest) === "indigo" && slowDown ? "amber" : tone(highest);
+  const ringLabel = t("chat.limits.ring", { percent: percent(highest) });
+  const label = (account ? `${account.label}: ${ringLabel}` : ringLabel) + (slowDown ? ` · ${t("chat.limits.slowDown")}` : "");
 
   return (
     <div ref={ref} className="relative shrink-0">
       <button onClick={() => setOpen(!open)} aria-label={label} aria-expanded={open} title={label} className="flex h-6 items-center gap-1 rounded-full px-1 hover:bg-zinc-100 dark:hover:bg-zinc-800">
         <svg viewBox="0 0 20 20" className="size-4 -rotate-90" aria-hidden>
           <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="3" className="text-zinc-200 dark:text-zinc-700" />
-          <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" pathLength={100} strokeDasharray={`${Math.min(percent(used), 100)} 100`} className={stroke[ringTone]} />
+          <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" pathLength={100} strokeDasharray={`${Math.min(percent(highest), 100)} 100`} className={stroke[ringTone]} />
         </svg>
-        {provider && <span className="text-[11px] text-zinc-500">{provider}</span>}
+        {account && <span className="max-w-24 truncate text-[11px] text-zinc-500">{account.label}</span>}
       </button>
       {open && (
-        <div className="absolute right-0 bottom-full z-20 mb-2 max-h-[70vh] w-64 space-y-3 overflow-y-auto rounded-xl border border-zinc-200 bg-white p-3 text-xs shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
-          {provider && <p className="font-semibold">{provider}</p>}
-          {!known.length && <p className="text-zinc-500">{t(accounts.some((a) => a.available) ? "chat.limits.unknown" : "chat.limits.noPlan")}</p>}
-          {known.length > 0 &&
-            accounts.map((account) => (
-              <div key={account.account_id} className={clsx("space-y-3", several && "border-t border-zinc-100 pt-2 first:border-0 first:pt-0 dark:border-zinc-800")}>
-                {several && <p className="font-medium">{account.label}</p>}
-                {account.windows.map((window) => (
-                  <LimitRow key={window.name} window={window} forecast={account.forecasts.find((f) => f.name === window.name)} />
-                ))}
-                {!account.windows.length && <p className="text-zinc-500">{t(account.available ? "chat.limits.unknownShort" : "chat.limits.apiKey")}</p>}
-                {account.updated_at && <p className="text-zinc-500">{t("chat.limits.updated", { when: timeAgo(fromUnix(account.updated_at)) })}</p>}
-              </div>
-            ))}
+        <div className="absolute right-0 bottom-full z-20 mb-2 w-64 space-y-3 rounded-xl border border-zinc-200 bg-white p-3 text-xs shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
+          {account && <p className="font-semibold">{account.label}</p>}
+          {windows.map((window) => (
+            <LimitRow key={window.name} window={window} forecast={forecasts.find((f) => f.name === window.name)} />
+          ))}
+          {!windows.length && <p className="text-zinc-500">{t(available ? "chat.limits.unknown" : "chat.limits.noPlan")}</p>}
+          {account?.updated_at && <p className="text-zinc-500">{t("chat.limits.updated", { when: timeAgo(fromUnix(account.updated_at)) })}</p>}
         </div>
       )}
     </div>

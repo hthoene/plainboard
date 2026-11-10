@@ -1,8 +1,9 @@
 """Provider accounts: several Claude or Codex subscriptions (or API keys) side by side.
 
 A run uses the agent's pinned account, otherwise the account it ran on last (the provider's prompt
-cache is per account) as long as that one still has room, otherwise the subscription with the most
-room. API keys cost money per token, so they only step in when every subscription is (nearly) used up.
+cache is per account) as long as nothing better is free, otherwise the best one in this order:
+subscriptions below ``SWITCH_AT``, then the rest of nearly full subscriptions, then API keys (they
+cost money per token), then used-up subscriptions.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from .errors import NotFound, ServiceError
 AUTH_MODES = {"claude_code": ("oauth_token", "api_key", "runner_login"), "codex": ("chatgpt", "api_key")}
 LABELS = {"claude_code": "Claude", "codex": "Codex"}
 ENV_SECRETS = {("claude_code", "oauth_token"): "CLAUDE_CODE_OAUTH_TOKEN", ("claude_code", "api_key"): "ANTHROPIC_API_KEY", ("codex", "api_key"): "OPENAI_API_KEY"}
-SWITCH_AT = 0.95  # an account this full hands new turns to one with more room
+SWITCH_AT = 0.95  # an account this full hands new turns to one with more room; its rest is used last
 
 
 def _check_mode(provider: str, mode: str) -> None:
@@ -101,12 +102,15 @@ async def check_pin(session: AsyncSession, account_id: int | None, provider: str
         raise ServiceError("The account belongs to another provider")
 
 
+USED_UP = 3
+
+
 def _rank(account: Account, used: dict[str, float]) -> tuple[int, float]:
-    """Lower is better: subscriptions with room, then API keys, then full subscriptions."""
+    """Lower is better: subscriptions with room, the rest of nearly full ones, API keys, used-up subscriptions."""
     if not has_plan(account):
-        return 1, 0.0
+        return 2, 0.0
     utilization = used.get(account.key, 0.0)
-    return (0 if utilization < SWITCH_AT else 2), utilization
+    return (0 if utilization < SWITCH_AT else 1 if utilization < 1 else USED_UP), utilization
 
 
 async def pick(session: AsyncSession, provider: str, agent: Agent | None = None, conv: Conversation | None = None) -> Account | None:
@@ -119,7 +123,7 @@ async def pick(session: AsyncSession, provider: str, agent: Agent | None = None,
     used = await limits_service.usage(session)
     best = min(accounts, key=lambda a: _rank(a, used))
     last = next((a for a in accounts if conv and a.key == conv.account_key), None)
-    if last and _rank(last, used)[0] == _rank(best, used)[0]:
+    if last and _rank(last, used)[0] == _rank(best, used)[0] != USED_UP:
         return last
     return best
 

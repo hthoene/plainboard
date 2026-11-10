@@ -55,7 +55,8 @@ Open <http://localhost:8080>, then:
 
    Both sections take several accounts (**Add account**), e.g. two Claude subscriptions. Each agent
    stays on its account while that one has room and then moves to the subscription with the most room
-   left; API keys only step in when every subscription is nearly used up. You can pin an agent to an
+   left. The last 5 % of each subscription are used once all are that full; API keys only step in when
+   every subscription is used up. You can pin an agent to an
    account in the team editor.
 3. Optional, **Settings → GitHub**: paste a fine-grained personal access token.
 4. Create a project, describe what you want in the manager chat, or add tickets and move them to

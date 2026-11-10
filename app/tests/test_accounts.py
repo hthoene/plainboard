@@ -67,9 +67,11 @@ def test_turns_go_to_the_subscription_with_room(client, project):
 
     paid = client.post("/api/accounts", json={"provider": "claude_code", "label": "Paid", "auth_mode": "api_key", "secret": "sk-paid"}).json()
     assert turn(client, pid, dev["id"]).claude_oauth_token == "tok-b"  # subscriptions come before API keys
-    client.patch(f"/api/accounts/{second['id']}", json={"enabled": False})
+    assert turn(client, pid, dev["id"], "LIMITS seven_day 1.0 3600").claude_oauth_token == "tok-b"
+    assert turn(client, pid, dev["id"]).claude_oauth_token == "tok-a"  # the rest of the first one comes before API keys
+    assert turn(client, pid, dev["id"], "LIMITS seven_day 1.0 3600").claude_oauth_token == "tok-a"  # and stays
     creds = turn(client, pid, dev["id"])
-    assert (creds.claude_auth_mode, creds.anthropic_api_key) == ("api_key", "sk-paid")  # every subscription is full
+    assert (creds.claude_auth_mode, creds.anthropic_api_key) == ("api_key", "sk-paid")  # every subscription is used up
 
     client.patch(f"/api/accounts/{second['id']}", json={"enabled": True})
     client.patch(f"/api/agents/{dev['id']}", json={"account_id": paid["id"]})

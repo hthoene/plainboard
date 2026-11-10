@@ -331,7 +331,7 @@
     "modelSection": "Model",
     "provider": "Provider",
     "account": "Account",
-    "accountHint": "Automatic: the subscription with the most room left; API keys only when every subscription is nearly used up.",
+    "accountHint": "Automatic: the subscription with the most room left; API keys only when every subscription is used up.",
     "accountAuto": "Automatic",
     "accountDisabled": "disabled",
     "model": "Model",
@@ -437,7 +437,7 @@
     "enabled": "Active",
     "delete": "Delete account",
     "confirmDelete": "Delete account \"{{name}}\"? A ChatGPT sign-in on the runner is signed out.",
-    "rotationHint": "Each agent stays on its account while that one has room, then moves to the subscription with the most room. You can pin an agent to an account in the team editor."
+    "rotationHint": "Each agent stays on its account until it reaches 95 %, then moves to the subscription with the most room. The last 5 % of every subscription are used once all are that full, API keys only after that. You can pin an agent to an account in the team editor."
   },
   "settings": {
     "title": "Settings",

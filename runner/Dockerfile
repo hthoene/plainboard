@@ -2,7 +2,7 @@
 # passwordless sudo, so they have full control over this container (not over the app).
 FROM node:22-bookworm-slim AS node
 
-FROM python:3.12-slim-bookworm
+FROM python:3.15-slim-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \

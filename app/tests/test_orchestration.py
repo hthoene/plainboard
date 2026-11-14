@@ -868,6 +868,25 @@ def test_waiting_chat_messages_go_out_together(client, project):
     assert texts == ["one | two | three"]
 
 
+def test_a_waiting_chat_message_can_be_deleted(client, project):
+    pid = project["id"]
+    client.put("/api/settings", json={"values": {"max_parallel_runs": 0}})
+    dev = make_dev(client, pid)
+    upload = client.post(f"/api/agents/{dev['id']}/attachments", files={"files": ("a.txt", b"hi", "text/plain")}).json()[0]
+    waiting = client.post(f"/api/agents/{dev['id']}/messages", json={"text": "SAY never", "attachment_ids": [upload["id"]]}).json()
+    assert client.delete(f"/api/runs/{waiting['id']}/message").status_code == 204
+    assert runs_of(client, pid, agent_id=dev["id"]) == []
+    assert client.post(f"/api/agents/{dev['id']}/messages", json={"text": "x", "attachment_ids": [upload["id"]]}).status_code >= 400  # the file is gone
+
+    client.put("/api/settings", json={"values": {"max_parallel_runs": 3}})
+    sent = chat(client, dev["id"], "SAY kept")
+    wait_for(lambda: idle(client, pid))
+    assert [m["content"] for m in conversation(client, dev["id"])["messages"] if m["role"] == "user"] == ["SAY kept"]
+    # Once the agent has the message, it stays.
+    assert client.delete(f"/api/runs/{sent['id']}/message").status_code == 409
+    assert client.delete("/api/runs/9999/message").status_code == 404
+
+
 def test_asking_a_busy_teammate_notifies_it_and_does_not_block_for_long(client, project, monkeypatch):
     monkeypatch.setattr("plainboard.orchestration.run_manager.ASK_BUSY_TIMEOUT_SECONDS", 0.05)
     pid = project["id"]

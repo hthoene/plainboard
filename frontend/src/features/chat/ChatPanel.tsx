@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { ArrowUp, ChevronDown, Eye, EyeOff, Loader2, Maximize2, MoreHorizontal, Paperclip, Square, X } from "lucide-react";
+import { ArrowUp, ChevronDown, Eye, EyeOff, Loader2, Maximize2, MoreHorizontal, Paperclip, Square, Trash2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { api, errorMessage } from "../../api/client";
@@ -47,6 +47,12 @@ export function ChatPanel({
   const running = activeRuns.find((r) => r.status === "running");
   const queued = activeRuns.filter((r) => r.status === "queued" && r.trigger === "chat");
   const messages = conversation.data?.messages ?? [];
+  // Works only until the agent's turn starts; if it just did, the refreshed list shows the message as sent.
+  const deleteWaiting = (runId: number) =>
+    api
+      .del(`/runs/${runId}/message`)
+      .catch(() => undefined)
+      .then(() => qc.invalidateQueries({ queryKey: qk.runs(project.id) }));
 
   useLayoutEffect(() => {
     const el = scroller.current;
@@ -160,7 +166,10 @@ export function ChatPanel({
           <MessageItem key={m.id} message={m} agent={agent} details={details} />
         ))}
         {queued.map((r) => (
-          <div key={r.id} className="flex justify-end">
+          <div key={r.id} className="flex items-center justify-end gap-1">
+            <IconButton label={t("chat.deleteWaiting")} onClick={() => deleteWaiting(r.id)} className="shrink-0 text-zinc-400 hover:text-red-600">
+              <Trash2 className="size-4" />
+            </IconButton>
             <div className="max-w-[85%] rounded-2xl rounded-br-md bg-indigo-600/60 px-3.5 py-2 text-sm whitespace-pre-wrap text-white">
               {r.input_text}
               {r.attachment_ids.length > 0 && (

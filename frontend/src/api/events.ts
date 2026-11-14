@@ -84,7 +84,7 @@ function handle(qc: QueryClient, pid: number, event: ServerEvent) {
       break;
     case "run":
       qc.invalidateQueries({ queryKey: qk.runs(pid) });
-      if (data.status !== "running" && data.status !== "queued") streamStore.clear(data.agent_id);
+      if (type === "run.upserted" && data.status !== "running" && data.status !== "queued") streamStore.clear(data.agent_id);
       break;
     case "message":
       if (type === "message.delta") streamStore.append(data.agent_id, data.text);

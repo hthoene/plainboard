@@ -70,6 +70,7 @@ MODELS = [
     ModelInfo(id="claude-opus-5-5", label="Claude Opus 5.5", tier="large"),
     ModelInfo(id="claude-sonnet-5-5", label="Claude Sonnet 5.5", tier="medium"),
     ModelInfo(id="claude-haiku-5-5", label="Claude Haiku 5.5", tier="small"),
+    ModelInfo(id="claude-fable-5-2", label="Claude Fable 5.2", tier="xlarge"),
     ModelInfo(id="claude-fable-5-1", label="Claude Fable 5.1", tier="xlarge"),
 ]
 EFFORTS = ["low", "medium", "high", "xhigh", "max"]

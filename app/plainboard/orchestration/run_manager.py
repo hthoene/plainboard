@@ -20,6 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from plainboard_protocol import JobSpec, JobState, ResultEvent, RunSpec, ToolBridgeSpec, ToolCallResult, WorkspaceSpec
+from sqlalchemy import delete as sql_delete
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -54,7 +55,7 @@ from ..services import secrets as secret_service
 from ..services import accounts as account_service
 from ..services import limits as limits_service
 from ..services import settings as settings_service
-from ..services.errors import ServiceError
+from ..services.errors import NotFound, ServiceError
 from ..services.util import truncate
 from ..tools import registry
 from . import inbox, prompts
@@ -230,6 +231,26 @@ class RunManager:
         bus.publish(agent.project_id, "run.upserted", RunOut.model_validate(waiting))
         self._wake.set()
         return waiting
+
+    async def withdraw_chat(self, s: AsyncSession, run_id: int) -> None:
+        """Delete a chat message that the agent has not received yet (its run has not started)."""
+        run = await s.get(Run, run_id)
+        if run is None:
+            raise NotFound("Message not found")
+        project_id, agent_id, attachment_ids = run.project_id, run.agent_id, list(run.attachment_ids)
+        # The status check matters: the dispatcher may start this run at any moment.
+        result = await s.execute(sql_delete(Run).where(Run.id == run_id, Run.trigger == RunTrigger.CHAT, Run.status == RunStatus.QUEUED))
+        await s.commit()
+        if not result.rowcount:
+            raise ServiceError("The agent has already received this message", 409)
+        for attachment in await board_service.chat_attachments(s, project_id, attachment_ids):
+            await board_service.delete_attachment(s, attachment)
+        bus.publish(project_id, "run.deleted", {"id": run_id, "agent_id": agent_id})
+        await agent_service.publish_by_id(s, agent_id)
+        # Updates that waited for this turn still need one.
+        project = await s.get(Project, project_id)
+        if project and await inbox.pending_count(s, agent_id):
+            await self._maybe_wake(s, project, agent_id)
 
     async def hand_ticket(self, s: AsyncSession, task: Task) -> Run:
         """Give a ticket to the project manager, who plans and delegates it."""

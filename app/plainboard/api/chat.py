@@ -35,7 +35,13 @@ async def send_message(agent_id: int, body: ChatMessageIn, session: Session, run
     return RunOut.model_validate(await runs.chat(session, agent, body.text, body.attachment_ids))
 
 
-@router.post("/agents/{agent_id}/attachments", response_model=list[AttachmentOut], status_code=201)
+@router.delete("/runs/{run_id}/message", status_code=204)
+async def withdraw_message(run_id: int, session: Session, runs: Runs) -> None:
+    """Delete a chat message the agent has not received yet."""
+    await runs.withdraw_chat(session, run_id)
+
+
+@router.post("/agents/{agent_id}/attachments",response_model=list[AttachmentOut], status_code=201)
 async def upload(agent_id: int, session: Session, files: list[UploadFile] = File(...)) -> list[AttachmentOut]:
     """Store files for a chat message; send their ids with the message."""
     agent = await agent_service.get(session, agent_id)

@@ -209,6 +209,7 @@
     "fileCount_one": "{{count}} file",
     "fileCount_other": "{{count}} files",
     "stop": "Stop",
+    "deleteWaiting": "Delete this message (not sent to the agent yet)",
     "queueHint": "New messages are queued until the current turn finishes.",
     "openQuestions": "Tickets waiting for you",
     "stopping": {

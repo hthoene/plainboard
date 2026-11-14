@@ -208,7 +208,13 @@ class RunManager:
     async def chat(self, s: AsyncSession, agent: Agent, text: str, attachment_ids: list[int] | None = None) -> Run:
         if attachment_ids and len(await board_service.chat_attachments(s, agent.project_id, attachment_ids)) != len(set(attachment_ids)):
             raise ServiceError("Unknown attachment")
-        return await self._join_waiting_chat(s, agent, text, attachment_ids) or await self.enqueue(s, agent, RunTrigger.CHAT, text, attachment_ids=attachment_ids)
+        run = await self._join_waiting_chat(s, agent, text, attachment_ids) or await self.enqueue(s, agent, RunTrigger.CHAT, text, attachment_ids=attachment_ids)
+        # A working agent reads the message after its current step instead of after its whole turn.
+        # Nothing is interrupted, and the message stays queued as its next turn.
+        busy_run = await s.scalar(select(Run.id).where(Run.agent_id == agent.id, Run.status == RunStatus.RUNNING).limit(1))
+        if busy_run and (text.strip() or attachment_ids):
+            await self.runner.notify_run(busy_run, prompts.chat_notice(text, len(attachment_ids or [])))
+        return run
 
     async def _join_waiting_chat(self, s: AsyncSession, agent: Agent, text: str, attachment_ids: list[int] | None) -> Run | None:
         """Add a message to the agent's chat run that has not started yet, so it answers everything at once."""
@@ -468,6 +474,8 @@ class RunManager:
             configured = await settings_service.get(s, "max_parallel_runs")
             max_parallel = 3 if configured is None else int(configured)  # 0 pauses new top-level runs
             queued = (await s.scalars(select(Run).where(Run.status == RunStatus.QUEUED).order_by(Run.id))).all()
+            # Someone waiting for an answer goes first, then what the user wrote, then the rest in order.
+            queued = sorted(queued, key=lambda r: (0 if r.parent_run_id is not None else 1 if r.trigger == RunTrigger.CHAT else 2, r.id))
             candidates = [(r.id, r.agent_id, r.parent_run_id is not None) for r in queued]
         for run_id, agent_id, nested in candidates:
             if agent_id in self._busy_agents or run_id in self._running:
@@ -524,6 +532,12 @@ class RunManager:
                 await s.commit()
                 await self._after_run(s, run)
                 bus.publish(run.project_id, "run.upserted", RunOut.model_validate(run))
+                return None
+            if run.trigger == RunTrigger.WAKE and not run.input_text and not await inbox.pending_count(s, agent.id):
+                # A chat turn that went first has already processed the updates this wake-up was for.
+                await s.delete(run)
+                await s.commit()
+                bus.publish(project.id, "run.deleted", {"id": run_id, "agent_id": agent.id})
                 return None
             conv = await agent_service.conversation_for(s, agent.id)
             run.status, run.started_at = RunStatus.RUNNING, utcnow()

@@ -381,6 +381,15 @@ def ask_notice(from_agent: Agent, question: str) -> str:
     )
 
 
+def chat_notice(text: str, files: int = 0) -> str:
+    attached = f" ({files} file(s) attached; you get them in that turn)" if files else ""
+    return (
+        f"[PlainBoard] The user just wrote to you{attached}: {truncate(text.strip(), 2000) or '(no text)'}\n"
+        "It is queued as your next turn, so answer it there. Take it into account from now on. Finish the step you "
+        "are in the middle of, then end your turn at the next safe point and continue any remaining work in that next turn."
+    )
+
+
 def message_prompt(from_agent: Agent, message: str) -> str:
     return f"Message from {from_agent.name} ({from_agent.role or 'agent'}):\n\n{message.strip()}\n\nYour reply is delivered back to them."
 

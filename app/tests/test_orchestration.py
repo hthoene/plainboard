@@ -905,6 +905,46 @@ def test_asking_a_busy_teammate_notifies_it_and_does_not_block_for_long(client, 
     assert any(r["trigger"] == "ask" and r["status"] == "succeeded" for r in runs_of(client, pid, agent_id=dev["id"]))
 
 
+def test_a_busy_agent_reads_a_chat_message_right_away_and_answers_it_next(client, project):
+    pid = project["id"]
+    dev = make_dev(client, pid)
+    chat(client, dev["id"], "HOLD")
+    wait_for(lambda: runs_of(client, pid, agent_id=dev["id"])[0]["status"] == "running")
+    held = runs_of(client, pid, agent_id=dev["id"])[0]["id"]
+    waiting = client.post(f"/api/agents/{dev['id']}/messages", json={"text": "SAY from the user"}).json()
+    (run_id, text), = runner(client).notices
+    assert run_id == held and "The user just wrote to you: SAY from the user" in text
+    assert waiting["status"] == "queued"  # nothing is lost if the agent never sees the notice
+    runner(client).released = True
+    wait_for(lambda: idle(client, pid))
+    texts = [m["content"] for m in conversation(client, dev["id"])["messages"] if m["role"] == "assistant" and m["kind"] == "text"]
+    assert texts[-1] == "from the user"
+
+
+def test_chat_goes_before_other_waiting_turns(client, project):
+    from plainboard.db import sessionmaker
+    from plainboard.orchestration import inbox
+
+    pid = project["id"]
+    client.put("/api/settings", json={"values": {"max_parallel_runs": 0}})
+    manager = agents_by_slug(client, pid)["manager"]
+
+    async def wake() -> None:
+        async with sessionmaker()() as s:
+            await inbox.push(s, manager["id"], "Job 1 finished")
+            await client.app_ref.state.runs.request_wake(s, manager["id"])
+
+    client.portal.call(wake)
+    chat(client, manager["id"], "SAY hello")
+    client.put("/api/settings", json={"values": {"max_parallel_runs": 3}})
+    client.app_ref.state.runs._wake.set()
+    wait_for(lambda: idle(client, pid))
+    # The chat turn took the update with it, and the wake-up that had nothing left to do is gone.
+    runs = runs_of(client, pid, agent_id=manager["id"])
+    assert [(r["trigger"], r["status"]) for r in runs] == [("chat", "succeeded")]
+    assert "Job 1 finished" in runner(client).specs[-1].prompt
+
+
 def test_agents_on_another_provider_get_its_models(client, project):
     pid = project["id"]
     dev = make_dev(client, pid, provider="codex")

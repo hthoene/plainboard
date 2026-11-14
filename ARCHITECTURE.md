@@ -62,6 +62,12 @@ token that is valid only while the run lasts and only for that run's project and
 4. `_finish` → `_after_run`: route results (answer to the asker, report to the requester's inbox plus a
    ticket comment, wake the manager), then `maybe_compress`.
 
+Queued runs start in this order: nested `ask_agent` runs, then chat messages from the user, then the rest
+by age. A chat message for a working agent is also given to its running turn as a notice (`prompts.chat_notice`,
+seen after the current tool call, nothing is interrupted) and stays queued as the next turn, so it is never
+lost. Until that turn starts the user can delete the message (`withdraw_chat`). A wake-up whose updates an
+earlier turn already consumed is dropped.
+
 A restart fails running runs. Nothing retries them, because they may be half done: the requester of an
 interrupted assignment (or the manager, for its own turn) gets an inbox update and a wake-up.
 

@@ -310,6 +310,22 @@
     "byAgent": "Added by {{name}}",
     "loadMore": "Load more ({{count}} left)"
   },
+  "ownNotes": {
+    "button": "Notes",
+    "title": "Notes of {{name}}",
+    "hint": "What this member must not forget. These notes are always part of its prompt, also after its context is reset or compressed. The member adds notes itself, and you can add, change and delete them here.",
+    "new": "Something {{name}} should always remember…",
+    "add": "Add note",
+    "used": "{{used}} of {{budget}} characters used",
+    "empty": "No notes yet.",
+    "edit": "Edit",
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "confirmDelete": "Delete this note?",
+    "byUser": "Added by you",
+    "byAgent": "Added by {{name}}"
+  },
   "team": {
     "title": "Team",
     "subtitle": "Each agent owns a narrow area so its context stays small. The manager can change the team, too.",

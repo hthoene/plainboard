@@ -1,4 +1,5 @@
-"""Project notes: shared, durable knowledge. Listing returns titles only (load content on demand)."""
+"""Project notes: shared, durable knowledge. Listing returns titles only (load content on demand).
+Own notes (remember/forget): private to one member and always in its prompt."""
 
 from __future__ import annotations
 
@@ -6,8 +7,11 @@ from difflib import SequenceMatcher
 
 from pydantic import BaseModel, Field
 
+from ..orchestration import prompts
 from ..schemas import NoteCreate, NoteUpdate
+from ..services import agents as agent_service
 from ..services import notes as note_service
+from ..services import own_notes as own_note_service
 from ..models import Note, utcnow
 from .registry import MANAGER, ToolContext, ToolError, tool
 
@@ -46,7 +50,54 @@ def similar(a: str, b: str) -> bool:
     return a == b or a in b or b in a or SequenceMatcher(None, a, b).ratio() >= SIMILAR_TITLE_RATIO
 
 
-@tool("list_notes", "List project notes (id, title, age, size). Use get_note to read one.", ListNotesArgs)
+class RememberArgs(BaseModel):
+    text: str = Field(min_length=1, max_length=500, description="One fact or rule, short")
+    note_id: int | None = Field(default=None, description="Replace this own note instead of adding one")
+
+
+class ForgetArgs(BaseModel):
+    note_ids: list[int] = Field(min_length=1)
+
+
+async def _own_block(ctx: ToolContext) -> str:
+    return prompts.own_notes_block(await own_note_service.for_agent(ctx.session, ctx.agent.id))
+
+
+async def _mark_seen(ctx: ToolContext, before: str) -> None:
+    """The agent knows what it just wrote, so the change needs no briefing update in its next turn
+    (unless its notes had changed in a way it has not seen yet)."""
+    conv = await agent_service.conversation_for(ctx.session, ctx.agent.id)
+    seen = dict(conv.prompt_sections or {})
+    if seen.get("own_notes", "") != before:
+        return
+    if after := await _own_block(ctx):
+        seen["own_notes"] = after
+    else:
+        seen.pop("own_notes", None)
+    conv.prompt_sections = seen
+    await ctx.session.commit()
+
+
+@tool("remember", "Save to your own notes: always in your prompt, also after a context reset.", RememberArgs)
+async def remember(ctx: ToolContext, args: RememberArgs) -> str:
+    before = await _own_block(ctx)
+    note = await own_note_service.get(ctx.session, args.note_id, ctx.agent.id) if args.note_id else None
+    note = await own_note_service.save(ctx.session, ctx.agent, args.text, note=note, by_agent_id=ctx.agent.id)
+    await _mark_seen(ctx, before)
+    used = own_note_service.used(await own_note_service.for_agent(ctx.session, ctx.agent.id))
+    return f"Saved as own note {note.id} ({used}/{own_note_service.BUDGET_CHARS} chars)."
+
+
+@tool("forget", "Delete own notes that no longer apply.", ForgetArgs)
+async def forget(ctx: ToolContext, args: ForgetArgs) -> str:
+    before = await _own_block(ctx)
+    notes = [await own_note_service.get(ctx.session, i, ctx.agent.id) for i in args.note_ids]
+    await own_note_service.delete(ctx.session, notes)
+    await _mark_seen(ctx, before)
+    return f"Deleted {len(notes)} own note(s)."
+
+
+@tool("list_notes","List project notes (id, title, age, size). Use get_note to read one.", ListNotesArgs)
 async def list_notes(ctx: ToolContext, args: ListNotesArgs) -> str:
     notes = await note_service.list_for_project(ctx.session, ctx.project.id, args.query)
     lines = [f"{n.id}: {n.title}{' (pinned)' if n.pinned else ''} · updated {_age(n)} · {len(n.content)} chars" for n in notes]

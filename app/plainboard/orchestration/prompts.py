@@ -6,7 +6,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
-from ..models import Agent, Assignment, Attachment, Comment, Decision, DecisionStatus, Note, Project, Repository, Task
+from ..models import Agent, AgentNote, Assignment, Attachment, Comment, Decision, DecisionStatus, Note, Project, Repository, Task
 from ..services.util import truncate
 
 MANAGER_GUIDE = """\
@@ -63,6 +63,11 @@ How work flows:
 - Each member has a task list for planned work (add_todos with title and a detailed description;
   list_todos, get_todo, update_todo, delete_todos). Members see their open tasks in every turn and mark
   them done. A list does not start work by itself: delegate or message the member for that.
+- Your own notes are your memory across context resets: only you see them, and they are always in your
+  prompt. When the user tells you something that should keep applying (a wish, a rule, a correction,
+  how they want things done), save it with remember right away, in one or two short sentences, before
+  you go on. Replace or forget what no longer applies. Knowledge for the whole team goes into project
+  notes; a lasting rule for one teammate goes into their instructions.
 - Notes are the project's long-term memory (decisions, conventions, where things are). Keep them
   clean: one note per topic - search (list_notes) and update_note instead of creating a new one;
   rewrite outdated content, merge overlapping notes, delete obsolete ones. Keep notes short and
@@ -90,7 +95,10 @@ How you work:
 - Ask teammates with ask_agent (waits for the answer) or message_agent (does not wait).
 - Your task list (from the manager) appears in your turn when it changes. Mark a task done with
   update_todo done=true as soon as it is finished; read its details with get_todo.
-- Store durable knowledge in notes. Pin only what everyone must always know.
+- Your own notes (remember, forget) are always in your prompt, also after a context reset, and only you
+  see them. Save right away what you must not forget: lasting instructions, corrections, pitfalls in
+  your area. Keep each one short.
+- Store durable knowledge for the team in project notes. Pin only what everyone must always know.
 - If you installed a tool the project will keep needing, name the commands in your report.
 - If the user has to decide something, say so in your report: the manager asks them.
 - If a job of yours is still running when you finish, your report counts as done: name the job and what is
@@ -124,6 +132,7 @@ SUMMARY_SYSTEM = """\
 You compress an AI agent's conversation history into a working memory for the same agent.
 Write a dense, factual summary in English with these sections (omit empty ones):
 ## Goals & context
+## Standing instructions (rules, wishes and corrections from the user that still apply - never drop one)
 ## Decisions & conventions
 ## Work done (files, branches, PRs, tickets, assignments - keep identifiers exact)
 ## Current state & open items
@@ -168,6 +177,14 @@ def pinned_notes_block(notes: list[Note]) -> str:
     return block
 
 
+def own_notes_block(notes: list[AgentNote]) -> str:
+    """A member's own notes (services/own_notes.py keeps them within a budget, so all are shown)."""
+    if not notes:
+        return ""
+    lines = [f"- [{n.id}] " + n.text.strip().replace("\n", "\n  ") for n in notes]
+    return "## Your own notes (only you see them; change with remember/forget)\n" + "\n".join(lines)
+
+
 def repos_block(repos: list[Repository], workspace: str) -> str:
     lines = []
     for repo in repos:
@@ -208,6 +225,7 @@ SECTION_TITLES = {
     "instructions": "Instructions",
     "team": "Team",
     "pinned_notes": "Pinned notes",
+    "own_notes": "Your own notes",
     "memory": "Memory",
 }
 
@@ -224,6 +242,7 @@ def system_prompt_sections(
     project_repos: list[Repository] | None = None,
     repos_by_agent: dict[int, list[str]] | None = None,
     secrets: list[tuple[str, str]] | None = None,
+    own_notes: list[AgentNote] | None = None,
 ) -> dict[str, str]:
     """The system prompt as named sections (ordered), so changes can be detected per section."""
     my_repos = my_repos or []
@@ -260,6 +279,8 @@ def system_prompt_sections(
     sections["team"] = f"## Team\n{team_roster(team, agent, repos_by_agent)}"
     if pinned:
         sections["pinned_notes"] = pinned_notes_block(pinned).strip()
+    if own_notes:
+        sections["own_notes"] = own_notes_block(own_notes)
     if memory:
         sections["memory"] = f"## Memory (summary of your earlier conversation)\n{memory}"
     return sections

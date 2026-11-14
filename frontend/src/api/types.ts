@@ -63,6 +63,7 @@ export interface Agent {
   status: "idle" | "queued" | "running";
   running_jobs: number;
   open_todos: number;
+  own_notes: number;
   context_tokens: number;
   base_context_tokens: number;
   total_cost_usd: number;
@@ -101,6 +102,17 @@ export interface Comment {
   author_agent_id: number | null;
   body: string;
   created_at: string;
+}
+
+/** A team member's own note: always in that member's prompt. */
+export interface OwnNote {
+  id: number;
+  project_id: number;
+  agent_id: number;
+  text: string;
+  created_by_agent_id: number | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export type TodoState = "open" | "done" | "archived";

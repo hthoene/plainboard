@@ -239,6 +239,7 @@ class AgentOut(ORM):
     status: Literal["idle", "queued", "running"] = "idle"
     running_jobs: int = 0
     open_todos: int = 0
+    own_notes: int = 0
     context_tokens: int = 0
     base_context_tokens: int = 0  # fixed part of the context (system prompt, tools, memory)
     total_cost_usd: float = 0.0
@@ -514,6 +515,20 @@ class NoteOut(ORM):
     title: str
     content: str
     pinned: bool
+    created_by_agent_id: int | None
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
+
+
+class AgentNoteBody(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+
+
+class AgentNoteOut(ORM):
+    id: int
+    project_id: int
+    agent_id: int
+    text: str
     created_by_agent_id: int | None
     created_at: UTCDateTime
     updated_at: UTCDateTime

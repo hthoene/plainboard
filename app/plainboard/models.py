@@ -396,6 +396,18 @@ class Note(Timestamps, Base):
     created_by_agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id", ondelete="SET NULL"))
 
 
+class AgentNote(Timestamps, Base):
+    """A team member's own note: always in that member's prompt, so it survives context resets
+    (services/own_notes.py keeps all notes of a member within a small budget)."""
+
+    __tablename__ = "agent_notes"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), index=True)
+    text: Mapped[str] = mapped_column(Text)
+    created_by_agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id", ondelete="SET NULL"))  # None = the user
+
+
 class Todo(Timestamps, Base):
     """An item on a team member's task list. Done items move to the archive and are later deleted
     (services/todos.py), so agents only ever see the open ones."""

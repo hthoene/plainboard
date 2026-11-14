@@ -1,4 +1,4 @@
-import { GitBranch, ListTodo, MessageSquare, Plus, Shield } from "lucide-react";
+import { GitBranch, ListTodo, MessageSquare, Plus, Shield, StickyNote } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useRepositories } from "../../api/queries";
@@ -7,6 +7,7 @@ import { AgentDot, Badge, Button } from "../../components/ui";
 import { formatCost, formatTokens } from "../../lib/format";
 import { useShell } from "../layout/shell-context";
 import { AgentEditor } from "./AgentEditor";
+import { OwnNotesDialog } from "./OwnNotesDialog";
 import { TodoDialog } from "./TodoDialog";
 
 export function TeamView() {
@@ -18,6 +19,8 @@ export function TeamView() {
   const [editing, setEditing] = useState<Agent | "new" | null>(null);
   const [todosOf, setTodosOf] = useState<number | null>(null);
   const todoAgent = agents.find((a) => a.id === todosOf);
+  const [notesOf, setNotesOf] = useState<number | null>(null);
+  const notesAgent = agents.find((a) => a.id === notesOf);
 
   return (
     <div className="scroll-thin h-full overflow-y-auto">
@@ -67,11 +70,23 @@ export function TeamView() {
                   {repoNames(agent).join(", ") || t("team.noRepos")}
                 </p>
               )}
-              <div className="mt-3 flex items-center justify-between border-t border-zinc-100 pt-3 text-xs text-zinc-500 dark:border-zinc-800">
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 border-t border-zinc-100 pt-3 text-xs text-zinc-500 dark:border-zinc-800">
                 <span title={t("team.contextTitle")}>
                   {formatTokens(agent.context_tokens)} / {formatTokens(agent.context_limit_tokens)} · {formatCost(agent.total_cost_usd)}
                 </span>
-                <div className="flex items-center gap-1">
+                <div className="flex flex-wrap items-center justify-end gap-1">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    icon={<StickyNote className="size-3.5" />}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setNotesOf(agent.id);
+                    }}
+                  >
+                    {t("ownNotes.button")}
+                    {agent.own_notes > 0 && <span className="text-zinc-400">{agent.own_notes}</span>}
+                  </Button>
                   <Button
                     size="sm"
                     variant="ghost"
@@ -102,6 +117,7 @@ export function TeamView() {
         </div>
       </div>
       {todoAgent && <TodoDialog agent={todoAgent} onClose={() => setTodosOf(null)} />}
+      {notesAgent && <OwnNotesDialog agent={notesAgent} onClose={() => setNotesOf(null)} />}
       {editing && <AgentEditor agent={editing === "new" ? undefined : editing} onClose={() => setEditing(null)} />}
     </div>
   );

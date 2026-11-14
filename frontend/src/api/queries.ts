@@ -10,6 +10,7 @@ import type {
   McpServer,
   Meta,
   Note,
+  OwnNote,
   Project,
   Repository,
   Run,
@@ -34,6 +35,7 @@ export const qk = {
   tasks: (pid: number) => ["tasks", pid] as const,
   task: (id: number) => ["task", id] as const,
   todos: (agentId: number, state: TodoState) => ["todos", agentId, state] as const,
+  ownNotes: (agentId: number) => ["ownNotes", agentId] as const,
   conversation: (agentId: number) => ["conversation", agentId] as const,
   runs: (pid: number) => ["runs", pid] as const,
   assignments: (pid: number) => ["assignments", pid] as const,
@@ -78,7 +80,9 @@ export const useTodos = (agentId: number, state: TodoState) =>
       return loaded < last.total ? loaded : undefined;
     },
   });
-export const useConversation = (agentId: number | null) =>
+export const useOwnNotes = (agentId: number) =>
+  useQuery({ queryKey: qk.ownNotes(agentId), queryFn: () => api.get<OwnNote[]>(`/agents/${agentId}/notes`) });
+export const useConversation =(agentId: number | null) =>
   useQuery({
     queryKey: qk.conversation(agentId ?? 0),
     queryFn: () => api.get<Conversation>(`/agents/${agentId}/conversation`),

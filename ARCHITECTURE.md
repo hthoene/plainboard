@@ -49,6 +49,7 @@ token that is valid only while the run lasts and only for that run's project and
 | Setup script | `project.setup_script`, `runner/workspace.py` | Maintained by the manager (no user setup): agents install what they need, the manager records the commands. The runner runs each script once per container start, one at a time, before the agent starts, so installs survive rebuilds; a failure becomes a notice in the prompt. Home (`agent-home` volume) is permanent and shared by all agents; `BASH_ENV` loads `~/.profile` in their non-interactive shells. |
 | Repository | `services/repositories.py` | Many per project. Per agent: `all_repos` or an explicit selection. The runner clones them into `<workspace>/<name>` and fetches existing clones before each run; a clean checkout is fast-forwarded (not in a shared folder). A failed clone or fetch becomes a notice in the prompt instead of failing the run. |
 | Note | `services/notes.py`, `tools/knowledge.py` | Durable knowledge, independent of chat compression. `create_note` rejects similar titles, pinned notes are capped by `prompts.PINNED_BUDGET_CHARS`, and the manager gets a tidy-up reminder every 30 notes. |
+| Own notes (`AgentNote`) | `services/own_notes.py`, `tools/knowledge.py`, `features/team/OwnNotesDialog.tsx` | What one member must not forget (the user's lasting wishes, corrections). Private to the member and always in its prompt (section `own_notes`), so they survive compression and resets. Members write them with `remember`/`forget`; the user edits them in the team view. All notes of a member share `own_notes.BUDGET_CHARS`. The prompt cache stays valid: the frozen system prompt never changes, a change by the user arrives once as a briefing update, and what the member wrote itself is not sent again (`knowledge._mark_seen`). |
 
 ### Run lifecycle (`orchestration/run_manager.py`)
 1. `enqueue` creates a `Run(queued)`. The dispatcher starts it when the agent is idle and fewer than
@@ -93,7 +94,7 @@ limits apply. An answer that arrives after a timeout goes to the asker's inbox i
 
 ### Prompts (`orchestration/prompts.py`)
 The system prompt is stable (cache-friendly): role, area, guide, workspace, instructions, team roster,
-pinned notes, memory. Volatile data such as the current time and inbox updates goes into the user turn.
+pinned notes, own notes, memory. Volatile data such as the current time and inbox updates goes into the user turn.
 The manager uses the `board` toolset: a short custom prompt and no Claude Code preset, with shell and
 file editing for small tasks it would cost more to delegate. Workers use
 `full`: the Claude Code preset with the PlainBoard part appended.

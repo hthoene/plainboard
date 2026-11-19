@@ -102,6 +102,7 @@ class FakeRunner:
         self.notices: list[tuple[int, str]] = []
         self.limit_windows: list[LimitWindow] = []
         self.limit_calls: list = []
+        self.limit_plans: dict[str, tuple[str, float | None]] = {}  # by token: the plan the provider names
         self.unavailable = 0  # how many starts of a turn fail because the runner is not up yet
         self.active: set[int] = set()  # turns streaming right now
         self.forgotten: set[int] = set()  # turns the runner lost although the app still waits for them
@@ -196,7 +197,9 @@ class FakeRunner:
 
     async def limits(self, provider, credentials) -> LimitsEvent:
         self.limit_calls.append((provider, credentials))
-        return LimitsEvent(windows=[w for w in self.limit_windows if w.name.startswith("codex_") == (provider == "codex")], complete=provider == "codex")
+        plan, size = self.limit_plans.get(credentials.claude_oauth_token or "", (None, None))
+        windows = [w for w in self.limit_windows if w.name.startswith("codex_") == (provider == "codex")]
+        return LimitsEvent(windows=windows, complete=provider == "codex", plan=plan, plan_size=size)
 
     async def notify_run(self, run_id: int, text: str, urgent: bool = False) -> bool:
         self.notices.append((run_id, text))

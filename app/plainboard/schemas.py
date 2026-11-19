@@ -136,6 +136,8 @@ class AccountLimits(BaseModel):
     windows: list[LimitWindow] = Field(default_factory=list)
     forecasts: list[LimitForecast] = Field(default_factory=list)
     updated_at: int | None = None  # unix seconds, like the windows' resets_at
+    plan: str | None = None  # the plan as the provider names it, where it can tell
+    plan_size: float | None = None  # its size as the provider says (Account.plan_size: as the user gave it)
 
 
 class LimitsOut(BaseModel):
@@ -153,6 +155,7 @@ class AccountCreate(BaseModel):
     endpoint_url: str = Field(default="", max_length=500)
     models: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(default_factory=list, max_length=200)
     context_tokens: int = Field(default=0, ge=0, le=10_000_000)
+    plan_size: float | None = Field(default=None, gt=0, le=1000)
 
 
 class AccountUpdate(BaseModel):
@@ -163,6 +166,7 @@ class AccountUpdate(BaseModel):
     endpoint_url: str | None = Field(default=None, max_length=500)
     models: list[Annotated[str, Field(min_length=1, max_length=200)]] | None = Field(default=None, max_length=200)
     context_tokens: int | None = Field(default=None, ge=0, le=10_000_000)
+    plan_size: float | None = Field(default=None, ge=0, le=1000)  # 0 = as the provider says
 
 
 class AccountOut(ORM):
@@ -176,6 +180,7 @@ class AccountOut(ORM):
     endpoint_url: str = ""
     models: list[str] = []
     context_tokens: int = 0
+    plan_size: float | None = None
 
 
 class RepositoryOut(ORM):

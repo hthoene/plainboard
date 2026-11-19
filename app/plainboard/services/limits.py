@@ -124,6 +124,40 @@ async def record(session: AsyncSession, account_key: str, windows: list[LimitWin
     await session.commit()
 
 
+# The plans of the accounts, by key: {"name", "size", "checked_at"}. A setting of its own, so that
+# storing one never races with a turn's limit report.
+PLANS_KEY = "provider_plans"
+PLAN_CHECK_SECONDS = 6 * 3600
+
+
+async def _plans(session: AsyncSession) -> tuple[Setting, dict]:
+    row = await session.get(Setting, PLANS_KEY) or Setting(key=PLANS_KEY, secret=False)
+    return row, json.loads(row.value) if row.value else {}
+
+
+async def record_plan(session: AsyncSession, account_key: str, name: str | None, size: float | None) -> None:
+    """Store what the provider said about the account's plan; nothing known keeps what was known."""
+    row, plans = await _plans(session)
+    known = plans.get(account_key) or {}
+    plans[account_key] = {"name": name or known.get("name"), "size": size or known.get("size"), "checked_at": int(time.time())}
+    row.value = json.dumps(plans)
+    session.add(row)
+    await session.commit()
+
+
+async def plan_checked(session: AsyncSession) -> set[str]:
+    """Accounts (by key) whose plan was asked for a moment ago."""
+    _row, plans = await _plans(session)
+    now = time.time()
+    return {key for key, plan in plans.items() if now - (plan.get("checked_at") or 0) < PLAN_CHECK_SECONDS}
+
+
+async def plan_sizes(session: AsyncSession) -> dict[str, float]:
+    """The size of each account's plan (by key) as the provider said it, where it did."""
+    _row, plans = await _plans(session)
+    return {key: plan["size"] for key, plan in plans.items() if plan.get("size")}
+
+
 UNREPORTED_SECONDS = 3 * 3600
 
 
@@ -156,6 +190,7 @@ async def usage(session: AsyncSession) -> dict[str, float]:
 
 async def current(session: AsyncSession) -> LimitsOut:
     _, stored = await _stored(session)
+    _, plans = await _plans(session)
     accounts = (await session.scalars(select(Account).where(Account.enabled.is_(True)).order_by(Account.provider, Account.id))).all()  # as accounts.list_accounts
     now = time.time()
     out = []
@@ -163,6 +198,8 @@ async def current(session: AsyncSession) -> LimitsOut:
         # An API key has no plan limits, so what a subscription reported earlier no longer applies.
         entry = AccountLimits(account_id=account.id, provider=account.provider, label=account.label, available=account.auth_mode != "api_key")
         data = stored.get(account.key, {})
+        if entry.available:
+            entry.plan, entry.plan_size = (plans.get(account.key) or {}).get("name"), (plans.get(account.key) or {}).get("size")
         if entry.available and (windows := _windows(data, now)):
             growth = data.get("growth", {})
             forecasts = [forecast(w, growth.get(w.name, {}).get("days", {}), now) for w in windows if WEEKLY_MARK in w.name]

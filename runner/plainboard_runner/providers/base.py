@@ -43,6 +43,10 @@ class Provider(ABC):
         """The account's plan limits, without using the model. Empty if it has none or they are unknown."""
         return []
 
+    async def plan(self, credentials: Credentials) -> tuple[str | None, float | None]:
+        """The account's plan: its name and its size as a multiple of the provider's smallest plan. None: not known."""
+        return None, None
+
     async def account(self, key: str) -> ProviderAccount | None:
         """The subscription signed in on the runner for account ``key``. None: the provider has no sign-in of its own."""
         return None

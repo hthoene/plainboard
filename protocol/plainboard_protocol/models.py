@@ -381,6 +381,11 @@ class LimitsEvent(BaseModel):
     # These are all the windows the account has: one that is missing no longer exists (a plan that
     # dropped a limit). False: only the windows that changed, the others stay as they were.
     complete: bool = False
+    # The account's plan where the provider can tell (only in the answer to a read of the limits): its
+    # name, and its size as a multiple of the provider's smallest plan, for comparing what is left in
+    # absolute terms. None: not known.
+    plan: str | None = None
+    plan_size: float | None = None
 
 
 class CompactionEvent(BaseModel):

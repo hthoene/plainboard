@@ -2,22 +2,24 @@
 endpoints of other providers (a local model server, a model host) with their address, key and models.
 
 A run uses the agent's pinned account, otherwise the account it ran on last (the provider's prompt
-cache is per account) as long as nothing better is free, otherwise the best one in this order:
-subscriptions below ``SWITCH_AT``, then the rest of nearly full subscriptions, then API keys (they
-cost money per token), then used-up subscriptions.
+cache is per account) while that cache is warm and nothing better is free, otherwise the best one in
+this order: subscriptions below ``SWITCH_AT``, then the rest of nearly full subscriptions, then API
+keys (they cost money per token), then used-up subscriptions. Among subscriptions alike, the one with
+the most usage left in absolute terms: what is left of it times the size of its plan.
 """
 
 from __future__ import annotations
 
 import os
 import uuid
+from datetime import timedelta
 from typing import Any
 
 from plainboard_protocol import ModelInfo, ProviderInfo
-from sqlalchemy import select, update as sql_update
+from sqlalchemy import func, select, update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import Account, Agent, Conversation, Project
+from ..models import Account, Agent, Conversation, Project, Run, utcnow
 from ..schemas import AccountCreate, AccountOut, AccountUpdate
 from ..security import decrypt, encrypt
 from . import limits as limits_service
@@ -29,6 +31,9 @@ ENDPOINT_MODES = ("api_key",)
 LABELS = {"claude_code": "Claude", "codex": "Codex"}
 ENV_SECRETS = {("claude_code", "oauth_token"): "CLAUDE_CODE_OAUTH_TOKEN", ("claude_code", "api_key"): "ANTHROPIC_API_KEY", ("codex", "api_key"): "OPENAI_API_KEY"}
 SWITCH_AT = 0.95  # an account this full hands new turns to one with more room; its rest is used last
+# The prompt cache lives an hour (Claude Code's ENABLE_PROMPT_CACHING_1H): a conversation that had no
+# turn for longer loses nothing by moving to the account with the most room.
+CACHE_SECONDS = 3600
 
 
 def _check_mode(provider: str, mode: str) -> None:
@@ -87,6 +92,7 @@ async def create(session: AsyncSession, data: AccountCreate, name: str = "") -> 
         endpoint_url=data.endpoint_url.strip(),
         models=_models(data.models),
         context_tokens=data.context_tokens,
+        plan_size=data.plan_size,
     )
     session.add(account)
     await session.commit()
@@ -111,6 +117,8 @@ async def update(session: AsyncSession, account: Account, data: AccountUpdate) -
         account.models = _models(data.models)
     if data.context_tokens is not None:
         account.context_tokens = data.context_tokens
+    if data.plan_size is not None:
+        account.plan_size = data.plan_size or None
     await session.commit()
     return account
 
@@ -164,17 +172,43 @@ async def shut_out(session: AsyncSession, provider: str, agent: Agent) -> str:
 USED_UP = 3
 
 
-def _rank(account: Account, used: dict[str, float]) -> tuple[int, float]:
-    """Lower is better: subscriptions with room, the rest of nearly full ones, API keys, used-up subscriptions."""
+def _rank(account: Account, used: dict[str, float], size: float = 1.0) -> tuple[int, float]:
+    """Lower is better: subscriptions with room, the rest of nearly full ones, API keys, used-up
+    subscriptions; within each, the most usage left in absolute terms."""
     if not has_plan(account):
         return 2, 0.0
     utilization = used.get(account.key, 0.0)
-    return (0 if utilization < SWITCH_AT else 1 if utilization < 1 else USED_UP), utilization
+    return (0 if utilization < SWITCH_AT else 1 if utilization < 1 else USED_UP), -max(0.0, 1 - utilization) * size
 
 
-async def pick(session: AsyncSession, provider: str, agent: Agent | None = None, conv: Conversation | None = None, model: str | None = None) -> Account | None:
+def used_up_now(account: Account, used: dict[str, float]) -> bool:
+    return _rank(account, used)[0] == USED_UP
+
+
+def plan_sizes(accounts: list[Account], said: dict[str, float]) -> dict[int, float]:
+    """How large each subscription's plan is: as the user gave it, else as the provider said. One
+    nobody knows counts as large as the known ones on average (as all of them, if none is known):
+    percentages are only comparable between plans of the same size."""
+    sizes = {a.id: a.plan_size or said.get(a.key) for a in accounts if has_plan(a)}
+    known = [size for size in sizes.values() if size]
+    usual = sum(known) / len(known) if known else 1.0
+    return {key: size or usual for key, size in sizes.items()}
+
+
+async def _cache_warm(session: AsyncSession, agent: Agent | None) -> bool:
+    """The agent had a turn within the prompt cache's lifetime."""
+    if agent is None:
+        return False
+    last = await session.scalar(select(func.max(Run.finished_at)).where(Run.agent_id == agent.id))
+    return last is not None and utcnow() - last < timedelta(seconds=CACHE_SECONDS)
+
+
+async def pick(
+    session: AsyncSession, provider: str, agent: Agent | None = None, conv: Conversation | None = None, model: str | None = None, fresh: bool = False
+) -> Account | None:
     """The account for an agent's next turn; None if the provider has no (enabled) account.
-    ``model``: what the turn runs on, the agent's own model if not given."""
+    ``model``: what the turn runs on, the agent's own model if not given. ``fresh``: the turn starts
+    a new session (a new piece of work, a compressed context), so there is no cache to keep."""
     accounts = [a for a in await list_accounts(session, provider) if a.enabled]
     project = await session.get(Project, agent.project_id) if agent else None
     if project is not None and project.account_ids:  # a project limited to some accounts never gets another one
@@ -191,9 +225,15 @@ async def pick(session: AsyncSession, provider: str, agent: Agent | None = None,
     if wanted and (pinned := next((a for a in accounts if a.id == wanted), None)):
         return pinned
     used = await limits_service.usage(session)
-    best = min(accounts, key=lambda a: _rank(a, used))
+    sizes = plan_sizes(accounts, await limits_service.plan_sizes(session))
+
+    def rank(account: Account) -> tuple[int, float]:
+        return _rank(account, used, sizes.get(account.id, 1.0))
+
+    best = min(accounts, key=rank)
     last = next((a for a in accounts if conv and a.key == conv.account_key), None)
-    if last and _rank(last, used)[0] == _rank(best, used)[0] != USED_UP:
+    # Moving costs the prompt cache: a conversation stays unless its account is (nearly) used up or the cache is cold anyway.
+    if last and not fresh and rank(last)[0] == rank(best)[0] != USED_UP and await _cache_warm(session, agent):
         return last
     return best
 
@@ -202,7 +242,7 @@ async def other_with_room(session: AsyncSession, provider: str, agent: Agent, co
     """Another account for a turn the account ``used_up`` (by key) was turned away on; None if
     there is none that is not used up as well."""
     account = await pick(session, provider, agent, conv)
-    if account is None or account.key == used_up or _rank(account, await limits_service.usage(session))[0] == USED_UP:
+    if account is None or account.key == used_up or used_up_now(account, await limits_service.usage(session)):
         return None
     return account
 

@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket
 from fastapi.responses import StreamingResponse
-from plainboard_protocol import ACCOUNT_KEY_PATTERN, DEFAULT_ACCOUNT, BranchRef, CheckResult, CleanupResult, CleanupSpec, CommitRef, CompletionResult, CompletionSpec, Credentials, ErrorEvent, JobPort, JobSpec, JobState, LimitsEvent, MachineUsage, ProjectFiles, ProviderAccount, ProviderInfo, PullRequestCheck, PullRequestRef, PullRequestState, RepoSpec, RunSpec, TidyResult, TidySpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, UpstreamRef, UpstreamState
+from plainboard_protocol import ACCOUNT_KEY_PATTERN, DEFAULT_ACCOUNT, BranchRef, CandidatesSpec, CheckResult, CleanupCandidate, CleanupResult, CleanupSpec, CommitRef, CompletionResult, CompletionSpec, Credentials, DeleteSpec, ErrorEvent, JobPort, JobSpec, JobState, LimitsEvent, MachineUsage, ProjectFiles, ProviderAccount, ProviderInfo, PullRequestCheck, PullRequestRef, PullRequestState, RepoSpec, RunSpec, TidyResult, TidySpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, UpstreamRef, UpstreamState
 from pydantic import BaseModel, Field
 
 from . import cleanup
@@ -84,6 +84,22 @@ async def clean_up(body: CleanupSpec) -> CleanupResult:
         result = await asyncio.to_thread(cleanup.run, body)
     if result.freed:
         usage.measure_soon(force=True)  # the sizes shown are out of date now
+    return result
+
+
+@app.post("/cleanup/candidates", response_model=list[CleanupCandidate])
+async def cleanup_candidates(body: CandidatesSpec) -> list[CleanupCandidate]:
+    """What the manager may delete, with sizes and how safe that is (see cleanup.py)."""
+    return await asyncio.to_thread(cleanup.candidates, body)
+
+
+@app.post("/cleanup/delete", response_model=CleanupResult)
+async def cleanup_delete(body: DeleteSpec) -> CleanupResult:
+    """Delete candidates the manager chose; each is looked at again first."""
+    async with _cleaning:
+        result = await asyncio.to_thread(cleanup.delete, body)
+    if result.freed:
+        usage.measure_soon(force=True)
     return result
 
 

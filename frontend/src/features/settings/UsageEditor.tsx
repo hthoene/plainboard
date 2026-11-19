@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../../api/client";
 import { qk, useUsage } from "../../api/queries";
-import type { Usage, UsageCleanup } from "../../api/types";
+import type { Usage, UsageCleanup, UsageStorage } from "../../api/types";
 import { Button, ErrorText, Spinner } from "../../components/ui";
 import { formatBytes, timeAgo } from "../../lib/format";
 
@@ -29,18 +29,53 @@ function Meter({ used, total, low }: { used: number; total: number; low: boolean
   );
 }
 
-/** What the last automatic cleanup did: when, how much, the biggest items, what it left alone. */
-function LastCleanup({ cleanup }: { cleanup: UsageCleanup }) {
+/** Hours as "40 min" or "2 h 10 min". */
+function hours(h: number): string {
+  const minutes = Math.round(h * 60);
+  return minutes < 90 ? `${minutes} min` : `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ""}`;
+}
+
+/** The target, the trend and its forecast, and the last notices to managers. */
+function StorageTarget({ storage }: { storage: UsageStorage }) {
+  const { t } = useTranslation();
+  const over = storage.percent != null && storage.percent >= storage.notify_percent;
+  const growing = storage.rate != null && storage.rate > 0;
+  const etas = growing
+    ? (
+        [
+          [`${storage.notify_percent} %`, storage.hours_target],
+          ["95 %", storage.hours_95],
+          [t("cleanup.full"), storage.hours_full],
+        ] as const
+      )
+        .filter(([, h]) => h != null && h > 0)
+        .map(([what, h]) => t("cleanup.eta", { what, time: hours(h as number) }))
+    : [];
+  const trend = storage.rate == null ? t("cleanup.trendUnknown") : growing ? t("cleanup.growing", { rate: formatBytes(storage.rate) }) : t("cleanup.notGrowing");
+  return (
+    <section>
+      <h3 className="caps rule-b pb-1.5">{t("cleanup.target", { percent: storage.notify_percent })}</h3>
+      <p className={clsx("py-1.5", over ? "text-you-fg" : "text-fg-2")}>
+        {[storage.percent != null && t("cleanup.now", { percent: Math.round(storage.percent) }), trend, ...etas].filter(Boolean).join(" · ")}
+      </p>
+      {storage.notices.length > 0 && <h4 className="border-b border-line pt-2 pb-1.5 font-extrabold">{t("cleanup.notices")}</h4>}
+      {storage.notices.map((n) => (
+        <Row key={n.at} name={t(`cleanup.notice.${n.reason}`, { when: timeAgo(n.at), percent: Math.round(n.percent), projects: n.projects.join(", ") })} muted />
+      ))}
+    </section>
+  );
+}
+
+/** One cleanup: when, by whom, how much, the biggest items, what it left alone. */
+function Cleanup({ cleanup }: { cleanup: UsageCleanup }) {
   const { t } = useTranslation();
   const memory = cleanup.level === "memory";
   return (
-    <section>
-      <h3 className="caps rule-b pb-1.5">{t(memory ? "cleanup.lastServers" : "cleanup.last")}</h3>
+    <div className="pt-2">
       <p className="py-1.5 text-fg-2">
         {memory
           ? t("cleanup.stoppedSummary", { when: timeAgo(cleanup.at), count: cleanup.items.length })
-          : t(`cleanup.summary.${cleanup.level}`, { when: timeAgo(cleanup.at), freed: formatBytes(cleanup.freed), free: formatBytes(cleanup.free_before) })}
-        {cleanup.told && ` ${t("cleanup.told")}`}
+          : t(`cleanup.summary.${cleanup.level}`, { when: timeAgo(cleanup.at), freed: formatBytes(cleanup.freed), free: formatBytes(cleanup.free_before), by: cleanup.by, project: cleanup.project })}
       </p>
       {cleanup.items.map((item) => (
         <Row key={item.path} name={`${t(`cleanup.what.${item.what}`)} · ${item.path}`} disk={memory ? undefined : formatBytes(item.bytes)} muted />
@@ -48,7 +83,7 @@ function LastCleanup({ cleanup }: { cleanup: UsageCleanup }) {
       {cleanup.kept.map((reason) => (
         <Row key={reason} name={reason} muted />
       ))}
-    </section>
+    </div>
   );
 }
 
@@ -139,8 +174,21 @@ export function UsageEditor() {
         <p className="mt-2 text-fg-3">{t("usage.sharedHint")}</p>
       </section>
 
-      {data.cleanup && <LastCleanup cleanup={data.cleanup} />}
-      {data.servers_stopped && <LastCleanup cleanup={data.servers_stopped} />}
+      {data.storage && <StorageTarget storage={data.storage} />}
+      {data.cleanups.length > 0 && (
+        <section>
+          <h3 className="caps rule-b pb-1.5">{t("cleanup.cleanups")}</h3>
+          {data.cleanups.map((c) => (
+            <Cleanup key={c.at} cleanup={c} />
+          ))}
+        </section>
+      )}
+      {data.servers_stopped && (
+        <section>
+          <h3 className="caps rule-b pb-1.5">{t("cleanup.lastServers")}</h3>
+          <Cleanup cleanup={data.servers_stopped} />
+        </section>
+      )}
 
       <div className="flex flex-wrap items-center gap-3">
         <Button size="sm" onClick={measure} disabled={data.measuring || !data.runner_ok}>

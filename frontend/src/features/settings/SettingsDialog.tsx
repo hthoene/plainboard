@@ -88,7 +88,7 @@ export function SettingsDialog({ open, onClose, section }: { open: boolean; onCl
   const MODELS = ["default_provider", "default_manager_model", "default_worker_model", "default_summary_model", "default_manager_effort", "default_worker_effort", "default_summary_effort", "default_context_limit", "default_keep_recent"];
   const PACE = ["max_parallel_runs", "manager_parallel_limit"];
   const GENERAL = ["timezone", "member_chat", "update_check"];
-  const CLEANUP = ["cleanup", "cleanup_soft_free_percent", "cleanup_hard_free_percent", "cleanup_memory_free_percent"];
+  const CLEANUP = ["storage_notify_percent", "storage_emergency_percent", "cleanup", "cleanup_memory_free_percent"];
 
   const account: SettingsSection = { id: "account", label: t("account.title"), description: t("account.hint"), content: <AccountEditor /> };
   const admin: SettingsSection[] = !me.is_admin || !settings.data
@@ -254,17 +254,19 @@ export function SettingsDialog({ open, onClose, section }: { open: boolean; onCl
               <UsageEditor />
               <section className="space-y-4">
                 <h3 className="caps rule-b pb-1.5">{t("cleanup.title")}</h3>
+                <FieldRow>
+                  <Field label={t("cleanup.notify")} hint={t("cleanup.notifyHint")}>
+                    <Input type="number" min={1} max={100} value={values.storage_notify_percent ?? 80} onChange={(e) => set({ storage_notify_percent: Number(e.target.value) })} />
+                  </Field>
+                  <Field label={t("cleanup.emergency")} hint={t("cleanup.emergencyHint")}>
+                    <Input type="number" min={1} max={100} value={values.storage_emergency_percent ?? 97} onChange={(e) => set({ storage_emergency_percent: Number(e.target.value) })} />
+                  </Field>
+                </FieldRow>
                 <div className="space-y-1">
                   <Toggle checked={values.cleanup ?? true} onChange={(v) => set({ cleanup: v })} label={t("cleanup.auto")} />
                   <p className="text-fg-3">{t("cleanup.hint")}</p>
                 </div>
                 <FieldRow>
-                  <Field label={t("cleanup.soft")} hint={t("cleanup.softHint")}>
-                    <Input type="number" min={1} max={50} value={values.cleanup_soft_free_percent ?? 15} onChange={(e) => set({ cleanup_soft_free_percent: Number(e.target.value) })} />
-                  </Field>
-                  <Field label={t("cleanup.hard")} hint={t("cleanup.hardHint")}>
-                    <Input type="number" min={1} max={50} value={values.cleanup_hard_free_percent ?? 5} onChange={(e) => set({ cleanup_hard_free_percent: Number(e.target.value) })} />
-                  </Field>
                   <Field label={t("cleanup.memory")} hint={t("cleanup.memoryHint")}>
                     <Input type="number" min={0} max={50} value={values.cleanup_memory_free_percent ?? 10} onChange={(e) => set({ cleanup_memory_free_percent: Number(e.target.value) })} />
                   </Field>

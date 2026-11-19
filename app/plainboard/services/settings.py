@@ -51,14 +51,15 @@ SETTINGS: dict[str, SettingDef] = {
     "update_check": SettingDef(True),  # ask now and then whether a newer PlainBoard exists
     # The admin has gone through the basic settings once (the set-up in the browser). Until then the UI asks for them.
     "setup_done": SettingDef(False),
-    # Automatic cleanup when the workspaces' volume runs short (services/cleanup.py): below the soft
-    # share free what costs nothing to rebuild, below the hard one also dependencies, and the manager hears it.
-    "cleanup": SettingDef(True),
-    "cleanup_soft_free_percent": SettingDef(15),
-    "cleanup_hard_free_percent": SettingDef(5),
+    # Disk space under the manager's control (services/storage.py): from this share used (or when the
+    # trend crosses it soon) the manager of the project causing it hears it and cleans up with his tools.
+    "storage_notify_percent": SettingDef(80),
+    # Only from this share used PlainBoard deletes by itself what is made again when needed, and says what.
+    "storage_emergency_percent": SettingDef(97),
+    "cleanup": SettingDef(True),  # the emergency cleanup and stopping idle servers when memory is short
     "cleanup_memory_free_percent": SettingDef(10),  # below: servers nobody opened for long are stopped
-    "cleanup_last": SettingDef(None, managed=True),
-    "cleanup_told_at": SettingDef(None, managed=True),
+    "storage_notices": SettingDef(None, managed=True),  # the last notices, newest first
+    "storage_cleanups": SettingDef(None, managed=True),  # the last cleanups, by the manager or in an emergency
     "cleanup_servers_last": SettingDef(None, managed=True),  # servers the memory cleanup stopped last
     # Everything is paused (services/pause.py): who did it, since when, and which members that switched off.
     "pause": SettingDef(None, managed=True),

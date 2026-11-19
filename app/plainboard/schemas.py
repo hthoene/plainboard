@@ -184,16 +184,43 @@ class CleanedOut(BaseModel):
 
 
 class CleanupOut(BaseModel):
-    """The last automatic cleanup (services/cleanup.py)."""
+    """A cleanup (services/cleanup.py): by the manager, in an emergency by itself, or servers stopped for memory."""
 
     at: UTCDateTime
-    level: str  # soft | hard | memory
+    level: str  # manager | emergency | memory
     freed: int = 0
     free_before: int = 0
     total: int = 0
     items: list[CleanedOut] = Field(default_factory=list)  # the biggest
     kept: list[str] = Field(default_factory=list)  # folders left alone, with the reason
-    told: bool = False  # the manager was told: still short of room
+    told: bool = False  # the manager was told
+    by: str = ""  # the member who deleted it
+    project: str = ""
+
+
+class StorageNoticeOut(BaseModel):
+    """A notice to managers that the disk is (soon) above the target (services/storage.py)."""
+
+    at: UTCDateTime
+    reason: str  # over | soon | emergency
+    percent: float
+    rate: float | None = None  # bytes per hour
+    hours_target: float | None = None
+    hours_full: float | None = None
+    projects: list[str] = Field(default_factory=list)  # whose managers were told, the cause first
+
+
+class StorageOut(BaseModel):
+    """The agents' volume against its target: trend and forecast, and the last notices."""
+
+    notify_percent: float
+    emergency_percent: float
+    percent: float | None = None
+    rate: float | None = None  # bytes per hour; None: not known yet
+    hours_target: float | None = None  # until the target is crossed (0: it is); None: not growing
+    hours_95: float | None = None
+    hours_full: float | None = None
+    notices: list[StorageNoticeOut] = Field(default_factory=list)
 
 
 class UsageOut(BaseModel):
@@ -208,7 +235,8 @@ class UsageOut(BaseModel):
     memory_total: int = 0
     memory_used: int = 0
     memory_other: int = 0  # processes of the runner that work in no agent's folder: the runner itself, browsers
-    cleanup: CleanupOut | None = None
+    storage: StorageOut | None = None
+    cleanups: list[CleanupOut] = Field(default_factory=list)  # newest first
     servers_stopped: CleanupOut | None = None  # by the memory cleanup, the last time
 
 

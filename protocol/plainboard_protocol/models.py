@@ -224,6 +224,7 @@ class CleanupFolder(BaseModel):
     path: str  # two levels below the workspaces root
     idle_since: float = 0  # unix time of its agent's last turn; oldest first
     orphan: bool = False  # no agent has it any more (deleted or renamed): may go entirely if nothing in it is unpushed
+    busy: bool = False  # its agent works (turn, open assignment, running job): only listed, deleted only when asked to
 
 
 class CleanupSpec(BaseModel):
@@ -236,7 +237,7 @@ class CleanupSpec(BaseModel):
 
 class CleanedItem(BaseModel):
     path: str
-    what: Literal["build", "cache", "folder", "logs"]
+    what: Literal["build", "cache", "folder", "logs", "home"]
     bytes: int
 
 
@@ -244,6 +245,30 @@ class CleanupResult(BaseModel):
     freed: int = 0
     items: list[CleanedItem] = Field(default_factory=list)
     skipped: list[str] = Field(default_factory=list)  # folders left alone, with the reason
+
+
+CandidateSafety = Literal["safe", "busy", "unsure", "keep"]
+
+
+class CleanupCandidate(BaseModel):
+    """Something the manager may delete to free room (runner ``cleanup.candidates``)."""
+
+    path: str
+    what: Literal["build", "cache", "folder", "home"]  # build output in an agent's folder, a cache, a removed agent's folder, a folder in the shared home
+    bytes: int = 0
+    safety: CandidateSafety  # safe: can be made again; busy: its agent works now; unsure: may hold work; keep: holds unpushed work or tools
+    why: str = ""
+    remotes: list[str] = Field(default_factory=list)  # origin URLs of the clones in it: whose a home folder is
+
+
+class CandidatesSpec(BaseModel):
+    folders: list[CleanupFolder] = Field(default_factory=list)  # every agent folder of the projects without a folder of their own
+
+
+class DeleteSpec(BaseModel):
+    paths: list[str]
+    folders: list[CleanupFolder] = Field(default_factory=list)
+    force: bool = False  # also busy and unsure candidates; never what holds unpushed work
 
 
 class JobPort(BaseModel):

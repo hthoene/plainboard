@@ -1,20 +1,31 @@
-"""Automatic cleanup when disk or memory run short (services/cleanup.py, orchestration/cleanup.py)."""
+"""Disk space under the manager's control (services/storage.py, services/cleanup.py, orchestration/cleanup.py, tools/storage.py)."""
 
+import json
+import time
 from datetime import datetime, timedelta
 
-from plainboard_protocol import CleanedItem, CleanupResult, FolderUsage, MachineUsage, VolumeUsage
+import pytest
+from plainboard_protocol import CleanedItem, CleanupCandidate, CleanupResult, FolderUsage, MachineUsage, VolumeUsage
+from sqlalchemy import select
 
 from plainboard.db import sessionmaker
-from plainboard.models import Agent, Job, Project, utcnow
-from plainboard.services import cleanup
+from plainboard.models import Agent, FlowEvent, Job, Project, utcnow
+from plainboard.services import cleanup, storage
 
 from conftest import agents_by_slug, idle, wait_for
 
 GB = 2**30
-SETTINGS = {"cleanup_soft_free_percent": 15, "cleanup_hard_free_percent": 5, "cleanup_memory_free_percent": 10}
+SETTINGS = {"storage_notify_percent": 80, "storage_emergency_percent": 97}
 
 
-def test_only_folders_of_idle_agents_and_of_removed_ones_are_offered():
+@pytest.fixture(autouse=True)
+def fresh_trend():
+    storage.TREND.samples = []
+    yield
+    storage.TREND.samples = []
+
+
+def test_folders_of_busy_agents_are_marked_and_removed_ones_are_orphans():
     own = Project(id=1, name="Own", slug="own", workspace_path=None)
     shared = Project(id=2, name="Shared", slug="shared", workspace_path="code/mine")
     agents = [
@@ -28,57 +39,121 @@ def test_only_folders_of_idle_agents_and_of_removed_ones_are_offered():
     ]
     turn = datetime(2026, 11, 1, 12)
     out = cleanup.folders([own, shared], agents, busy={11}, turns={10: turn}, measured=measured, root="/workspaces/")
-    assert [(f.path, f.orphan) for f in out] == [("/workspaces/own/idle", False), ("/workspaces/own/gone", True)]
+    assert [(f.path, f.orphan, f.busy) for f in out] == [("/workspaces/own/idle", False, False), ("/workspaces/own/busy", False, True), ("/workspaces/own/gone", True, False)]
     assert out[0].idle_since == (turn - datetime(1970, 1, 1)).total_seconds()
-
-
-def test_thresholds_aim_above_the_soft_one_and_do_not_repeat_for_nothing():
-    assert cleanup.level(100 * GB, 20 * GB, SETTINGS) is None
-    assert cleanup.level(100 * GB, 14 * GB, SETTINGS) == "soft"
-    assert cleanup.level(100 * GB, 4 * GB, SETTINGS) == "hard"
-    assert cleanup.need(100 * GB, 14 * GB, SETTINGS) == 6 * GB  # up to 20 % free
-    now = datetime(2026, 11, 19, 12)
-    poor = {"at": (now - timedelta(hours=1)).isoformat(), "level": "soft", "freed": 1, "need": 10}
-    assert not cleanup.due(poor, "soft", now)
-    assert cleanup.due(poor, "hard", now)  # worse: at once
-    assert cleanup.due(poor, "soft", now + timedelta(hours=6))
-    assert cleanup.due({**poor, "freed": 10}, "soft", now)
 
 
 def _tick(client, now=None):
     return client.portal.call(client.app_ref.state.cleanup.tick, now)
 
 
-def test_a_short_volume_is_cleaned_and_the_manager_hears_only_when_still_short(client, project):
+def _forecast(samples, now):
+    trend = storage.Trend()
+    for minutes, percent in samples:
+        f = trend.add(now + timedelta(minutes=minutes), 1000 * GB, int((100 - percent) * 10 * GB))
+    return f
+
+
+def test_the_manager_hears_it_before_the_target_when_it_grows_fast():
+    now = datetime(2026, 11, 20, 1)
+    fast = _forecast([(0, 70), (30, 72), (60, 74)], now)  # 4 points an hour: 80 % in 1.5 h
+    assert round(fast.rate / GB) == 40 and round(fast.hours_to(80), 1) == 1.5
+    assert storage.notice_due(fast, SETTINGS, None, now) == "soon"
+    text = storage.forecast_text(fast, SETTINGS)
+    assert "growing 40.0 GB/h" in text and "80 % in about 1 h 30 min" in text and "full in about 6 h 30 min" in text
+    assert storage.when_text("soon", fast, SETTINGS) == "Clean up within 1 h 30 min, before it crosses the target."
+
+    slow = _forecast([(0, 73), (60, 74)], now)  # 80 % in 6 h: not yet, but it looks every few minutes
+    assert storage.notice_due(slow, SETTINGS, None, now) is None
+    assert storage.next_check(slow, SETTINGS, 3600) == storage.FAST_SECONDS
+    calm = _forecast([(0, 60), (60, 60)], now)
+    assert storage.notice_due(calm, SETTINGS, None, now) is None and storage.next_check(calm, SETTINGS, 3600) == 3600
+    assert storage.notice_due(_forecast([(0, 81)], now), SETTINGS, None, now) == "over"  # at the target, growth unknown
+
+
+def test_a_notice_is_repeated_only_when_it_gets_clearly_worse_or_as_a_reminder():
+    now = datetime(2026, 11, 20, 1)
+    soon = _forecast([(0, 70), (60, 74)], now)
+    last = storage.notice_record("soon", soon, now, ["P"], SETTINGS)
+    later = now + timedelta(minutes=10)
+    assert storage.notice_due(_forecast([(0, 71), (60, 75)], later), SETTINGS, last, later) is None  # the same, told already
+    assert storage.notice_due(_forecast([(0, 77), (60, 81)], later), SETTINGS, last, later) == "over"  # crossed it now
+
+    last = storage.notice_record("over", _forecast([(0, 82)], now), now, ["P"], SETTINGS)
+    half = now + timedelta(minutes=30)
+    assert storage.notice_due(_forecast([(0, 82), (30, 82)], half), SETTINGS, last, half) is None
+    assert storage.notice_due(_forecast([(0, 87)], half), SETTINGS, last, half) == "over"  # 5 points worse
+    hour = now + timedelta(hours=1, minutes=5)
+    assert storage.notice_due(_forecast([(0, 82)], hour), SETTINGS, last, hour) is None  # not growing: reminded only after 6 h
+    assert storage.notice_due(_forecast([(0, 83)], hour), SETTINGS, last, hour) == "over"  # still growing: hourly
+    assert storage.notice_due(_forecast([(0, 82)], now + timedelta(hours=6)), SETTINGS, last, now + timedelta(hours=6)) == "over"
+
+    cleaned = _forecast([(0, 70)], hour)
+    assert storage.closes(cleaned, SETTINGS, last) and not storage.closes(_forecast([(0, 78)], hour), SETTINGS, last)
+    closed = {**last, "closed": True}
+    assert not storage.closes(cleaned, SETTINGS, closed)
+    assert storage.notice_due(_forecast([(0, 81)], half), SETTINGS, closed, half) is None
+    assert storage.notice_due(_forecast([(0, 81)], hour), SETTINGS, closed, hour) == "over"  # a new time
+
+
+def _volume(percent):
+    return VolumeUsage(paths=["/workspaces", "/home/agent"], fsid=1, total=100 * GB, used=percent * GB, free=(100 - percent) * GB)
+
+
+def _told(fake, text):
+    return [s.prompt for s in fake.specs if text in s.prompt]
+
+
+def test_at_the_target_the_manager_is_told_once_and_nothing_is_deleted(client, project):
     pid, slug = project["id"], project["slug"]
-    agents = agents_by_slug(client, pid)
     wait_for(lambda: idle(client, pid))
     fake = client.app_ref.state.runner
-    volume = VolumeUsage(paths=["/workspaces", "/home/agent"], fsid=1, total=100 * GB, used=88 * GB, free=12 * GB)
-    fake.machine_usage = MachineUsage(volumes=[volume], folders=[FolderUsage(path=f"/workspaces/{slug}/gone", kind="workspace", bytes=3 * GB)])
-    fake.cleanup_result = CleanupResult(freed=9 * GB, items=[CleanedItem(path=f"/workspaces/{slug}/manager/repo/target", what="build", bytes=9 * GB)])
+    fake.machine_usage = MachineUsage(volumes=[_volume(85)], folders=[FolderUsage(path=f"/workspaces/{slug}/manager", kind="workspace", bytes=40 * GB)], measured_at=time.time())
+    fake.candidates = [
+        CleanupCandidate(path=f"/workspaces/{slug}/manager/repo/target", what="build", bytes=30 * GB, safety="busy"),
+        CleanupCandidate(path="/home/agent/fw-jobs", what="home", bytes=26 * GB, safety="unsure", why="fw-jobs/run.log is not in a clone"),
+        CleanupCandidate(path="/home/agent/.cache/sccache", what="cache", bytes=21 * GB, safety="safe"),
+    ]
+    assert _tick(client) == storage.FAST_SECONDS
+    assert not getattr(fake, "cleanups", [])  # below the emergency level nothing goes by itself
+    wait_for(lambda: idle(client, pid) and _told(fake, "Disk space: 85 % used"))
+    prompt = _told(fake, "Disk space")[0]
+    assert "Clean up now." in prompt and "21.0 GB /home/agent/.cache/sccache: cache; safe" in prompt and "Workspaces: Manager 40.0 GB." in prompt
+    assert "26.0 GB /home/agent/fw-jobs: folder in the shared home, owner unknown; unsure: fw-jobs/run.log is not in a clone" in prompt
+    view = client.get("/api/usage").json()["storage"]
+    assert view["notify_percent"] == 80 and view["emergency_percent"] == 97 and round(view["percent"]) == 85
+    assert [n["reason"] for n in view["notices"]] == ["over"]
 
+    told = len(_told(fake, "Disk space"))
+    _tick(client, utcnow() + timedelta(minutes=5))
+    _tick(client, utcnow() + timedelta(minutes=10))
+    assert len(client.get("/api/usage").json()["storage"]["notices"]) == 1  # no spam
+    assert len(_told(fake, "Disk space")) == told and not getattr(fake, "cleanups", [])
+
+
+def test_near_full_safe_things_go_by_themselves_and_the_manager_hears_what(client, project):
+    pid, slug = project["id"], project["slug"]
+    wait_for(lambda: idle(client, pid))
+    fake = client.app_ref.state.runner
+    fake.machine_usage = MachineUsage(volumes=[_volume(98)])
+    fake.cleanup_result = CleanupResult(freed=10 * GB, items=[CleanedItem(path=f"/workspaces/{slug}/gone", what="folder", bytes=10 * GB)])
     _tick(client)
     (spec,) = fake.cleanups
-    assert spec.level == "soft" and spec.need == 8 * GB
-    assert {f.path: f.orphan for f in spec.folders} == {f"/workspaces/{slug}/{a}": False for a in agents} | {f"/workspaces/{slug}/gone": True}
-    last = client.get("/api/usage").json()["cleanup"]
-    assert last["level"] == "soft" and last["freed"] == 9 * GB and not last["told"]
-    fake.machine_usage = MachineUsage(volumes=[volume.model_copy(update={"free": 21 * GB, "used": 79 * GB})])
-    _tick(client)
-    assert len(fake.cleanups) == 1  # room enough: only looked at
+    assert spec.level == "soft" and spec.need == 18 * GB  # down to the target
+    wait_for(lambda: idle(client, pid) and _told(fake, "PlainBoard deleted by itself"))
+    prompt = _told(fake, "PlainBoard deleted by itself")[0]
+    assert f"/workspaces/{slug}/gone (folder) 10.0 GB" in prompt and "Now about 88 % used" in prompt and "Disk space: 88 % used" in prompt
+    (done,) = client.get("/api/usage").json()["cleanups"]
+    assert done["level"] == "emergency" and done["freed"] == 10 * GB
+    _tick(client, utcnow() + timedelta(minutes=5))
+    assert len(fake.cleanups) == 1  # not again within the hour
 
-    # Below the hard threshold, and what goes is not enough: the manager hears it, once a day.
-    fake.machine_usage = MachineUsage(volumes=[volume.model_copy(update={"free": 3 * GB, "used": 97 * GB})])
-    fake.cleanup_result = CleanupResult(freed=1 * GB)
-    _tick(client)
-    assert fake.cleanups[-1].level == "hard" and client.get("/api/usage").json()["cleanup"]["told"]
-    wait_for(lambda: idle(client, pid) and any("Disk space is still short" in s.prompt for s in fake.specs))
-    _tick(client, utcnow() + timedelta(hours=7))
-    assert len(fake.cleanups) == 3 and not client.get("/api/usage").json()["cleanup"]["told"]
+    assert client.put("/api/settings", json={"values": {"cleanup": False}}).status_code < 300
+    _tick(client, utcnow() + timedelta(hours=2))
+    assert len(fake.cleanups) == 1  # switched off
 
 
-def test_a_busy_agents_folder_is_not_offered(client, project):
+def test_a_busy_agents_folder_is_left_to_the_manager(client, project):
     pid, slug = project["id"], project["slug"]
     wait_for(lambda: idle(client, pid))
     manager = agents_by_slug(client, pid)["manager"]
@@ -90,6 +165,58 @@ def test_a_busy_agents_folder_is_not_offered(client, project):
 
     client.portal.call(running_job)
     fake = client.app_ref.state.runner
-    fake.machine_usage = MachineUsage(volumes=[VolumeUsage(paths=["/workspaces"], fsid=1, total=100 * GB, used=90 * GB, free=10 * GB)])
+    fake.machine_usage = MachineUsage(volumes=[_volume(98)])
     _tick(client)
-    assert f"/workspaces/{slug}/manager" not in {f.path for f in fake.cleanups[-1].folders}
+    assert f"/workspaces/{slug}/manager" not in {f.path for f in fake.cleanups[-1].folders}  # the emergency cleanup leaves it alone
+    assert next(f for f in fake.candidate_specs[-1].folders if f.path == f"/workspaces/{slug}/manager").busy  # the manager sees it, marked busy
+
+
+def _results(client, agent_id):
+    messages = client.get(f"/api/agents/{agent_id}/conversation").json()["messages"]
+    return [m["meta"]["result"] for m in messages if m["kind"] == "tool" and "result" in m["meta"]]
+
+
+def test_the_manager_lists_and_deletes_by_the_safety_rules(client, project):
+    pid, slug = project["id"], project["slug"]
+    wait_for(lambda: idle(client, pid))
+    manager = agents_by_slug(client, pid)["manager"]
+    fake = client.app_ref.state.runner
+    fake.machine_usage = MachineUsage(volumes=[_volume(85)])
+    safe, busy, kept = f"/workspaces/{slug}/manager/repo/target", "/home/agent/scratch", f"/workspaces/{slug}/gone"
+    fake.candidates = [
+        CleanupCandidate(path=safe, what="build", bytes=5 * GB, safety="safe"),
+        CleanupCandidate(path=busy, what="home", bytes=3 * GB, safety="busy", why="a process works in it"),
+        CleanupCandidate(path=kept, what="folder", bytes=2 * GB, safety="keep", why="repo has unpushed commits"),
+    ]
+    calls = [
+        "TOOL list_cleanup {}",
+        "TOOL delete_cleanup " + json.dumps({"paths": [safe, busy, kept, "/etc"]}),
+        "TOOL delete_cleanup " + json.dumps({"paths": [busy, kept], "force": True}),
+    ]
+    assert client.post(f"/api/agents/{manager['id']}/messages", json={"text": "\n".join(calls)}).status_code == 202
+    wait_for(lambda: idle(client, pid) and len(_results(client, manager["id"])) >= 3)
+    listed, first, forced = _results(client, manager["id"])[-3:]
+    assert "Safe (made again when needed):\n- 5.0 GB " + safe in listed and "Kept (unpushed work or tools; delete_cleanup won't):" in listed
+    assert "3.0 GB /home/agent/scratch: folder in the shared home, owner unknown; busy: a process works in it" in listed
+    assert first.startswith("Deleted 5.0 GB: " + safe) and f"{busy}: busy" in first and f"{kept}: keep" in first
+    assert "Not a cleanup candidate of this project (list_cleanup shows them): /etc." in first
+    assert forced.startswith("Deleted 3.0 GB: " + busy) and f"{kept}: keep" in forced
+    assert [d.paths for d in fake.deletes] == [[safe, busy, kept], [busy, kept]]
+
+    async def events():
+        async with sessionmaker()() as s:
+            return list(await s.scalars(select(FlowEvent).where(FlowEvent.kind == "storage.cleaned")))
+
+    assert [e.data["level"] for e in client.portal.call(events)] == ["manager", "manager"]
+    assert [c["by"] for c in client.get("/api/usage").json()["cleanups"]] == ["Manager", "Manager"]
+
+
+def test_a_home_folder_of_another_project_is_not_shown():
+    mine, other = Project(id=1, name="Mine", slug="mine"), Project(id=2, name="PaperPaw", slug="paperpaw")
+    repos = {storage._repo_key("https://github.com/acme/paperpaw.git"): 2}
+    by_remote = CleanupCandidate(path="/home/agent/fw-jobs", what="home", safety="safe", remotes=["git@github.com:acme/paperpaw.git"])
+    by_name = CleanupCandidate(path="/home/agent/.cache/paperpaw-quick-check", what="cache", safety="safe")
+    nobody = CleanupCandidate(path="/home/agent/.cache/sccache", what="cache", safety="safe")
+    assert [storage._owner(c, [mine, other], repos) for c in (by_remote, by_name, nobody)] == [2, 2, None]
+    listing = storage.Listing([storage.Item(by_remote, 2), storage.Item(nobody, None)], [mine, other], [], set(), MachineUsage(), [])
+    assert [i.candidate.path for i in listing.visible(1)] == ["/home/agent/.cache/sccache"]

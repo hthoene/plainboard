@@ -4,18 +4,21 @@ endpoints of other providers (a local model server, a model host) with their add
 A run uses the agent's pinned account, otherwise the account it ran on last (the provider's prompt
 cache is per account) while that cache is warm and nothing better is free, otherwise the best one in
 this order: subscriptions below ``SWITCH_AT``, then the rest of nearly full subscriptions, then API
-keys (they cost money per token), then used-up subscriptions. Among subscriptions alike, the one with
-the most usage left in absolute terms: what is left of it times the size of its plan.
+keys (they cost money per token), then used-up subscriptions. Among subscriptions alike, the one whose
+usage would be lost soonest: what is left of it in absolute terms (what its fullest window leaves,
+times the size of its plan) per hour until its longest window resets. A conversation moves off its
+account only when another one is clearly better (``MARGIN``).
 """
 
 from __future__ import annotations
 
 import os
+import time
 import uuid
 from datetime import timedelta
 from typing import Any
 
-from plainboard_protocol import ModelInfo, ProviderInfo
+from plainboard_protocol import LimitWindow, ModelInfo, ProviderInfo
 from sqlalchemy import func, select, update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,6 +37,11 @@ SWITCH_AT = 0.95  # an account this full hands new turns to one with more room; 
 # The prompt cache lives an hour (Claude Code's ENABLE_PROMPT_CACHING_1H): a conversation that had no
 # turn for longer loses nothing by moving to the account with the most room.
 CACHE_SECONDS = 3600
+# A conversation whose cache is cold, or a new session, moves to another account only if that one
+# is worth this much more: small differences come and go with every report.
+MARGIN = 1.25
+HOUR = 3600
+WEEK_HOURS = 7 * 24
 
 
 def _check_mode(provider: str, mode: str) -> None:
@@ -172,17 +180,25 @@ async def shut_out(session: AsyncSession, provider: str, agent: Agent) -> str:
 USED_UP = 3
 
 
-def _rank(account: Account, used: dict[str, float], size: float = 1.0) -> tuple[int, float]:
+def _hours_left(windows: list[LimitWindow], now: float) -> float:
+    """Hours until the account's longest window resets: what is left of it then is lost. A window
+    without a reset time has not started, so all of it is ahead. At least one hour."""
+    ends = [w.resets_at if w.resets_at else now + (5 if "five_hour" in w.name else WEEK_HOURS) * HOUR for w in windows]
+    return max(1.0, (max(ends, default=now + WEEK_HOURS * HOUR) - now) / HOUR)
+
+
+def _rank(account: Account, windows: list[LimitWindow], size: float = 1.0, now: float | None = None) -> tuple[int, float]:
     """Lower is better: subscriptions with room, the rest of nearly full ones, API keys, used-up
-    subscriptions; within each, the most usage left in absolute terms."""
+    subscriptions; within each, the most usage left in absolute terms per hour until it is lost."""
     if not has_plan(account):
         return 2, 0.0
-    utilization = used.get(account.key, 0.0)
-    return (0 if utilization < SWITCH_AT else 1 if utilization < 1 else USED_UP), -max(0.0, 1 - utilization) * size
+    utilization = limits_service.fullest(windows)
+    room = max(0.0, 1 - utilization) * size
+    return (0 if utilization < SWITCH_AT else 1 if utilization < 1 else USED_UP), -room / _hours_left(windows, time.time() if now is None else now)
 
 
-def used_up_now(account: Account, used: dict[str, float]) -> bool:
-    return _rank(account, used)[0] == USED_UP
+def used_up_now(account: Account, windows: dict[str, list[LimitWindow]]) -> bool:
+    return _rank(account, windows.get(account.key, []))[0] == USED_UP
 
 
 def plan_sizes(accounts: list[Account], said: dict[str, float]) -> dict[int, float]:
@@ -224,25 +240,29 @@ async def pick(
         wanted = project.account_id
     if wanted and (pinned := next((a for a in accounts if a.id == wanted), None)):
         return pinned
-    used = await limits_service.usage(session)
+    found = await limits_service.windows(session)
     sizes = plan_sizes(accounts, await limits_service.plan_sizes(session))
+    now = time.time()
 
     def rank(account: Account) -> tuple[int, float]:
-        return _rank(account, used, sizes.get(account.id, 1.0))
+        return _rank(account, found.get(account.key, []), sizes.get(account.id, 1.0), now)
 
     best = min(accounts, key=rank)
     last = next((a for a in accounts if conv and a.key == conv.account_key), None)
+    if last is None or rank(last)[0] != rank(best)[0] or rank(best)[0] == USED_UP:
+        return best
     # Moving costs the prompt cache: a conversation stays unless its account is (nearly) used up or the cache is cold anyway.
-    if last and not fresh and rank(last)[0] == rank(best)[0] != USED_UP and await _cache_warm(session, agent):
+    if not fresh and await _cache_warm(session, agent):
         return last
-    return best
+    # Without a cache to keep it moves only for clearly more: small differences come and go with every report.
+    return best if -rank(best)[1] > -rank(last)[1] * MARGIN else last
 
 
 async def other_with_room(session: AsyncSession, provider: str, agent: Agent, conv: Conversation | None, used_up: str) -> Account | None:
     """Another account for a turn the account ``used_up`` (by key) was turned away on; None if
     there is none that is not used up as well."""
     account = await pick(session, provider, agent, conv)
-    if account is None or account.key == used_up or used_up_now(account, await limits_service.usage(session)):
+    if account is None or account.key == used_up or used_up_now(account, await limits_service.windows(session)):
         return None
     return account
 

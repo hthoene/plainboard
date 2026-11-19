@@ -177,15 +177,21 @@ def _windows(stored: dict, now: float) -> list[LimitWindow]:
     return windows
 
 
-async def usage(session: AsyncSession) -> dict[str, float]:
-    """How full each account is: its fullest window, 1 if the provider turned it away."""
+def fullest(windows: list[LimitWindow]) -> float:
+    """How full an account is: its fullest window, 1 if the provider turned it away."""
+    return max([1.0 if w.status == "rejected" else w.utilization for w in windows], default=0.0)
+
+
+async def windows(session: AsyncSession) -> dict[str, list[LimitWindow]]:
+    """Each account's windows (by key) as they are now."""
     _, accounts = await _stored(session)
     now = time.time()
-    used = {}
-    for key, stored in accounts.items():
-        windows = _windows(stored, now)
-        used[key] = max([1.0 if w.status == "rejected" else w.utilization for w in windows], default=0.0)
-    return used
+    return {key: _windows(stored, now) for key, stored in accounts.items()}
+
+
+async def usage(session: AsyncSession) -> dict[str, float]:
+    """How full each account is (by key), see ``fullest``."""
+    return {key: fullest(found) for key, found in (await windows(session)).items()}
 
 
 async def current(session: AsyncSession) -> LimitsOut:

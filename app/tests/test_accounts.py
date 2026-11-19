@@ -165,8 +165,8 @@ def test_turns_go_to_the_most_usage_left_and_stay_while_the_cache_is_warm(client
 
     client.portal.call(lambda: report(big=0.5, small=0.1))
     assert turn(client, pid, dev["id"]).claude_oauth_token == "tok-big"  # 10 left against 4.5
-    client.portal.call(lambda: report(big=0.8, small=0.1))
-    assert turn(client, pid, dev["id"]).claude_oauth_token == "tok-big"  # 4 against 4.5: it stays for the cache
+    client.portal.call(lambda: report(big=0.85, small=0.1))
+    assert turn(client, pid, dev["id"]).claude_oauth_token == "tok-big"  # 3 against 4.5: it stays for the cache
     client.portal.call(cool)
     assert turn(client, pid, dev["id"]).claude_oauth_token == "tok-small"  # the cache is cold anyway
     client.portal.call(lambda: report(big=0.8, small=0.9))
@@ -175,6 +175,63 @@ def test_turns_go_to_the_most_usage_left_and_stay_while_the_cache_is_warm(client
     assert turn(client, pid, dev["id"]).claude_oauth_token == "tok-big"  # a fresh context has no cache to keep
     # Back to what the provider says (none for this one): as large as the others.
     assert client.patch(f"/api/accounts/{small['id']}", json={"plan_size": 0}).json()["plan_size"] is None
+
+
+def test_usage_that_would_expire_is_used_first(client, project):
+    """What is left of a subscription is lost when its window resets: room per hour until then
+    decides. A conversation keeps its account while its cache is warm, and without one moves only
+    for clearly more."""
+    import time
+    from datetime import timedelta
+
+    from plainboard.db import sessionmaker
+    from plainboard.models import Account, Conversation, Run, utcnow
+    from plainboard.services import limits as limits_service
+    from sqlalchemy import select, update
+
+    pid = project["id"]
+    big = accounts(client)["Claude"]
+    client.patch(f"/api/accounts/{big['id']}", json={"auth_mode": "oauth_token", "secret": "tok-big", "plan_size": 20})
+    client.post("/api/accounts", json={"provider": "claude_code", "label": "Small", "auth_mode": "oauth_token", "secret": "tok-small", "plan_size": 5})
+    dev = make_dev(client, pid)
+
+    async def report(label: str, value: float, hours: float | None) -> None:
+        async with sessionmaker()() as s:
+            key = await s.scalar(select(Account.key).where(Account.label == label))
+            resets_at = int(time.time() + hours * 3600) if hours else None
+            await limits_service.record(s, key, [LimitWindow(name="seven_day", utilization=value, resets_at=resets_at)])
+
+    async def cool() -> None:
+        async with sessionmaker()() as s:
+            await s.execute(update(Run).where(Run.agent_id == dev["id"]).values(finished_at=utcnow() - timedelta(hours=2)))
+            await s.commit()
+
+    async def new_session() -> None:
+        async with sessionmaker()() as s:
+            await s.execute(update(Conversation).where(Conversation.agent_id == dev["id"]).values(provider_session_id=None))
+            await s.commit()
+
+    # 5 left for 2 hours against 10 for 5 days: the small one's would be lost.
+    client.portal.call(report, "Claude", 0.5, 120)
+    client.portal.call(report, "Small", 0.0, 2)
+    assert turn(client, pid, dev["id"]).claude_oauth_token == "tok-small"
+    # It has reset: a whole week ahead for 5, against 10 for 5 days.
+    client.portal.call(report, "Small", 0.0, None)
+    client.portal.call(cool)
+    assert turn(client, pid, dev["id"]).claude_oauth_token == "tok-big"
+    # 5 for 55 hours is a little more per hour than 10 for 120, not clearly: it stays.
+    client.portal.call(report, "Small", 0.0, 55)
+    client.portal.call(cool)
+    assert turn(client, pid, dev["id"]).claude_oauth_token == "tok-big"
+    # 5 for 30 hours is clearly more: a new session moves.
+    client.portal.call(report, "Small", 0.0, 30)
+    client.portal.call(new_session)
+    assert turn(client, pid, dev["id"]).claude_oauth_token == "tok-small"
+    # While the cache is warm it stays, however much better the other one gets, until its own is nearly full.
+    client.portal.call(report, "Claude", 0.5, 2)
+    assert turn(client, pid, dev["id"]).claude_oauth_token == "tok-small"
+    client.portal.call(report, "Small", 0.96, 30)
+    assert turn(client, pid, dev["id"]).claude_oauth_token == "tok-big"
 
 
 def test_codex_accounts_have_their_own_sign_in(client, project):

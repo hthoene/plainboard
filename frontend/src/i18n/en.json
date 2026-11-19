@@ -383,6 +383,7 @@
     },
     "limits": {
       "ring": "Plan limit {{percent}}% used",
+      "five_hour": "5-hour limit",
       "seven_day": "Weekly limit",
       "seven_day_opus": "Weekly limit (Opus)",
       "seven_day_sonnet": "Weekly limit (Sonnet)",

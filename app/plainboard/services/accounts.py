@@ -198,6 +198,15 @@ async def pick(session: AsyncSession, provider: str, agent: Agent | None = None,
     return best
 
 
+async def other_with_room(session: AsyncSession, provider: str, agent: Agent, conv: Conversation | None, used_up: str) -> Account | None:
+    """Another account for a turn the account ``used_up`` (by key) was turned away on; None if
+    there is none that is not used up as well."""
+    account = await pick(session, provider, agent, conv)
+    if account is None or account.key == used_up or _rank(account, await limits_service.usage(session))[0] == USED_UP:
+        return None
+    return account
+
+
 def fields(account: Account | None) -> dict[str, Any]:
     """The account's part of the run's ``Credentials``."""
     if account is None:

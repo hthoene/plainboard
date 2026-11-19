@@ -93,6 +93,7 @@ MAX_RESTART_RESUMES = 3  # an assignment cut off this often by restarts goes to 
 # ... if those turns were cut off right after they began: restarts that leave no time to work. A turn
 # that had worked for a while when an update came is no sign of that, however many updates there are.
 CUT_SHORT_SECONDS = 300
+SWITCH_TRIES = 3  # a turn turned away by a used-up plan limit runs again on another account, this often at most
 RUNNER_TRIES, RUNNER_RETRY_SECONDS = 12, 5.0  # how long a turn waits for a runner that is not up yet (about a minute, plus connect timeouts)
 LOST = "The turn broke off: the runner no longer had it"
 LOST_AFTER_SECONDS = 60  # a turn the runner does not list for this long is over (check_turns)
@@ -125,6 +126,7 @@ class Outcome:
     last_text: str | None = None
     tool_messages: dict[str, int] = field(default_factory=dict)
     resumed: bool = False
+    limited: bool = False  # the provider reported a used-up plan limit of the account during the turn
 
 
 class RunManager:
@@ -959,6 +961,11 @@ class RunManager:
                     if attempt == RUNNER_TRIES - 1:
                         raise
                     await asyncio.sleep(RUNNER_RETRY_SECONDS)
+            for _ in range(SWITCH_TRIES):
+                if (switched := await self._switch_account(spec, ctx, outcome)) is None:
+                    break
+                spec = switched
+                outcome = await self._stream(spec, ctx)
             await self._finish(run_id, outcome)
         except asyncio.CancelledError:
             ended = Outcome(error=LOST) if run_id in self._lost else Outcome(error="Run cancelled", cancelled=True)
@@ -1179,6 +1186,7 @@ class RunManager:
                     bus.publish(ctx.project_id, "conversation.updated", {"agent_id": ctx.agent_id, "context_tokens": event.context_tokens})
                 elif event.type == "limits" and ctx.account_key:
                     await limits_service.record(s, ctx.account_key, event.windows, complete=event.complete)
+                    outcome.limited = outcome.limited or any(w.status == "rejected" for w in event.windows)
                 elif event.type == "compaction":
                     marker = self.context.provider_compacted(conv, event.tokens_before)
                     marker.run_id = ctx.run_id
@@ -1190,6 +1198,28 @@ class RunManager:
                 elif event.type == "error":
                     outcome.error, outcome.cancelled = event.message, event.cancelled
         return outcome
+
+    async def _switch_account(self, spec: RunSpec, ctx: RunContext, outcome: Outcome) -> RunSpec | None:
+        """A turn that failed because the account's plan limit is used up (a 5-hour limit, say): the
+        same turn for another account of the provider that still has room, which the following turns
+        then keep. None if the turn failed otherwise or no other account has room: then it fails with
+        the provider's message, which says when the limit resets."""
+        failed = outcome.error or outcome.result is None or outcome.result.is_error
+        if not (outcome.limited and failed) or outcome.cancelled or ctx.run_id in self._cancel_requested or not ctx.account_key:
+            return None
+        async with self._sm() as s:
+            run, agent = await s.get(Run, ctx.run_id), await s.get(Agent, ctx.agent_id)
+            if run is None or agent is None or run.status != RunStatus.RUNNING:
+                return None
+            conv = await agent_service.conversation_for(s, agent.id)
+            account = await account_service.other_with_room(s, agent.provider, agent, conv, ctx.account_key)
+            if account is None:
+                return None
+            log.info("Run %s: account %s is used up, the turn runs again on %s", run.id, ctx.account_key, account.key)
+            conv.account_key, run.account_key, ctx.account_key = account.key, account.key, account.key
+            await s.commit()
+            bus.publish(run.project_id, "run.upserted", RunOut.model_validate(run))
+        return spec.model_copy(update={"credentials": spec.credentials.model_copy(update=account_service.fields(account))})
 
     async def _add_message(self, s: AsyncSession, ctx: RunContext, conv_id: int, **fields) -> Message:
         msg = Message(conversation_id=conv_id, run_id=ctx.run_id, **fields)

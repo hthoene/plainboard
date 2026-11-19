@@ -65,8 +65,12 @@ def test_pb02_previews_run_sandboxed_or_only_on_their_own_origin(client, project
     client.app_ref.state.preview_client = httpx.AsyncClient(transport=httpx.ASGITransport(app=_site()))
     serve_preview(client, project["id"], 5173)
     serve_preview(client, project["id"], 5174)
+    assert "content-security-policy" not in client.get("/preview/5173/").headers  # as before, unless asked for
+    _config(monkeypatch, preview_sandbox="true")
     sandboxed = client.get("/preview/5173/")
     assert sandboxed.json() == {"page": ""} and "allow-same-origin" not in sandboxed.headers["content-security-policy"]
+    # Every request of a sandboxed page is cross-origin, so its Referer has to keep the path (the root redirect).
+    assert sandboxed.headers["referrer-policy"] == "no-referrer-when-downgrade"
 
     _config(monkeypatch, preview_origin="http://preview.test")
     # PlainBoard's login opens nothing there, and nothing of PlainBoard is there.

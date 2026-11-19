@@ -372,9 +372,10 @@ If it does not work:
 
 ## Security
 
-**Previews.** A preview page that ran as PlainBoard could use PlainBoard as whoever opened it, so it
-never does: by default it runs sandboxed (below). Optionally, previews get a name of their own, one
-line in `.env`:
+**Previews.** Previews open at `/preview/<port>/` on PlainBoard's address with no setup, for the
+people with a role in the project and admins (or with a share). A preview page there runs as
+PlainBoard, so it could use PlainBoard as whoever opens it. To keep agents' code apart from
+PlainBoard, give previews a name of their own, one line in `.env`:
 
 ```bash
 PLAINBOARD_PREVIEW_ORIGIN=https://preview.example.com
@@ -387,15 +388,13 @@ PlainBoard. It serves previews and nothing else: neither the board, the API nor 
 The proxy has to pass on the `Host` the browser asked for (Caddy and Cloudflare do; nginx needs
 `proxy_set_header Host $host`), else PlainBoard can't tell the two names apart.
 
-Without it nothing has to be set up: previews stay at `/preview/<port>/` on PlainBoard's address,
-inside the browser's sandbox (`Content-Security-Policy: sandbox`, without `allow-same-origin`). The
-page then has an origin of its own: it can't read PlainBoard or its API, and has no `localStorage`,
-`sessionStorage`, IndexedDB or cookies. The browser sends no cookies with what such a page loads,
-not even the login. A shared preview needs no login, so it works as long as it needs no storage. A
-private one shows its first page but loads nothing of its own (scripts, styles, hot reload). Private
-dev servers (Vite, Next.js, ...) open fully in the **Browser** view, or with a preview address of
-their own as above. On a closed installation where you trust every preview like your agents,
-`PLAINBOARD_PREVIEW_SANDBOX=false` serves them without the sandbox, as before.
+Without a name of their own, `PLAINBOARD_PREVIEW_SANDBOX=true` puts previews on PlainBoard's address
+into the browser's sandbox (`Content-Security-Policy: sandbox`, without `allow-same-origin`). The page
+then has an origin of its own: it can't read PlainBoard or its API, and has no `localStorage`,
+`sessionStorage`, IndexedDB or cookies. The browser also sends no cookies, not even the login,
+with what such a page loads. A shared preview needs no login, so it works as long as it needs no
+storage. A private one shows its first page but loads nothing of its own (scripts, styles, hot
+reload); dev servers open fully in the **Browser** view.
 
 **HTTPS behind a reverse proxy.** PlainBoard takes a request as HTTPS when the proxy says so in
 `X-Forwarded-Proto: https` (Caddy, nginx with the configuration above, and Cloudflare send it). Then:
@@ -474,8 +473,9 @@ PlainBoard sign-in. Agents post the link in the chat. A preview is private: it o
 with a role in the project whose agent started the server, and for admins. Ask the manager to share
 one with a password or publicly for a few days, e.g. for a customer. The server has to listen on
 `0.0.0.0`, and it has to be started as a server job (`start_job` with `server`) that still runs: a
-port that no such job of a project listens on opens for nobody. A preview is code written by agents,
-so it never runs as PlainBoard: see [Security](#security).
+port that no such job of a project listens on opens for nobody. A preview runs on PlainBoard's own
+address unless it has one of its own ([Security](#security)), so only preview code you trust like
+your agents.
 
 Which previews run right now is always shown: in the sidebar under **Previews** (a row opens the
 page in a new tab), and with everything about them on the start page of the **Browser** view: its

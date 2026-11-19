@@ -22,9 +22,9 @@ class Config(BaseSettings):
     max_upload_mb: int = 50
     max_import_mb: int = 4096  # a project file (services/transfer.py), compressed; what it unpacks to is capped there
     # Security (api/guard.py). A separate address for previews, e.g. https://preview.example.com: agents'
-    # servers then never run on PlainBoard's own origin. Empty: they run under /preview/<port>/ on it, sandboxed.
+    # servers then never run on PlainBoard's own origin. Empty: they run under /preview/<port>/ on it.
     preview_origin: str = ""
-    preview_sandbox: bool = True  # without preview_origin: the CSP sandbox (no access to PlainBoard, but no cookies either)
+    preview_sandbox: bool = False  # without preview_origin, opt-in: the CSP sandbox (no access to PlainBoard, but a private preview loads nothing)
     secure_cookies: str = ""  # true | false; empty: Secure when the request came over HTTPS (also X-Forwarded-Proto)
     hsts: bool = True  # Strict-Transport-Security, only on responses over HTTPS
     allowed_origins: str = ""  # further origins (comma separated) whose pages may use the signed-in API and sockets

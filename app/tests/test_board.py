@@ -414,10 +414,7 @@ def test_preview_opens_a_server_in_the_runner_through_plainboard(client, project
     assert "sid=1; Path=/; HttpOnly" in cookies and "theme=dark; SameSite=Lax" in cookies
     assert not any(c.startswith("pb_session") for c in cookies)
     assert "strict-transport-security" not in headers and "clear-site-data" not in headers
-    # Without a preview origin the page runs sandboxed, in an origin of its own: it never acts as PlainBoard.
-    # Every request it sends is then cross-origin, so its Referer has to keep the path (for the redirect above).
-    assert headers["content-security-policy"] == "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads"
-    assert headers["referrer-policy"] == "no-referrer-when-downgrade"
+    assert headers["referrer-policy"] == "same-origin" and "content-security-policy" not in headers  # no sandbox unless asked for
 
     assert client.get("/preview/8090/").status_code == 404  # the runner's own API
     assert client.get("/preview/80/").status_code == 404

@@ -500,3 +500,23 @@ def test_a_preview_is_private_until_it_is_shared_with_a_password_or_publicly(cli
 
     assert client.post("/api/auth/login", json={"username": "admin", "password": ADMIN_PASSWORD}).status_code == 200
     assert client.get("/preview/5173/").json() == {"page": "home"}
+
+
+def test_messages_to_members_need_the_setting(client, project):
+    pid = project["id"]
+    manager = agents_by_slug(client, pid)["manager"]
+    dev = client.post(f"/api/projects/{pid}/agents", json={"name": "Dev", "role": "developer"}).json()
+    assert client.put("/api/settings", json={"values": {"member_chat": False}}).status_code == 200
+    assert client.post(f"/api/agents/{manager['id']}/messages", json={"text": "SAY hi"}).status_code == 202
+    resp = client.post(f"/api/agents/{dev['id']}/messages", json={"text": "SAY hi"})
+    assert resp.status_code == 403 and "Direct messages to members are off" in resp.json()["detail"]
+    assert client.get(f"/api/agents/{dev['id']}/conversation").status_code == 200  # reading stays possible
+    assert client.put("/api/settings", json={"values": {"member_chat": True}}).status_code == 200
+    assert client.post(f"/api/agents/{dev['id']}/messages", json={"text": "SAY hi"}).status_code == 202
+
+
+def test_messages_to_members_are_off_by_default(client, project):
+    dev = client.post(f"/api/projects/{project['id']}/agents", json={"name": "Dev", "role": "developer"}).json()
+    assert client.put("/api/settings", json={"values": {"member_chat": None}}).status_code == 200  # as on a new installation
+    assert client.get("/api/settings").json()["values"]["member_chat"] is False
+    assert client.post(f"/api/agents/{dev['id']}/messages", json={"text": "SAY hi"}).status_code == 403

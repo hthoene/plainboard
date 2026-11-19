@@ -5,7 +5,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type
 import { useTranslation } from "react-i18next";
 import { api, errorMessage } from "../../api/client";
 import { useStreamingText } from "../../api/events";
-import { qk, useConversation, useRuns } from "../../api/queries";
+import { qk, useConversation, useMe, useRuns, useSettings } from "../../api/queries";
 import type { Attachment, Conversation } from "../../api/types";
 import { Avatar } from "../../components/Avatar";
 import { Markdown } from "../../components/Markdown";
@@ -34,9 +34,11 @@ export function ChatPanel({
   variant?: "panel" | "page";
 }) {
   const { t } = useTranslation();
-  const { project, agents, agentById, canWrite } = useShell();
+  const { project, agents, agentById, canWrite, openSettings } = useShell();
   const qc = useQueryClient();
   const agent = agentById(agentId);
+  const settings = useSettings();
+  const me = useMe();
   const conversation = useConversation(agentId);
   const runs = useRuns(project.id);
   const streaming = useStreamingText(agentId);
@@ -131,6 +133,7 @@ export function ChatPanel({
 
   if (!agent) return null;
   // On the full page, keep a comfortable reading width.
+  const membersOff = !!agent && !agent.is_manager && !!settings.data && !settings.data.values.member_chat;
   const column = variant === "page" ? "mx-auto w-full max-w-3xl" : "";
   const hasFiles = (e: DragEvent) => e.dataTransfer.types.includes("Files");
   const onDragOver = (e: DragEvent) => {
@@ -216,6 +219,9 @@ export function ChatPanel({
         </div>
       </div>
 
+      {membersOff ? (
+        <MembersOffHint className={column} isAdmin={!!me?.is_admin} onOpenSettings={() => openSettings("general")} />
+      ) : (
       <Composer
         seed={seed}
         agentId={agentId}
@@ -235,6 +241,24 @@ export function ChatPanel({
         files={files}
         onFilesChange={setFiles}
       />
+      )}
+    </div>
+  );
+}
+
+/** Writing to a member is off (settings): the field gives way to a quiet note. */
+function MembersOffHint({ className, isAdmin, onOpenSettings }: { className?: string; isAdmin: boolean; onOpenSettings: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div data-part="composer-off" className="shrink-0 border-t border-line px-3 py-3 text-fg-3">
+      <p className={className}>
+        {t("chat.membersOff")}{" "}
+        {isAdmin && (
+          <button type="button" onClick={onOpenSettings} className="text-fg-2 underline underline-offset-2 hover:text-fg touch:py-2">
+            {t("chat.membersOffSettings")}
+          </button>
+        )}
+      </p>
     </div>
   );
 }

@@ -95,6 +95,7 @@ export function Shell() {
           onProjectDeleted={() => setProjectId(null)}
           onSettings={() => openSettings()}
           onPause={() => openSettings("pause")}
+          openSettings={openSettings}
         />
       ) : (
         <div className="flex h-full flex-col pt-[env(safe-area-inset-top)]">
@@ -209,6 +210,7 @@ function ProjectWorkspace({
   onProjectDeleted,
   onSettings,
   onPause,
+  openSettings,
 }: {
   projects: Project[];
   project: Project;
@@ -218,6 +220,7 @@ function ProjectWorkspace({
   onSettings: () => void;
   /** Opens the settings where everything is paused and resumed. */
   onPause: () => void;
+  openSettings: (section?: string) => void;
 }) {
   const { t } = useTranslation();
   const isDesktop = useIsDesktop();
@@ -255,12 +258,13 @@ function ProjectWorkspace({
         else setView("chat");
       },
       openTask: setOpenTaskId,
+      openSettings,
       openBrowser: (address) => {
         setBrowserRequest((last) => ({ url: address, n: last.n + 1 }));
         setView("browser");
       },
     }),
-    [project, agents.data, agentById, previews, setChatAgentId, isDesktop, view, setPanelOpen, setView],
+    [project, agents.data, agentById, previews, openSettings, setChatAgentId, isDesktop, view, setPanelOpen, setView],
   );
   /** A view that has something running behind it gets a mark: the browser while previews run. */
   const marked = (id: View) => id === "browser" && previews.length > 0;

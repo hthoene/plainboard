@@ -363,6 +363,8 @@
     "jobsRunning_other": "{{count}} background jobs running",
     "placeholder": "Message {{name}}…",
     "agentDisabled": "This agent is disabled",
+    "membersOff": "Direct messages to members are off. Talk to the manager, or enable it in Settings.",
+    "membersOffSettings": "Open settings",
     "send": "Send",
     "attachFiles": "Attach files",
     "removeFile": "Remove {{name}}",
@@ -680,6 +682,8 @@
     "testNeedsModel": "Name a model first"
   },
   "settings": {
+    "memberChat": "Allow direct messages to members",
+    "memberChatHint": "Off: you talk to the manager, and members' conversations can only be read. Agents still talk to each other, and schedules and assignments are not affected.",
     "updateCheck": "Tell me when a newer PlainBoard is available",
     "updateCheckHint": "Every few hours PlainBoard asks GitHub whether its repository has newer commits than the one that is running. Only that commit id is sent.",
     "versionRunning": "Running {{commit}}.",
@@ -951,7 +955,7 @@
       "description": "How many agents work at the same time. More finish sooner and use the subscriptions faster."
     },
     "general": {
-      "description": "Time zone and updates.",
+      "description": "Time zone, messages to members and updates.",
       "timezoneHint": "For schedules and for the times agents see."
     }
   },

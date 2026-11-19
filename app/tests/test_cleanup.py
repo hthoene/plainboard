@@ -118,8 +118,10 @@ def test_at_the_target_the_manager_is_told_once_and_nothing_is_deleted(client, p
     assert not getattr(fake, "cleanups", [])  # below the emergency level nothing goes by itself
     wait_for(lambda: idle(client, pid) and _told(fake, "Disk space: 85 % used"))
     prompt = _told(fake, "Disk space")[0]
-    assert "Clean up now." in prompt and "21.0 GB /home/agent/.cache/sccache: cache; safe" in prompt and "Workspaces: Manager 40.0 GB." in prompt
-    assert "26.0 GB /home/agent/fw-jobs: folder in the shared home, owner unknown; unsure: fw-jobs/run.log is not in a clone" in prompt
+    assert "Clean up now." in prompt and "Workspaces: Manager 40.0 GB." in prompt
+    assert f"- 30.0 GB /workspaces/{slug}/manager/repo/target: build output of Manager; busy\n" in prompt
+    assert "Shared, not yours (47.0 GB; no manager may delete these" in prompt and "- 21.0 GB /home/agent/.cache/sccache: cache, shared; safe" in prompt
+    assert "26.0 GB /home/agent/fw-jobs: home folder, shared; unsure: fw-jobs/run.log is not in a clone" in prompt
     view = client.get("/api/usage").json()["storage"]
     assert view["notify_percent"] == 80 and view["emergency_percent"] == 97 and round(view["percent"]) == 85
     assert [n["reason"] for n in view["notices"]] == ["over"]
@@ -176,32 +178,39 @@ def _results(client, agent_id):
     return [m["meta"]["result"] for m in messages if m["kind"] == "tool" and "result" in m["meta"]]
 
 
-def test_the_manager_lists_and_deletes_by_the_safety_rules(client, project):
+def test_the_manager_lists_and_deletes_only_his_projects_data_by_the_safety_rules(client, project):
     pid, slug = project["id"], project["slug"]
-    wait_for(lambda: idle(client, pid))
+    other = client.post("/api/projects", json={"name": "Other Project", "description": "Someone else's"}).json()
+    wait_for(lambda: idle(client, pid) and idle(client, other["id"]))
     manager = agents_by_slug(client, pid)["manager"]
     fake = client.app_ref.state.runner
     fake.machine_usage = MachineUsage(volumes=[_volume(85)])
-    safe, busy, kept = f"/workspaces/{slug}/manager/repo/target", "/home/agent/scratch", f"/workspaces/{slug}/gone"
+    safe, busy, kept = f"/workspaces/{slug}/manager/repo/target", f"/workspaces/{slug}/manager/web/node_modules", f"/workspaces/{slug}/gone"
+    theirs, shared = f"/workspaces/{other['slug']}/manager/repo/target", "/home/agent/scratch"
     fake.candidates = [
         CleanupCandidate(path=safe, what="build", bytes=5 * GB, safety="safe"),
-        CleanupCandidate(path=busy, what="home", bytes=3 * GB, safety="busy", why="a process works in it"),
+        CleanupCandidate(path=busy, what="build", bytes=3 * GB, safety="busy"),
         CleanupCandidate(path=kept, what="folder", bytes=2 * GB, safety="keep", why="repo has unpushed commits"),
+        CleanupCandidate(path=theirs, what="build", bytes=9 * GB, safety="safe"),
+        CleanupCandidate(path=shared, what="home", bytes=4 * GB, safety="safe"),
     ]
     calls = [
         "TOOL list_cleanup {}",
-        "TOOL delete_cleanup " + json.dumps({"paths": [safe, busy, kept, "/etc"]}),
-        "TOOL delete_cleanup " + json.dumps({"paths": [busy, kept], "force": True}),
+        "TOOL delete_cleanup " + json.dumps({"paths": [safe, busy, kept, theirs, shared, "/etc"]}),
+        "TOOL delete_cleanup " + json.dumps({"paths": [busy, kept, theirs, shared], "force": True}),
     ]
     assert client.post(f"/api/agents/{manager['id']}/messages", json={"text": "\n".join(calls)}).status_code == 202
     wait_for(lambda: idle(client, pid) and len(_results(client, manager["id"])) >= 3)
     listed, first, forced = _results(client, manager["id"])[-3:]
     assert "Safe (made again when needed):\n- 5.0 GB " + safe in listed and "Kept (unpushed work or tools; delete_cleanup won't):" in listed
-    assert "3.0 GB /home/agent/scratch: folder in the shared home, owner unknown; busy: a process works in it" in listed
+    assert theirs not in listed  # another project's data is not even shown
+    assert "Shared, not yours (4.0 GB;" in listed and "- 4.0 GB /home/agent/scratch: home folder, shared; safe" in listed
     assert first.startswith("Deleted 5.0 GB: " + safe) and f"{busy}: busy" in first and f"{kept}: keep" in first
-    assert "Not a cleanup candidate of this project (list_cleanup shows them): /etc." in first
-    assert forced.startswith("Deleted 3.0 GB: " + busy) and f"{kept}: keep" in forced
+    refused = f"Refused, not your project's (only its own data can be deleted; shared folders only by an admin): {theirs}, {shared}, /etc."
+    assert refused in first
+    assert forced.startswith("Deleted 3.0 GB: " + busy) and f"{kept}: keep" in forced and f"{theirs}, {shared}." in forced  # force changes nothing about whose it is
     assert [d.paths for d in fake.deletes] == [[safe, busy, kept], [busy, kept]]
+    assert any(c.path == theirs for c in fake.candidates)
 
     async def events():
         async with sessionmaker()() as s:
@@ -211,12 +220,15 @@ def test_the_manager_lists_and_deletes_by_the_safety_rules(client, project):
     assert [c["by"] for c in client.get("/api/usage").json()["cleanups"]] == ["Manager", "Manager"]
 
 
-def test_a_home_folder_of_another_project_is_not_shown():
+def test_a_home_folder_is_a_projects_only_if_all_its_clones_are_of_that_projects_repositories():
     mine, other = Project(id=1, name="Mine", slug="mine"), Project(id=2, name="PaperPaw", slug="paperpaw")
-    repos = {storage._repo_key("https://github.com/acme/paperpaw.git"): 2}
+    repos = {storage._repo_key("https://github.com/acme/paperpaw.git"): 2, storage._repo_key("https://github.com/acme/mine"): 1}
     by_remote = CleanupCandidate(path="/home/agent/fw-jobs", what="home", safety="safe", remotes=["git@github.com:acme/paperpaw.git"])
-    by_name = CleanupCandidate(path="/home/agent/.cache/paperpaw-quick-check", what="cache", safety="safe")
-    nobody = CleanupCandidate(path="/home/agent/.cache/sccache", what="cache", safety="safe")
-    assert [storage._owner(c, [mine, other], repos) for c in (by_remote, by_name, nobody)] == [2, 2, None]
-    listing = storage.Listing([storage.Item(by_remote, 2), storage.Item(nobody, None)], [mine, other], [], set(), MachineUsage(), [])
-    assert [i.candidate.path for i in listing.visible(1)] == ["/home/agent/.cache/sccache"]
+    mixed = CleanupCandidate(path="/home/agent/dt-jobs", what="home", safety="safe", remotes=["git@github.com:acme/paperpaw.git", "https://github.com/acme/mine.git"])
+    foreign = CleanupCandidate(path="/home/agent/tgt", what="home", safety="safe", remotes=["https://github.com/acme/paperpaw", "https://github.com/rust-lang/cargo"])
+    by_name = CleanupCandidate(path="/home/agent/paperpaw-scratch", what="home", safety="safe")
+    assert [storage._owner(c, repos) for c in (by_remote, mixed, foreign, by_name)] == [2, None, None, None]
+    cache = CleanupCandidate(path="/home/agent/.cache/sccache", what="cache", safety="safe")
+    listing = storage.Listing([storage.Item(by_remote, 2), storage.Item(cache, None)], [mine, other], [], set(), MachineUsage(), [])
+    assert listing.visible(1) == [] and [i.candidate.path for i in listing.visible(2)] == ["/home/agent/fw-jobs"]
+    assert [i.candidate.path for i in listing.shared()] == ["/home/agent/.cache/sccache"]

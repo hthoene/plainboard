@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models import Agent, AgentNote, Assignment, Attachment, Decision, ProjectRole, PublicApiKey, Repository, Run, Secret, Task, Todo, User
 from ..security import read_session_cookie
 from . import access_keys as access_key_service
+from . import sessions as session_service
 from . import users as user_service
 from .errors import NotFound, ServiceError
 
@@ -55,6 +56,7 @@ class Principal:
 
     user: User | None = None
     read_key: bool = False
+    session_id: str = ""  # the browser session of a user (services/sessions.py)
 
     @property
     def is_admin(self) -> bool:
@@ -140,9 +142,9 @@ def rule_for(path: str) -> Rule | None:
 async def principal(session: AsyncSession, cookie: str | None, authorization: str | None = None) -> Principal | None:
     """Who sent this: the user of a session cookie, else a read key in the Authorization header."""
     if signed := read_session_cookie(cookie):
-        user = await session.get(User, signed[0])
-        if user is not None and user.enabled and user.session_version == signed[1]:
-            return Principal(user=user)
+        user = await session_service.user_of(session, signed[0], signed[2], signed[1])
+        if user is not None:
+            return Principal(user=user, session_id=signed[2])
     scheme, _, secret = (authorization or "").partition(" ")
     if scheme.lower() == "bearer" and secret.strip() and await access_key_service.valid(session, secret.strip()):
         return Principal(read_key=True)

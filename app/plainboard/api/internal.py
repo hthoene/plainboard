@@ -42,7 +42,7 @@ async def upload_attachment(
     try:
         task = await board_service.get_task_by_number(session, ctx.project_id, task_number)
         attachment = await board_service.add_attachment(
-            session, task, file.filename or "file", file.content_type or "", await file.read(), agent_id=ctx.agent_id
+            session, task, file.filename or "file", file.content_type or "", file.file, agent_id=ctx.agent_id
         )
     except ServiceError as exc:
         return ToolCallResult(text=str(exc), is_error=True)
@@ -65,7 +65,7 @@ async def send_chat_files(
         shown = await board_service.project_attachments(session, ctx.project_id, ids)
         for file in files:
             shown.append(
-                await board_service.store_attachment(session, ctx.project_id, file.filename or "file", file.content_type or "", await file.read(), agent_id=ctx.agent_id)
+                await board_service.store_attachment(session, ctx.project_id, file.filename or "file", file.content_type or "", file.file, agent_id=ctx.agent_id)
             )
         if not shown:
             return ToolCallResult(text="Nothing to send: give paths or attachment_ids.", is_error=True)

@@ -182,10 +182,39 @@ def _credential(table: str, row: dict[str, Any]) -> str:
     return f"{what} {row.get('name', '')}".strip()
 
 
+# What a project file may unpack to: a small file must not fill the memory or the disk (a zip bomb).
+MAX_ENTRIES = 100_000
+MAX_DOCUMENT_MB = 512  # project.json, which is read whole
+MAX_TOTAL_MB = 16 * 1024
+
+
+def _read_entry(archive: zipfile.ZipFile, name: str, max_bytes: int, out: IO[bytes] | None = None) -> bytes:
+    """An entry, read piece by piece and stopped at ``max_bytes`` whatever its header claims.
+    Written to ``out`` if given (then nothing is returned), else returned."""
+    buffer = io.BytesIO() if out is None else out
+    size = 0
+    with archive.open(name) as entry:
+        while chunk := entry.read(1024 * 1024):
+            size += len(chunk)
+            if size > max_bytes:
+                raise ServiceError(f"{name} in this file is larger than PlainBoard takes ({max_bytes // (1024 * 1024)} MB).", 413)
+            buffer.write(chunk)
+    return buffer.getvalue() if out is None else b""
+
+
+def _check_size(archive: zipfile.ZipFile) -> None:
+    infos = archive.infolist()
+    if len(infos) > MAX_ENTRIES:
+        raise ServiceError(f"This file holds more than {MAX_ENTRIES} entries.", 413)
+    if sum(info.file_size for info in infos) > MAX_TOTAL_MB * 1024 * 1024:
+        raise ServiceError(f"This file unpacks to more than {MAX_TOTAL_MB // 1024} GB.", 413)
+
+
 def _open(source: IO[bytes]) -> tuple[zipfile.ZipFile, dict[str, Any]]:
     try:
         archive = zipfile.ZipFile(source)
-        document = json.loads(archive.read("project.json"))
+        _check_size(archive)
+        document = json.loads(_read_entry(archive, "project.json", MAX_DOCUMENT_MB * 1024 * 1024))
     except (zipfile.BadZipFile, KeyError, ValueError) as exc:
         raise ServiceError("This is not a project file of PlainBoard.") from exc
     if not isinstance(document, dict) or not isinstance(document.get("tables"), dict):
@@ -298,13 +327,18 @@ def _point(values: dict[str, Any], refs: dict[str, str], new: dict[str, dict[int
 def _store(archive: zipfile.ZipFile, uploads: Path, name: str) -> str | None:
     """Put an attachment's file where this installation keeps them, under a name of its own."""
     try:
-        data = archive.read(f"files/{name}")
+        archive.getinfo(f"files/{name}")
     except KeyError:
         return None
     suffix = Path(name).suffix
     stored = uuid.uuid4().hex + (suffix if len(suffix) <= 12 and suffix[1:].isalnum() else "")
     uploads.mkdir(parents=True, exist_ok=True)
-    (uploads / stored).write_bytes(data)
+    try:
+        with (uploads / stored).open("wb") as out:
+            _read_entry(archive, f"files/{name}", get_config().max_upload_mb * 1024 * 1024, out)
+    except BaseException:
+        (uploads / stored).unlink(missing_ok=True)
+        raise
     return stored
 
 

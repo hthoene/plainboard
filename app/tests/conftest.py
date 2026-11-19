@@ -111,6 +111,7 @@ class FakeRunner:
         self.jobs: dict[str, JobState] = {}
         self.job_specs: list[JobSpec] = []
         self.ports: dict[str, list] = {}  # job id -> the web servers it has started (JobPort)
+        self.listening: dict[str, list[int]] = {}  # job id -> further ports it listens on (no web server)
         self.reachable = True
         self.released = False
         # Landing: what the git host would say.
@@ -221,6 +222,12 @@ class FakeRunner:
         if not self.reachable:
             raise RunnerError("Runner unreachable")
         return {i: self.ports[i] for i in ids if i in self.ports}
+
+    async def job_listening(self, ids: list[str]) -> dict[str, list[int]]:
+        if not self.reachable:
+            raise RunnerError("Runner unreachable")
+        found = {i: sorted({p.port for p in self.ports.get(i, [])} | set(self.listening.get(i, []))) for i in ids}
+        return {i: ports for i, ports in found.items() if ports}
 
     async def stop_job(self, runner_id: str) -> bool:
         job = self.jobs.get(runner_id)
@@ -483,6 +490,40 @@ def project(client):
     resp = client.post("/api/projects", json={"name": "Demo Project", "description": "A test project"})
     assert resp.status_code == 201, resp.text
     return resp.json()
+
+
+def serve_preview(client, project_id: int, port: int) -> int:
+    """A server job of the project that runs and listens on the port, as an agent would leave one. Returns its id."""
+    from plainboard.db import sessionmaker
+    from plainboard.models import Job
+
+    agent_id = agents_by_slug(client, project_id)["manager"]["id"]
+    runner_id = f"srv{project_id}x{port}x{time.monotonic_ns()}"
+
+    async def add() -> int:
+        async with sessionmaker()() as session:
+            job = Job(project_id=project_id, agent_id=agent_id, runner_id=runner_id, command="npm run dev")
+            session.add(job)
+            await session.commit()
+            return job.id
+
+    job_id = client.portal.call(add)
+    client.app_ref.state.runner.listening[runner_id] = [port]
+    client.app_ref.state.preview_owners._at = -60.0  # asked again at once
+    return job_id
+
+
+def end_job(client, job_id: int) -> None:
+    from plainboard.db import sessionmaker
+    from plainboard.models import Job, JobStatus
+
+    async def end() -> None:
+        async with sessionmaker()() as session:
+            job = await session.get(Job, job_id)
+            job.status = JobStatus.STOPPED
+            await session.commit()
+
+    client.portal.call(end)
 
 
 def agents_by_slug(client, project_id: int) -> dict:

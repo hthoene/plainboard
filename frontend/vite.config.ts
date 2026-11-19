@@ -8,7 +8,7 @@ export default defineConfig({
   build: { chunkSizeWarningLimit: 1000 }, // single local app; one bundle is fine
   server: {
     proxy: {
-      "/api": { target: "http://localhost:8080", ws: true, changeOrigin: true },
+      "/api": { target: "http://localhost:8080", ws: true }, // the Host stays: the app checks Origin against it
       "/preview": { target: "http://localhost:8080", ws: true },
     },
   },

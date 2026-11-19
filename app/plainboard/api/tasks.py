@@ -148,8 +148,7 @@ async def upload(task_id: int, session: Session, files: list[UploadFile] = File(
     task = await board_service.get_task(session, task_id)
     out = []
     for file in files:
-        data = await file.read()
-        attachment = await board_service.add_attachment(session, task, file.filename or "file", file.content_type or "", data)
+        attachment = await board_service.add_attachment(session, task, file.filename or "file", file.content_type or "", file.file)
         out.append(AttachmentOut.model_validate(attachment))
     return out
 
@@ -169,8 +168,14 @@ async def download(attachment_id: int, session: Session, inline: bool = True) ->
     path = board_service.storage_path(attachment)
     if not path.exists():
         raise NotFound("File missing on disk")
-    disposition = "inline" if inline else "attachment"
-    return FileResponse(path, media_type=attachment.content_type, filename=attachment.filename, content_disposition_type=disposition)
+    # Inline only what is passive by its content (pictures, PDF, plain text); never a page or an SVG on this origin.
+    shown = board_service.inline_type(path, attachment.filename) if inline else None
+    headers = {"X-Content-Type-Options": "nosniff"}
+    if shown != "application/pdf":  # the browsers' PDF viewers do not open under the sandbox; a PDF runs no script on the origin
+        headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
+    if shown:
+        return FileResponse(path, media_type=shown, filename=attachment.filename, content_disposition_type="inline", headers=headers)
+    return FileResponse(path, media_type=attachment.content_type, filename=attachment.filename, content_disposition_type="attachment", headers=headers)
 
 
 @router.delete("/attachments/{attachment_id}", status_code=204)

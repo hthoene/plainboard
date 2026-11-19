@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import BinaryIO
 
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -577,32 +579,81 @@ def _remove_file(attachment: Attachment) -> None:
     storage_path(attachment).unlink(missing_ok=True)
 
 
+# What an attachment may be shown as in the browser: told by its first bytes, not by what the uploader
+# said. Everything else is only downloaded (HTML, SVG, XML, scripts...): it would run on PlainBoard's origin.
+_SIGNATURES = ((b"\x89PNG\r\n\x1a\n", "image/png"), (b"\xff\xd8\xff", "image/jpeg"), (b"GIF87a", "image/gif"), (b"GIF89a", "image/gif"), (b"%PDF-", "application/pdf"))
+_TEXT_SUFFIXES = {".txt", ".log", ".md", ".markdown", ".csv", ".json", ".diff", ".patch"}  # shown as plain text, never as a page
+
+
+def inline_type(path: Path, filename: str) -> str | None:
+    """The type an attachment is shown inline as; None: it is downloaded only."""
+    try:
+        with path.open("rb") as fh:
+            head = fh.read(16)
+    except OSError:
+        return None
+    for signature, kind in _SIGNATURES:
+        if head.startswith(signature):
+            return kind
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image/webp"
+    if Path(filename).suffix.lower() in _TEXT_SUFFIXES:
+        return "text/plain; charset=utf-8"
+    return None
+
+
+def _write_limited(path: Path, source: bytes | BinaryIO, max_bytes: int) -> int:
+    """Writes the file without holding it in memory; stops at the limit. Returns its size."""
+    if isinstance(source, bytes):
+        if len(source) > max_bytes:
+            raise ServiceError(f"File too large (max {get_config().max_upload_mb} MB)", 413)
+        path.write_bytes(source)
+        return len(source)
+    size = 0
+    try:
+        with path.open("wb") as out:
+            while chunk := source.read(1024 * 1024):
+                size += len(chunk)
+                if size > max_bytes:
+                    raise ServiceError(f"File too large (max {get_config().max_upload_mb} MB)", 413)
+                out.write(chunk)
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+    return size
+
+
 async def store_attachment(
-    session: AsyncSession, project_id: int, filename: str, content_type: str, data: bytes, *, task_id: int | None = None, agent_id: int | None = None
+    session: AsyncSession,
+    project_id: int,
+    filename: str,
+    content_type: str,
+    data: bytes | BinaryIO,
+    *,
+    task_id: int | None = None,
+    agent_id: int | None = None,
 ) -> Attachment:
+    """``data``: the content, or a file to read it from (an upload: never read whole into memory)."""
     max_bytes = get_config().max_upload_mb * 1024 * 1024
-    if len(data) > max_bytes:
-        raise ServiceError(f"File too large (max {get_config().max_upload_mb} MB)", 413)
     suffix = Path(filename).suffix[:16]
     attachment = Attachment(
         project_id=project_id,
         task_id=task_id,
         filename=Path(filename).name[:300] or "file",
         content_type=content_type or "application/octet-stream",
-        size=len(data),
         storage_name=f"{uuid.uuid4().hex}{suffix}",
         uploaded_by_agent_id=agent_id,
     )
     path = storage_path(attachment)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(data)
+    attachment.size = await asyncio.to_thread(_write_limited, path, data, max_bytes)
     session.add(attachment)
     await session.commit()
     return attachment
 
 
 async def add_attachment(
-    session: AsyncSession, task: Task, filename: str, content_type: str, data: bytes, *, agent_id: int | None = None
+    session: AsyncSession, task: Task, filename: str, content_type: str, data: bytes | BinaryIO, *, agent_id: int | None = None
 ) -> Attachment:
     attachment = await store_attachment(session, task.project_id, filename, content_type, data, task_id=task.id, agent_id=agent_id)
     bus.publish(task.project_id, "attachment.created", AttachmentOut.model_validate(attachment))

@@ -77,18 +77,19 @@ def verify_password(password: str, stored: str) -> bool:
         return False
 
 
-def make_session_cookie(user_id: int, session_version: int) -> str:
+def make_session_cookie(user_id: int, session_version: int, session_id: str) -> str:
     assert _signer is not None
-    return _signer.dumps({"u": user_id, "v": session_version})
+    return _signer.dumps({"u": user_id, "v": session_version, "s": session_id})
 
 
-def read_session_cookie(value: str | None) -> tuple[int, int] | None:
-    """The user and the session version a cookie was made for; None if it is not ours or too old."""
+def read_session_cookie(value: str | None) -> tuple[int, int, str] | None:
+    """The user, session version and session a cookie was made for; None if it is not ours or too old.
+    A cookie from before sessions were kept (no session) is not taken: it could not be signed out."""
     if not value or _signer is None:
         return None
     try:
         data = _signer.loads(value, max_age=SESSION_MAX_AGE)
-        return int(data["u"]), int(data["v"])
+        return int(data["u"]), int(data["v"]), str(data["s"])
     except (BadSignature, KeyError, TypeError, ValueError):
         return None
 

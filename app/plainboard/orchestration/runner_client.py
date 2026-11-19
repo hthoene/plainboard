@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import AsyncIterator
 
 import httpx
 from plainboard_protocol import ProjectFiles, TidyResult, TidySpec, CheckResult, CleanupResult, CleanupSpec, CompletionResult, CompletionSpec, Credentials, JobPort, JobSpec, JobState, LimitsEvent, MachineUsage, ProviderAccount, ProviderInfo, PullRequestCheck, PullRequestState, RepoSpec, RunEvent, RunSpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, UpstreamState, parse_event
+
+log = logging.getLogger(__name__)
 
 
 class RunnerError(RuntimeError):
@@ -73,6 +76,10 @@ class RunnerClient:
         """The web servers running jobs have started: the runner's job id -> its ports."""
         found = (await self._post_job("/jobs/ports", ids)).json()
         return {job_id: [JobPort.model_validate(port) for port in ports] for job_id, ports in found.items()}
+
+    async def job_listening(self, ids: list[str]) -> dict[str, list[int]]:
+        """Every port these jobs listen on, web server or not (who may open a preview): job id -> ports."""
+        return (await self._post_job("/jobs/listening", ids)).json()
 
     async def stop_job(self, runner_id: str) -> bool:
         return (await self._post_job(f"/jobs/{runner_id}/stop", {})).json()["stopped"]

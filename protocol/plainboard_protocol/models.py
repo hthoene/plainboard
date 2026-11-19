@@ -215,6 +215,37 @@ class MachineUsage(BaseModel):
     memory: list[ProcessMemory] = Field(default_factory=list)
 
 
+CleanupLevel = Literal["soft", "hard"]
+
+
+class CleanupFolder(BaseModel):
+    """An agent's folder the app found safe to clean: its agent runs no turn and has no open assignment."""
+
+    path: str  # two levels below the workspaces root
+    idle_since: float = 0  # unix time of its agent's last turn; oldest first
+    orphan: bool = False  # no agent has it any more (deleted or renamed): may go entirely if nothing in it is unpushed
+
+
+class CleanupSpec(BaseModel):
+    """Free room on the workspaces' volume with what can be made again (see runner ``cleanup.py``)."""
+
+    level: CleanupLevel  # soft: what costs nothing to rebuild; hard: also installed dependencies
+    need: int  # bytes to free; cleaning stops once that much is gone
+    folders: list[CleanupFolder] = Field(default_factory=list)
+
+
+class CleanedItem(BaseModel):
+    path: str
+    what: Literal["build", "cache", "folder", "logs"]
+    bytes: int
+
+
+class CleanupResult(BaseModel):
+    freed: int = 0
+    items: list[CleanedItem] = Field(default_factory=list)
+    skipped: list[str] = Field(default_factory=list)  # folders left alone, with the reason
+
+
 class JobPort(BaseModel):
     """A port on which a running job answers as a web server."""
 

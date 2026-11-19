@@ -20,6 +20,7 @@ from plainboard_protocol import (
     EndpointInfo,
     LimitsEvent,
     LimitWindow,
+    CleanupResult,
     MachineUsage,
     AssistantTextEvent,
     CheckResult,
@@ -338,6 +339,10 @@ class FakeRunner:
         if not credentials.github_token:
             return {"ok": False, "detail": "No GitHub token configured", "repos": []}
         return {"ok": True, "detail": "", "repos": [{"full_name": "acme/api", "name": "api", "clone_url": "https://github.com/acme/api.git"}]}
+
+    async def clean_up(self, spec):
+        self.cleanups = [*getattr(self, "cleanups", []), spec]
+        return getattr(self, "cleanup_result", None) or CleanupResult()
 
     async def usage(self, measure: bool = False):
         if not self.reachable:

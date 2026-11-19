@@ -19,6 +19,7 @@ from .orchestration.runner_client import RunnerClient
 from .orchestration.job_watcher import JobWatcher
 from .orchestration.landing import LandingWatcher
 from .orchestration.tidy import BranchTidy
+from .orchestration.cleanup import CleanupWatcher
 from .orchestration.limits_watcher import LimitsWatcher
 from .orchestration.update_watcher import UpdateWatcher
 from .orchestration.scheduler import Scheduler
@@ -52,6 +53,7 @@ async def lifespan(app: FastAPI):
     standstill = app.state.standstill = StandstillWatcher(sessionmaker(), runs, config.standstill_interval_seconds)
     limits_watcher = LimitsWatcher(runs, config.limits_interval_seconds)
     updates = app.state.updates = UpdateWatcher(sessionmaker(), runner, config.update_interval_seconds)
+    cleanup = app.state.cleanup = CleanupWatcher(sessionmaker(), runs, config.cleanup_interval_seconds)
     app.state.preview_client = preview.new_client()
     await runs.start()
     scheduler.start()
@@ -61,10 +63,12 @@ async def lifespan(app: FastAPI):
     standstill.start()
     limits_watcher.start()
     updates.start()
+    cleanup.start()
     log.info("PlainBoard ready")
     try:
         yield
     finally:
+        await cleanup.stop()
         await updates.stop()
         await limits_watcher.stop()
         await standstill.stop()

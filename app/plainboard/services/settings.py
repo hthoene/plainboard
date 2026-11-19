@@ -49,6 +49,15 @@ SETTINGS: dict[str, SettingDef] = {
     "update_check": SettingDef(True),  # ask now and then whether a newer PlainBoard exists
     # The admin has gone through the basic settings once (the set-up in the browser). Until then the UI asks for them.
     "setup_done": SettingDef(False),
+    # Automatic cleanup when the workspaces' volume runs short (services/cleanup.py): below the soft
+    # share free what costs nothing to rebuild, below the hard one also dependencies, and the manager hears it.
+    "cleanup": SettingDef(True),
+    "cleanup_soft_free_percent": SettingDef(15),
+    "cleanup_hard_free_percent": SettingDef(5),
+    "cleanup_memory_free_percent": SettingDef(10),  # below: servers nobody opened for long are stopped
+    "cleanup_last": SettingDef(None, managed=True),
+    "cleanup_told_at": SettingDef(None, managed=True),
+    "cleanup_servers_last": SettingDef(None, managed=True),  # servers the memory cleanup stopped last
     # Everything is paused (services/pause.py): who did it, since when, and which members that switched off.
     "pause": SettingDef(None, managed=True),
 }

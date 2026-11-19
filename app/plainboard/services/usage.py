@@ -20,6 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import get_config
 from ..models import Agent, Attachment, Project
 from ..orchestration.runner_client import RunnerClient, RunnerError
+from . import cleanup as cleanup_service
+from . import settings as settings_service
 from ..schemas import AgentUsageOut, FolderOut, ProjectUsageOut, UsageOut, VolumeOut
 
 LOW_FREE_SHARE = 0.1  # a volume is short of room below a tenth free ...
@@ -158,6 +160,7 @@ def _naive_utc(timestamp: float) -> datetime:
 async def overview(session: AsyncSession, runner: RunnerClient, measure: bool = False) -> UsageOut:
     projects = list((await session.scalars(select(Project).order_by(Project.name))).all())
     agents = list((await session.scalars(select(Agent).order_by(Agent.is_manager.desc(), Agent.name))).all())
+    settings = await settings_service.get_all(session)
     uploads = {pid: int(size or 0) for pid, size in (await session.execute(select(Attachment.project_id, func.sum(Attachment.size)).group_by(Attachment.project_id))).all()}
     await session.commit()  # no transaction stays open while the runner is asked
     try:
@@ -165,4 +168,6 @@ async def overview(session: AsyncSession, runner: RunnerClient, measure: bool = 
     except RunnerError:
         machine = None
     own = await asyncio.to_thread(own_machine)
-    return summarize(projects, agents, uploads, machine, own)
+    out = summarize(projects, agents, uploads, machine, own)
+    out.cleanup, out.servers_stopped = cleanup_service.last(settings["cleanup_last"]), cleanup_service.last(settings["cleanup_servers_last"])
+    return out

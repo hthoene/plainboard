@@ -14,6 +14,7 @@ from websockets.exceptions import InvalidHandshake
 from ..db import sessionmaker
 from ..services.access import Need
 from .deps import socket_role
+from ..services import preview as preview_service
 from ..services import projects
 from ..services.errors import ServiceError
 from .relay import relay
@@ -40,5 +41,9 @@ async def project_browser(websocket: WebSocket, project_id: int) -> None:
         await websocket.send_json({"t": "error", "message": "The runner can't be reached, or it has no browser yet (rebuild it)."})
         await websocket.close()
         return
+    preview_service.note_browsed(project_id)
     async with upstream:
-        await relay(websocket, upstream, f"Browser of project {project_id}")
+        try:
+            await relay(websocket, upstream, f"Browser of project {project_id}")
+        finally:
+            preview_service.note_browsed(project_id)  # watched until now

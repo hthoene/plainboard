@@ -595,4 +595,18 @@ export interface Usage {
   memory_total: number;
   memory_used: number;
   memory_other: number;
+  cleanup: UsageCleanup | null;
+  servers_stopped: UsageCleanup | null;
+}
+
+/** What an automatic cleanup removed (or which servers it stopped, level "memory"). */
+export interface UsageCleanup {
+  at: string;
+  level: "soft" | "hard" | "memory";
+  freed: number;
+  free_before: number;
+  total: number;
+  items: { path: string; what: "build" | "cache" | "folder" | "logs" | "server"; bytes: number }[];
+  kept: string[];
+  told: boolean;
 }

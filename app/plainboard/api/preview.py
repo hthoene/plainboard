@@ -122,6 +122,7 @@ async def _proxy(request: Request, port: int, path: str, base: bool) -> Response
         return HTMLResponse(preview.unlock_page(port, base=base), status_code=401)
     if allowed == "denied":
         return PlainTextResponse("This preview is private. Sign in to PlainBoard first.", status_code=401)
+    preview.note_opened(port)
     client: httpx.AsyncClient = request.app.state.preview_client
     body = await request.body()
     upstream = client.build_request(
@@ -201,6 +202,10 @@ async def _pipe(websocket: WebSocket, port: int, path: str, base: bool = False) 
     except (OSError, TimeoutError, InvalidHandshake):
         await websocket.close(code=1013)
         return
+    preview.note_opened(port)
     async with upstream:
         await websocket.accept(subprotocol=upstream.subprotocol)
-        await relay(websocket, upstream, f"Preview socket on port {port}")
+        try:
+            await relay(websocket, upstream, f"Preview socket on port {port}")
+        finally:
+            preview.note_opened(port)  # watched until now

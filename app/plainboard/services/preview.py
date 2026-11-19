@@ -15,6 +15,7 @@ import hmac
 import html
 import re
 import secrets
+import time
 from datetime import timedelta
 from urllib.parse import urlsplit
 
@@ -173,6 +174,27 @@ def unreachable(port: int) -> str:
 
 
 # --- what runs: the servers a project's agents have started and left running --------------------
+
+
+# When a port, or a project's browser window, was last opened, for the memory cleanup. In memory: after
+# a restart everything counts as opened at the start, so nothing is stopped for not being seen before it.
+_STARTED = time.monotonic()
+_opened: dict[int, float] = {}
+_browsed: dict[int, float] = {}
+
+
+def note_opened(port: int) -> None:
+    _opened[port] = time.monotonic()
+
+
+def note_browsed(project_id: int) -> None:
+    _browsed[project_id] = time.monotonic()
+
+
+def unseen_for(seconds: float, ports: list[int], project_id: int) -> bool:
+    """Nobody opened any of these ports, nor the project's browser window, for that long."""
+    last = max([_STARTED, _browsed.get(project_id, 0), *(_opened.get(p, 0) for p in ports)])
+    return time.monotonic() - last >= seconds
 
 
 def servers(jobs: list[Job]) -> list[Job]:

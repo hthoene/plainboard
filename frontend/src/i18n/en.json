@@ -1118,5 +1118,32 @@
     "measuredAt": "Folders measured {{when}}.",
     "notMeasured": "Folders not measured yet.",
     "agentFigures": "Disk of its workspace · memory of what runs in it now"
+  },
+  "cleanup": {
+    "title": "Automatic cleanup",
+    "auto": "Clean up by itself when room runs short",
+    "hint": "Looked at once an hour. Only what can be rebuilt goes, and never in the folder of an agent that works or has an open assignment, never unpushed work, uploads, the database or secrets.",
+    "soft": "Clean up below (% free)",
+    "softHint": "Build outputs of agents idle for a day, cache files unused for a month, old job logs, folders of removed agents without unpushed work.",
+    "hard": "More below (% free)",
+    "hardHint": "Also installed dependencies (node_modules, virtualenvs) of agents idle for an hour; the manager hears it if room is still short.",
+    "memory": "Stop idle servers below (% memory free)",
+    "memoryHint": "Preview servers of idle agents that nobody opened for 12 hours.",
+    "last": "Last cleanup",
+    "lastServers": "Servers stopped last",
+    "summary": {
+      "soft": "{{when}}: {{freed}} freed ({{free}} were free).",
+      "hard": "{{when}}, room was very short: {{freed}} freed ({{free}} were free)."
+    },
+    "stoppedSummary_one": "{{when}}: {{count}} server stopped, memory was short.",
+    "stoppedSummary_other": "{{when}}: {{count}} servers stopped, memory was short.",
+    "told": "Still short afterwards: the manager was told.",
+    "what": {
+      "build": "Build output",
+      "cache": "Cache",
+      "folder": "Folder of a removed agent",
+      "logs": "Job logs",
+      "server": "Server"
+    }
   }
 }

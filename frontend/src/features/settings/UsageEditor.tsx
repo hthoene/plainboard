@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../../api/client";
 import { qk, useUsage } from "../../api/queries";
-import type { Usage } from "../../api/types";
+import type { Usage, UsageCleanup } from "../../api/types";
 import { Button, ErrorText, Spinner } from "../../components/ui";
 import { formatBytes, timeAgo } from "../../lib/format";
 
@@ -26,6 +26,29 @@ function Meter({ used, total, low }: { used: number; total: number; low: boolean
     <div className="mt-1 h-1 w-full bg-line" aria-hidden>
       <div className={clsx("h-full", low ? "bg-you" : "bg-fg-2")} style={{ width: `${total ? Math.min(100, (used / total) * 100) : 0}%` }} />
     </div>
+  );
+}
+
+/** What the last automatic cleanup did: when, how much, the biggest items, what it left alone. */
+function LastCleanup({ cleanup }: { cleanup: UsageCleanup }) {
+  const { t } = useTranslation();
+  const memory = cleanup.level === "memory";
+  return (
+    <section>
+      <h3 className="caps rule-b pb-1.5">{t(memory ? "cleanup.lastServers" : "cleanup.last")}</h3>
+      <p className="py-1.5 text-fg-2">
+        {memory
+          ? t("cleanup.stoppedSummary", { when: timeAgo(cleanup.at), count: cleanup.items.length })
+          : t(`cleanup.summary.${cleanup.level}`, { when: timeAgo(cleanup.at), freed: formatBytes(cleanup.freed), free: formatBytes(cleanup.free_before) })}
+        {cleanup.told && ` ${t("cleanup.told")}`}
+      </p>
+      {cleanup.items.map((item) => (
+        <Row key={item.path} name={`${t(`cleanup.what.${item.what}`)} · ${item.path}`} disk={memory ? undefined : formatBytes(item.bytes)} muted />
+      ))}
+      {cleanup.kept.map((reason) => (
+        <Row key={reason} name={reason} muted />
+      ))}
+    </section>
   );
 }
 
@@ -115,6 +138,9 @@ export function UsageEditor() {
         {data.memory_other > 0 && <Row name={t("usage.otherMemory")} memory={formatBytes(data.memory_other)} muted />}
         <p className="mt-2 text-fg-3">{t("usage.sharedHint")}</p>
       </section>
+
+      {data.cleanup && <LastCleanup cleanup={data.cleanup} />}
+      {data.servers_stopped && <LastCleanup cleanup={data.servers_stopped} />}
 
       <div className="flex flex-wrap items-center gap-3">
         <Button size="sm" onClick={measure} disabled={data.measuring || !data.runner_ok}>

@@ -169,5 +169,10 @@ async def overview(session: AsyncSession, runner: RunnerClient, measure: bool = 
         machine = None
     own = await asyncio.to_thread(own_machine)
     out = summarize(projects, agents, uploads, machine, own)
-    out.cleanup, out.servers_stopped = cleanup_service.last(settings["cleanup_last"]), cleanup_service.last(settings["cleanup_servers_last"])
+    from . import storage
+
+    volume = cleanup_service.workspace_volume(machine, get_config().workspaces_root) if machine else None
+    out.storage = storage.overview(settings, volume)
+    out.cleanups = [c for c in map(cleanup_service.last, settings["storage_cleanups"] or []) if c]
+    out.servers_stopped = cleanup_service.last(settings["cleanup_servers_last"])
     return out

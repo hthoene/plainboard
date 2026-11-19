@@ -20,6 +20,7 @@ from plainboard_protocol import (
     EndpointInfo,
     LimitsEvent,
     LimitWindow,
+    CleanedItem,
     CleanupResult,
     MachineUsage,
     AssistantTextEvent,
@@ -350,6 +351,25 @@ class FakeRunner:
     async def clean_up(self, spec):
         self.cleanups = [*getattr(self, "cleanups", []), spec]
         return getattr(self, "cleanup_result", None) or CleanupResult()
+
+    async def cleanup_candidates(self, spec):
+        self.candidate_specs = [*getattr(self, "candidate_specs", []), spec]
+        return [c.model_copy() for c in getattr(self, "candidates", [])]
+
+    async def cleanup_delete(self, spec):
+        """Like the runner: busy and unsure only with force, kept never."""
+        self.deletes = [*getattr(self, "deletes", []), spec]
+        found = {c.path: c for c in getattr(self, "candidates", [])}
+        result = CleanupResult()
+        for path in spec.paths:
+            c = found[path]
+            if c.safety == "keep" or (c.safety != "safe" and not spec.force):
+                result.skipped.append(f"{path}: {c.safety}")
+            else:
+                result.items.append(CleanedItem(path=path, what=c.what, bytes=c.bytes))
+                result.freed += c.bytes
+                self.candidates = [x for x in self.candidates if x.path != path]
+        return result
 
     async def usage(self, measure: bool = False):
         if not self.reachable:

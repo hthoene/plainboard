@@ -1126,28 +1126,41 @@
     "agentFigures": "Disk of its workspace · memory of what runs in it now"
   },
   "cleanup": {
-    "title": "Automatic cleanup",
-    "auto": "Clean up by itself when room runs short",
-    "hint": "Looked at once an hour. Only what can be rebuilt goes, and never in the folder of an agent that works or has an open assignment, never unpushed work, uploads, the database or secrets.",
-    "soft": "Clean up below (% free)",
-    "softHint": "Build outputs of agents idle for a day, cache files unused for a month, old job logs, folders of removed agents without unpushed work.",
-    "hard": "More below (% free)",
-    "hardHint": "Also installed dependencies (node_modules, virtualenvs) of agents idle for an hour; the manager hears it if room is still short.",
+    "title": "Disk space",
+    "notify": "Tell the manager from (% used)",
+    "notifyHint": "The disk should stay below this. From here on, or earlier when the trend crosses it within two hours, the manager of the project causing it hears it and cleans up with his tools. Nothing is deleted without him.",
+    "emergency": "Emergency cleanup from (% used)",
+    "emergencyHint": "Only this near full PlainBoard deletes by itself: old job logs, cache files unused for a month, folders of removed agents without unpushed work, build outputs of members idle for a day. The manager hears exactly what.",
+    "auto": "Emergency cleanup and stopping idle servers",
+    "hint": "Never touched by itself: folders of members who work or have an open assignment, unpushed work, uploads, the database, secrets.",
     "memory": "Stop idle servers below (% memory free)",
     "memoryHint": "Preview servers of idle agents that nobody opened for 12 hours.",
-    "last": "Last cleanup",
-    "lastServers": "Servers stopped last",
-    "summary": {
-      "soft": "{{when}}: {{freed}} freed ({{free}} were free).",
-      "hard": "{{when}}, room was very short: {{freed}} freed ({{free}} were free)."
+    "target": "Target: at most {{percent}} % used",
+    "now": "Now {{percent}} % used",
+    "growing": "growing {{rate}}/h",
+    "notGrowing": "not growing",
+    "trendUnknown": "trend not known yet",
+    "eta": "{{what}} in about {{time}}",
+    "full": "full",
+    "notices": "Notices to managers",
+    "notice": {
+      "over": "{{when}}: {{percent}} % used, above the target. Told: {{projects}}.",
+      "soon": "{{when}}: {{percent}} % used, the target was near. Told: {{projects}}.",
+      "emergency": "{{when}}: emergency cleanup, then {{percent}} % used. Told: {{projects}}."
     },
+    "cleanups": "Cleanups",
+    "summary": {
+      "manager": "{{when}}: {{by}} ({{project}}) deleted {{freed}}.",
+      "emergency": "{{when}}: near full, PlainBoard deleted {{freed}} by itself ({{free}} were free)."
+    },
+    "lastServers": "Servers stopped last",
     "stoppedSummary_one": "{{when}}: {{count}} server stopped, memory was short.",
     "stoppedSummary_other": "{{when}}: {{count}} servers stopped, memory was short.",
-    "told": "Still short afterwards: the manager was told.",
     "what": {
       "build": "Build output",
       "cache": "Cache",
       "folder": "Folder of a removed agent",
+      "home": "Folder in the shared home",
       "logs": "Job logs",
       "server": "Server"
     }

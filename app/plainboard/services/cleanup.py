@@ -1,13 +1,10 @@
-"""When disk or memory run short: what may be cleaned, and what the last cleanup did.
+"""What the runner may clean, and the records of what was cleaned.
 
-The watcher (``orchestration/cleanup.py``) looks rarely and cheaply (statvfs, through the runner's
-``/usage``). Below ``cleanup_soft_free_percent`` free on the workspaces' volume the runner removes what
-costs nothing to rebuild, below ``cleanup_hard_free_percent`` also installed dependencies, until
-``SOFT_MARGIN`` points above the soft threshold are free (runner ``cleanup.py`` lists what goes).
-Here is decided which agent folders it may touch at all: those of agents with no turn, no open
-assignment and no running job, of projects without a folder of their own, plus folders no agent has any
-more. Memory: below ``cleanup_memory_free_percent`` available, servers nobody opened for
-``SERVER_IDLE`` are stopped. The manager hears only what needs a person: still short after a hard cleanup.
+Disk space is under the manager's control (services/storage.py): here is decided which agent folders
+are busy (their agent has a turn, an open assignment or a running job: listed, deleted only when the
+manager insists) and which belong to no agent any more. Only in an emergency the watcher has the runner
+clean up by itself, and then only folders of idle agents (``CleanupSpec`` level soft). Memory: below
+``cleanup_memory_free_percent`` available, servers nobody opened for ``SERVER_IDLE`` are stopped.
 """
 
 from __future__ import annotations
@@ -22,11 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import ACTIVE_RUN_STATUSES, Agent, Assignment, AssignmentStatus, Job, JobStatus, Project, Run
 from ..schemas import CleanedOut, CleanupOut
-from .util import format_bytes
 
-SOFT_MARGIN = 5  # percentage points above the soft threshold a cleanup aims for, so it does not run again at once
-AGAIN_AFTER = timedelta(hours=6)  # at the same level, unless the last one freed what was needed
-TELL_EVERY = timedelta(hours=24)
 SERVER_IDLE = timedelta(hours=12)
 ITEMS_KEPT = 12
 
@@ -43,35 +36,14 @@ def workspace_volume(machine: MachineUsage, root: str) -> VolumeUsage | None:
     return next((v for v in machine.volumes if any(p.rstrip("/") == root for p in v.paths)), None)
 
 
-def level(total: int, free: int, settings: dict[str, Any]) -> str | None:
-    if total <= 0:
-        return None
-    share = free * 100 / total
-    if share < percent(settings, "cleanup_hard_free_percent"):
-        return "hard"
-    if share < percent(settings, "cleanup_soft_free_percent"):
-        return "soft"
-    return None
-
-
-def need(total: int, free: int, settings: dict[str, Any]) -> int:
-    """Bytes to free to be ``SOFT_MARGIN`` points above the soft threshold."""
-    goal = total * min(percent(settings, "cleanup_soft_free_percent") + SOFT_MARGIN, 95) / 100
-    return max(0, int(goal - free))
+def need(total: int, free: int, percent_used: float) -> int:
+    """Bytes to free until no more than ``percent_used`` is used."""
+    return max(0, int((total - free) - total * percent_used / 100))
 
 
 def memory_short(machine: MachineUsage, settings: dict[str, Any]) -> bool:
     total = machine.memory_total
     return total > 0 and (total - machine.memory_used) * 100 / total < percent(settings, "cleanup_memory_free_percent")
-
-
-def due(last: dict[str, Any] | None, lvl: str, now: datetime) -> bool:
-    """Not every hour again for nothing: the same level waits ``AGAIN_AFTER`` after a cleanup that did not free what was needed."""
-    if not last:
-        return True
-    at = datetime.fromisoformat(last["at"])
-    worse = lvl == "hard" and last.get("level") == "soft"
-    return worse or now - at >= AGAIN_AFTER or last.get("freed", 0) >= last.get("need", 0)
 
 
 async def busy_agents(session: AsyncSession, jobs: bool = True) -> set[int]:
@@ -90,8 +62,8 @@ async def last_turns(session: AsyncSession) -> dict[int, datetime]:
 
 
 def folders(projects: list[Project], agents: list[Agent], busy: set[int], turns: dict[int, datetime], measured: list[FolderUsage], root: str) -> list[CleanupFolder]:
-    """The agent folders the runner may clean. Projects with a folder of their own (the user's) never;
-    a folder below a project's that no agent has any more is an orphan (deleted, or renamed)."""
+    """The agent folders the runner may look at, busy ones marked. Projects with a folder of their own
+    (the user's) never; a folder below a project's that no agent has any more is an orphan (deleted, or renamed)."""
     root = root.rstrip("/")
     out: list[CleanupFolder] = []
     by_slug = {p.slug: p for p in projects if not p.workspace_path}
@@ -101,9 +73,8 @@ def folders(projects: list[Project], agents: list[Agent], busy: set[int], turns:
         if project is not None:
             mine[f"{root}/{project.slug}/{agent.slug}"] = agent
     for path, agent in mine.items():
-        if agent.id not in busy:
-            since = turns.get(agent.id) or agent.created_at
-            out.append(CleanupFolder(path=path, idle_since=_unix(since) if since else 0))
+        since = turns.get(agent.id) or agent.created_at
+        out.append(CleanupFolder(path=path, idle_since=_unix(since) if since else 0, busy=agent.id in busy))
     for f in measured:
         if f.kind != "workspace" or f.path in mine:
             continue
@@ -125,19 +96,20 @@ def project_of(path: str, root: str, projects: list[Project]) -> Project | None:
     return next((p for p in projects if p.slug == slug and not p.workspace_path), None)
 
 
-def record(lvl: str, now: datetime, total: int, free: int, wanted: int, result: CleanupResult, told: bool) -> dict[str, Any]:
-    """What the setting ``cleanup_last`` keeps for the storage view."""
+def record(lvl: str, now: datetime, total: int, free: int, result: CleanupResult, by: str = "", project: str = "") -> dict[str, Any]:
+    """What the storage view keeps of a cleanup (``storage_cleanups``)."""
     items = sorted(result.items, key=lambda i: -i.bytes)[:ITEMS_KEPT]
     return {
         "at": now.isoformat(),
         "level": lvl,
+        "by": by,
+        "project": project,
         "freed": result.freed,
-        "need": wanted,
         "free_before": free,
         "total": total,
         "items": [i.model_dump() for i in items],
         "kept": result.skipped[:ITEMS_KEPT],
-        "told": told,
+        "told": True,
     }
 
 
@@ -165,21 +137,8 @@ def last(value: Any) -> CleanupOut | None:
             items=[CleanedOut.model_validate(i) for i in value.get("items", [])],
             kept=value.get("kept", []),
             told=value.get("told", False),
+            by=value.get("by", ""),
+            project=value.get("project", ""),
         )
     except (KeyError, ValueError, TypeError):
         return None
-
-
-def text(total: int, free: int, result: CleanupResult, biggest: list[tuple[str, int]]) -> str:
-    """For the manager: the volume is still short after a hard cleanup. A decision for the user."""
-    lines = [
-        f"Disk space is still short on the agents' volume after PlainBoard's automatic cleanup: about {format_bytes(free + result.freed)} "
-        f"free of {format_bytes(total)}. It removed {format_bytes(result.freed)} that can be rebuilt (build outputs and dependencies of idle agents, "
-        "old cache files, old job logs, folders of removed agents without unpushed work). What else goes is the user's decision: "
-        "tell them (e.g. remove projects or agents that are no longer needed, clean a folder by hand, or a bigger volume). Don't delete anything yourself."
-    ]
-    if biggest:
-        lines.append("Biggest folders: " + ", ".join(f"{path} {format_bytes(size)}" for path, size in biggest))
-    if result.skipped:
-        lines.append("Left alone: " + "; ".join(result.skipped[:6]))
-    return "\n".join(lines)

@@ -595,18 +595,44 @@ export interface Usage {
   memory_total: number;
   memory_used: number;
   memory_other: number;
-  cleanup: UsageCleanup | null;
+  storage: UsageStorage | null;
+  cleanups: UsageCleanup[];
   servers_stopped: UsageCleanup | null;
 }
 
-/** What an automatic cleanup removed (or which servers it stopped, level "memory"). */
+/** A notice to managers that the disk is above its target, or will be soon. */
+export interface StorageNotice {
+  at: string;
+  reason: "over" | "soon" | "emergency";
+  percent: number;
+  rate: number | null;
+  hours_target: number | null;
+  hours_full: number | null;
+  projects: string[];
+}
+
+/** The agents' volume against its target: trend, forecast and the last notices. */
+export interface UsageStorage {
+  notify_percent: number;
+  emergency_percent: number;
+  percent: number | null;
+  rate: number | null;
+  hours_target: number | null;
+  hours_95: number | null;
+  hours_full: number | null;
+  notices: StorageNotice[];
+}
+
+/** What a cleanup removed (by the manager, in an emergency by itself), or which servers it stopped (level "memory"). */
 export interface UsageCleanup {
   at: string;
-  level: "soft" | "hard" | "memory";
+  level: "manager" | "emergency" | "memory";
   freed: number;
   free_before: number;
   total: number;
-  items: { path: string; what: "build" | "cache" | "folder" | "logs" | "server"; bytes: number }[];
+  items: { path: string; what: "build" | "cache" | "folder" | "logs" | "home" | "server"; bytes: number }[];
   kept: string[];
   told: boolean;
+  by: string;
+  project: string;
 }

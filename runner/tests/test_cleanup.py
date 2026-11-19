@@ -154,3 +154,59 @@ def test_caches_lose_what_was_not_used_for_a_month_and_old_job_logs_go(ws, tmp_p
     assert not (cache / "old.crate").exists() and (cache / "new.crate").exists()
     assert not (jobs.JOBS_ROOT / "j1.log").exists()
     assert {i.what for i in result.items} == {"cache", "logs"}
+
+
+def test_candidates_say_how_safe_each_is_and_delete_keeps_to_it(ws, tmp_path, monkeypatch):
+    from plainboard_protocol import CandidatesSpec, DeleteSpec
+
+    home = tmp_path / "home"
+    idle_agent, busy_agent, gone = agent(ws, "idle"), agent(ws, "busy"), agent(ws, "gone")
+    clone(tmp_path, idle_agent)
+    clone(tmp_path, busy_agent)
+    repo = clone(tmp_path, gone)
+    (repo / "more.rs").write_text("x")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "not pushed")
+    jobs_dir = home / "fw-jobs"
+    jobs_dir.mkdir()
+    clone(tmp_path, jobs_dir, "job-1")  # only a clone without own work: safe
+    (home / "scratch").mkdir()
+    (home / "scratch" / "notes.txt").write_text("someone's")
+    work = home / "work"
+    work.mkdir()
+    (clone(tmp_path, work, "x") / "src.rs").write_text("changed")
+    (home / "tools" / "bin").mkdir(parents=True)
+    (home / ".profile").write_text('export PATH="$HOME/tools/bin:$PATH"\n')
+    (home / ".cache" / "sccache").mkdir(parents=True)
+    (home / ".cache" / "ms-playwright").mkdir()
+    (home / ".ssh").mkdir()
+    monkeypatch.setattr(cleanup, "_sizes", {})
+
+    folders = [CleanupFolder(path=str(idle_agent)), CleanupFolder(path=str(busy_agent), busy=True), CleanupFolder(path=str(gone), orphan=True)]
+    found = {c.path: c for c in cleanup.candidates(CandidatesSpec(folders=folders))}
+    safety = {os.path.relpath(p, tmp_path): (c.what, c.safety, c.why) for p, c in found.items()}
+    assert safety["ws/p/idle/repo/target"] == ("build", "safe", "")
+    assert safety["ws/p/idle/repo/node_modules"] == ("build", "safe", "")
+    assert safety["ws/p/busy/repo/target"] == ("build", "busy", "")
+    assert safety["ws/p/gone"] == ("folder", "keep", "repo has unpushed commits")
+    assert safety["ws/p/gone/repo/target"] == ("build", "safe", "")  # its build output may go
+    assert safety["home/fw-jobs"] == ("home", "safe", "")
+    assert found[str(jobs_dir)].remotes and found[str(jobs_dir)].bytes > 0
+    assert safety["home/scratch"] == ("home", "unsure", "scratch/notes.txt is not in a clone")
+    assert safety["home/work"] == ("home", "keep", "x has changes")
+    assert safety["home/tools"] == ("home", "keep", "holds tools on PATH")
+    assert safety["home/.cache/sccache"] == ("cache", "safe", "")
+    assert safety["home/.cache/ms-playwright"][1] == "unsure"
+    assert not any(p.startswith("home/.ssh") or p.startswith("home/.profile") for p in safety)
+
+    busy_target, scratch = busy_agent / "repo" / "target", home / "scratch"
+    asked = [str(p) for p in (idle_agent / "repo" / "target", busy_target, scratch, work, gone, home / ".ssh", home / "tools")]
+    result = cleanup.delete(DeleteSpec(paths=asked, folders=folders))
+    assert [i.path for i in result.items] == [str(idle_agent / "repo" / "target")]
+    assert busy_target.exists() and scratch.exists() and work.exists() and gone.exists() and (home / ".ssh").exists()
+    assert f"{busy_target}: busy; force=true deletes it anyway" in result.skipped and f"{work}: kept, x has changes" in result.skipped
+    assert f"{home / '.ssh'}: not a cleanup candidate" in result.skipped
+
+    result = cleanup.delete(DeleteSpec(paths=asked, folders=folders, force=True))
+    assert not busy_target.exists() and not scratch.exists()
+    assert work.exists() and gone.exists() and (home / "tools").exists() and (work / "x" / "src.rs").exists()  # never with unpushed work or tools

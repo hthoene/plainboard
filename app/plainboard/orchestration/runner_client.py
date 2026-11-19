@@ -7,7 +7,7 @@ import time
 from collections.abc import AsyncIterator
 
 import httpx
-from plainboard_protocol import ProjectFiles, TidyResult, TidySpec, CheckResult, CleanupResult, CleanupSpec, CompletionResult, CompletionSpec, Credentials, JobPort, JobSpec, JobState, LimitsEvent, MachineUsage, ProviderAccount, ProviderInfo, PullRequestCheck, PullRequestState, RepoSpec, RunEvent, RunSpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, UpstreamState, parse_event
+from plainboard_protocol import ProjectFiles, TidyResult, TidySpec, CandidatesSpec, CheckResult, CleanupCandidate, CleanupResult, CleanupSpec, CompletionResult, CompletionSpec, Credentials, DeleteSpec, JobPort, JobSpec, JobState, LimitsEvent, MachineUsage, ProviderAccount, ProviderInfo, PullRequestCheck, PullRequestState, RepoSpec, RunEvent, RunSpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, UpstreamState, parse_event
 
 log = logging.getLogger(__name__)
 
@@ -196,6 +196,23 @@ class RunnerClient:
         """Free room on the workspaces' volume; can take long (sizes, deleting big folders)."""
         try:
             resp = await self._client.post("/cleanup", json=spec.model_dump(mode="json"), timeout=3 * 3600)
+            resp.raise_for_status()
+            return CleanupResult.model_validate(resp.json())
+        except (httpx.HTTPError, ValueError) as exc:
+            raise RunnerError(f"Runner unreachable: {exc}") from exc
+
+    async def cleanup_candidates(self, spec: CandidatesSpec) -> list[CleanupCandidate]:
+        """What may be deleted, with sizes (measured with du, kept for some minutes) and safety."""
+        try:
+            resp = await self._client.post("/cleanup/candidates", json=spec.model_dump(mode="json"), timeout=1800)
+            resp.raise_for_status()
+            return [CleanupCandidate.model_validate(c) for c in resp.json()]
+        except (httpx.HTTPError, ValueError) as exc:
+            raise RunnerError(f"Runner unreachable: {exc}") from exc
+
+    async def cleanup_delete(self, spec: DeleteSpec) -> CleanupResult:
+        try:
+            resp = await self._client.post("/cleanup/delete", json=spec.model_dump(mode="json"), timeout=3 * 3600)
             resp.raise_for_status()
             return CleanupResult.model_validate(resp.json())
         except (httpx.HTTPError, ValueError) as exc:

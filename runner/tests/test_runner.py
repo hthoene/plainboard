@@ -447,6 +447,8 @@ async def test_the_web_servers_of_a_job_are_found_without_anyone_naming_a_port(w
             JobPort(port=18734, title="Paper & Paw shop", base=True),
         ]
     }
+    # Who may open a preview goes by every port a job listens on, also one where no web server answers.
+    assert await ports.listening_of_jobs(["b1", "b2"]) == {"b1": [18731, 18732, 18733, 18734]}
 
     assert jobs.stop("b1") and jobs.stop("b2")
     await ended("b1")

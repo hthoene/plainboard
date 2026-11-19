@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .api import accounts, auth, browser, chat, internal, knowledge, preview, projects, public, repositories, secrets, system, tasks, todos, users, ws
 from .api.deps import authorize
+from .api.guard import Guard
 from .config import get_config
 from .db import dispose_engine, init_engine, sessionmaker
 from .migrate import upgrade
@@ -26,6 +27,7 @@ from .orchestration.scheduler import Scheduler
 from .orchestration.standstill import StandstillWatcher
 from .models import utcnow
 from .security import init_security
+from .services import preview as preview_service
 from .services import version as version_service
 from .services.errors import ServiceError
 
@@ -88,6 +90,7 @@ API_MODULES = (auth, system, accounts, users, projects, public, repositories, se
 
 def create_app() -> FastAPI:
     app = FastAPI(title="PlainBoard", lifespan=lifespan)
+    app.state.preview_owners = preview_service.Owners()
 
     @app.middleware("http")
     async def preview_pages(request: Request, call_next):
@@ -106,6 +109,7 @@ def create_app() -> FastAPI:
         app.include_router(module.router)
 
     _mount_spa(app, get_config().static_dir)
+    app.add_middleware(Guard)  # outermost: before anything else sees the request
     return app
 
 

@@ -1,10 +1,10 @@
-import { GitBranch, ListTodo, MessageSquare, Plus, Shield, StickyNote } from "lucide-react";
+import { GitBranch, HardDrive, ListTodo, MessageSquare, Plus, Shield, StickyNote } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useRepositories } from "../../api/queries";
+import { useMe, useRepositories, useUsage } from "../../api/queries";
 import type { Agent } from "../../api/types";
 import { AgentDot, AgentSquare, Badge, Button, PageHead } from "../../components/ui";
-import { formatCost, formatTokens } from "../../lib/format";
+import { formatBytes, formatCost, formatTokens } from "../../lib/format";
 import { useShell } from "../layout/shell-context";
 import { AgentEditor } from "./AgentEditor";
 import { OwnNotesDialog } from "./OwnNotesDialog";
@@ -15,6 +15,9 @@ export function TeamView() {
   const { t } = useTranslation();
   const { agents, openChat, project } = useShell();
   const repos = useRepositories(project.id);
+  const me = useMe();
+  const usage = useUsage(!!me?.is_admin); // the whole installation's: for admins only
+  const usageOf = (agent: Agent) => usage.data?.projects.find((p) => p.id === project.id)?.agents.find((a) => a.id === agent.id);
   const repoNames = (agent: Agent) =>
     agent.all_repos ? (repos.data ?? []).map((r) => r.name) : (repos.data ?? []).filter((r) => agent.repository_ids.includes(r.id)).map((r) => r.name);
   const [editing, setEditing] = useState<Agent | "new" | null>(null);
@@ -60,6 +63,16 @@ export function TeamView() {
                   <span className="whitespace-nowrap" title={t("team.contextTitle")}>
                     {formatTokens(agent.context_tokens)} / {formatTokens(agent.context_limit_tokens)} · {formatCost(agent.total_cost_usd)}
                   </span>
+                  {(() => {
+                    const own = usageOf(agent);
+                    if (!own || (own.disk == null && !own.memory)) return null;
+                    return (
+                      <span className="flex items-center gap-1 whitespace-nowrap" title={t("usage.agentFigures")}>
+                        <HardDrive className="size-3.5 shrink-0" />
+                        {[own.disk != null && formatBytes(own.disk), own.memory > 0 && formatBytes(own.memory)].filter(Boolean).join(" · ")}
+                      </span>
+                    );
+                  })()}
                 </div>
                 {!agent.is_manager && (repos.data?.length ?? 0) > 0 && (
                   <p className="mt-1.5 flex items-center gap-1.5 text-fg-3">

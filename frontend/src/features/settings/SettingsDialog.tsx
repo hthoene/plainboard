@@ -18,6 +18,7 @@ import { AccountsEditor } from "./AccountsEditor";
 import { EndpointAccounts } from "./EndpointAccounts";
 import { PauseEditor } from "./PauseEditor";
 import { SecretsEditor } from "./SecretsEditor";
+import { UsageEditor } from "./UsageEditor";
 import { UsersEditor } from "./UsersEditor";
 
 export function CheckBadge({ result }: { result: CheckResult | null }) {
@@ -239,6 +240,7 @@ export function SettingsDialog({ open, onClose, section }: { open: boolean; onCl
           ),
         },
         { id: "pause", label: t("pause.title"), description: t("pause.description"), content: <PauseEditor /> },
+        { id: "usage", label: t("usage.title"), description: t("usage.description"), content: <UsageEditor /> },
         {
           id: "readAccess",
           label: t("settings.readAccess"),

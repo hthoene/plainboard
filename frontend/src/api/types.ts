@@ -556,3 +556,43 @@ export interface Member {
   name: string;
   role: ProjectRole;
 }
+
+/** Disk and memory of the installation (GET /usage, admins). Sizes in bytes. */
+export interface UsageVolume {
+  kinds: string[];
+  total: number;
+  used: number;
+  free: number;
+  low: boolean;
+}
+
+export interface AgentUsage {
+  id: number;
+  name: string;
+  disk: number | null;
+  memory: number;
+  processes: number;
+}
+
+export interface ProjectUsage {
+  id: number;
+  name: string;
+  agents: AgentUsage[];
+  uploads: number;
+  other_disk: number;
+  other_memory: number;
+}
+
+export interface Usage {
+  runner_ok: boolean;
+  measured_at: string | null;
+  measuring: boolean;
+  volumes: UsageVolume[];
+  projects: ProjectUsage[];
+  shared: { name: string; bytes: number }[];
+  other_disk: number;
+  data: number | null;
+  memory_total: number;
+  memory_used: number;
+  memory_other: number;
+}

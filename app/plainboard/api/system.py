@@ -9,13 +9,14 @@ from pydantic import BaseModel
 
 from ..models import TaskStatus
 from ..orchestration.prompts import PINNED_BUDGET_CHARS
-from ..schemas import AccessKeyOut, CheckOut, LimitsOut, PauseOut, PublicApiKeyIn, SettingsOut, SettingsUpdate
+from ..schemas import AccessKeyOut, CheckOut, LimitsOut, PauseOut, PublicApiKeyIn, SettingsOut, SettingsUpdate, UsageOut
 from ..services import access_keys as access_key_service
 from ..services import accounts as account_service
 from ..services import db_read as db_read_service
 from ..services import limits as limits_service
 from ..services import pause as pause_service
 from ..services import settings as settings_service
+from ..services import usage as usage_service
 from ..services import version as version_service
 from ..services.errors import ServiceError
 from ..orchestration.runner_client import RunnerError
@@ -103,6 +104,18 @@ async def inspect_query(sql: str, limit: int = Query(default=200, ge=1), cell_ch
 async def limits(session: Session, runs: Runs) -> LimitsOut:
     runs.refresh_limits()
     return await limits_service.current(session)
+
+
+@router.get("/usage", response_model=UsageOut)
+async def usage(session: Session, runner: Runner) -> UsageOut:
+    """Disk and memory, in total, per project and agent; folder sizes as last measured."""
+    return await usage_service.overview(session, runner)
+
+
+@router.post("/usage/measure", response_model=UsageOut)
+async def measure_usage(session: Session, runner: Runner) -> UsageOut:
+    """Measure the folders again, in the background."""
+    return await usage_service.overview(session, runner, measure=True)
 
 
 @router.get("/settings", response_model=SettingsOut)

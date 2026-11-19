@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket
 from fastapi.responses import StreamingResponse
-from plainboard_protocol import ACCOUNT_KEY_PATTERN, DEFAULT_ACCOUNT, BranchRef, CheckResult, CommitRef, CompletionResult, CompletionSpec, Credentials, ErrorEvent, JobPort, JobSpec, JobState, LimitsEvent, ProjectFiles, ProviderAccount, ProviderInfo, PullRequestCheck, PullRequestRef, PullRequestState, RepoSpec, RunSpec, TidyResult, TidySpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, UpstreamRef, UpstreamState
+from plainboard_protocol import ACCOUNT_KEY_PATTERN, DEFAULT_ACCOUNT, BranchRef, CheckResult, CommitRef, CompletionResult, CompletionSpec, Credentials, ErrorEvent, JobPort, JobSpec, JobState, LimitsEvent, MachineUsage, ProjectFiles, ProviderAccount, ProviderInfo, PullRequestCheck, PullRequestRef, PullRequestState, RepoSpec, RunSpec, TidyResult, TidySpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, UpstreamRef, UpstreamState
 from pydantic import BaseModel, Field
 
 from . import github
@@ -21,6 +21,7 @@ from . import notices
 from . import ports
 from . import trains
 from . import translate
+from . import usage
 from .providers import get_provider, list_providers
 from .tool_bridge import ToolBridge
 from .workspace import WorkspaceError, config_args, git_env, prepare_workspace, project_folder, remove_folder, run_cmd
@@ -47,6 +48,27 @@ async def browser(websocket: WebSocket, key: str) -> None:
 @app.on_event("shutdown")
 async def close_browsers() -> None:
     await browsers.close_all()
+
+
+_background: set[asyncio.Task[None]] = set()
+
+
+@app.on_event("startup")
+async def measure_usage() -> None:
+    _background.add(asyncio.create_task(usage.keep_measured()))
+
+
+@app.get("/usage", response_model=MachineUsage)
+async def machine_usage() -> MachineUsage:
+    """Disk and memory of this machine; the folder sizes as last measured (see usage.py)."""
+    return await usage.current()
+
+
+@app.post("/usage/measure", response_model=MachineUsage)
+async def measure_usage_now() -> MachineUsage:
+    """Measure the folders again now, in the background."""
+    usage.measure_soon(force=True)
+    return await usage.current()
 
 
 @app.get("/providers", response_model=list[ProviderInfo])

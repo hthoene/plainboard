@@ -6,7 +6,7 @@ import time
 from collections.abc import AsyncIterator
 
 import httpx
-from plainboard_protocol import ProjectFiles, TidyResult, TidySpec, CheckResult, CompletionResult, CompletionSpec, Credentials, JobPort, JobSpec, JobState, LimitsEvent, ProviderAccount, ProviderInfo, PullRequestCheck, PullRequestState, RepoSpec, RunEvent, RunSpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, UpstreamState, parse_event
+from plainboard_protocol import ProjectFiles, TidyResult, TidySpec, CheckResult, CompletionResult, CompletionSpec, Credentials, JobPort, JobSpec, JobState, LimitsEvent, MachineUsage, ProviderAccount, ProviderInfo, PullRequestCheck, PullRequestState, RepoSpec, RunEvent, RunSpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, UpstreamState, parse_event
 
 
 class RunnerError(RuntimeError):
@@ -175,6 +175,15 @@ class RunnerClient:
         if resp.status_code >= 400:
             raise RunnerError(resp.text[:600])
         return TidyResult.model_validate(resp.json())
+
+    async def usage(self, measure: bool = False) -> MachineUsage:
+        """Disk and memory of the runner's machine; ``measure``: measure the folders again, in the background."""
+        try:
+            resp = await (self._client.post("/usage/measure", timeout=30) if measure else self._client.get("/usage", timeout=30))
+            resp.raise_for_status()
+            return MachineUsage.model_validate(resp.json())
+        except (httpx.HTTPError, ValueError) as exc:
+            raise RunnerError(f"Runner unreachable: {exc}") from exc
 
     async def remove_files(self, spec: ProjectFiles) -> CheckResult:
         try:

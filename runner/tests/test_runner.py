@@ -595,6 +595,28 @@ def test_a_turn_turned_away_by_a_used_up_limit_reports_the_window():
     assert [e.type for e in mapper.map(result("You've hit your 5-hour limit · resets 7:10pm (UTC)"))] == ["result"]
 
 
+async def test_the_plan_of_a_claude_subscription(tmp_path, monkeypatch):
+    import json
+
+    from plainboard_protocol import Credentials
+
+    from plainboard_runner.providers.claude_code import ClaudeCodeProvider, plan_of
+
+    assert plan_of("max", "default_claude_max_20x") == ("Max 20x", 20.0)
+    assert plan_of("claude_max", "default_claude_max_5x") == ("Max 5x", 5.0)
+    assert plan_of("pro", None) == ("Pro", 1.0)
+    assert plan_of("max", None) == ("Max", None)  # two sizes: the user says which
+    assert plan_of("claude_ultra", None) == ("Ultra", None)
+    assert plan_of(None, None) == (None, None)
+
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {"subscriptionType": "max", "rateLimitTier": "default_claude_max_20x"}}))
+    provider = ClaudeCodeProvider()
+    assert await provider.plan(Credentials(claude_auth_mode="runner_login")) == ("Max 20x", 20.0)
+    assert await provider.plan(Credentials(claude_auth_mode="api_key", anthropic_api_key="sk")) == (None, None)
+
+
 async def test_a_repository_uses_its_own_access(workspaces, tmp_path, monkeypatch):
     from plainboard_protocol import RepoSpec, WorkspaceSpec
 

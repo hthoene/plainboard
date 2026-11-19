@@ -441,6 +441,9 @@ export interface AccountLimits {
   windows: LimitWindow[];
   forecasts: LimitForecast[];
   updated_at: number | null;
+  /** The plan as the provider names it and its size (a multiple of its smallest plan), where it can tell. */
+  plan: string | null;
+  plan_size: number | null;
 }
 
 export interface Limits {
@@ -461,6 +464,8 @@ export interface Account {
   models: string[];
   /** How many tokens its models take at once; 0: not said. */
   context_tokens: number;
+  /** The size of its plan as the user gave it; null: as the provider says. */
+  plan_size: number | null;
 }
 
 export interface StatsDay {

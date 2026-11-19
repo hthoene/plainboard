@@ -114,6 +114,9 @@ class Account(Timestamps, Base):
     models: Mapped[list[str]] = mapped_column(JSON, default=list)
     # How many tokens these models take at once (0: not said). The agent's harness keeps its context below it.
     context_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # How large the subscription's plan is, as a multiple of the provider's smallest plan, as the user
+    # gave it. None: as the provider says (services/limits.py), else as large as the others.
+    plan_size: Mapped[float | None] = mapped_column(Float)
 
 
 class Setting(Base):

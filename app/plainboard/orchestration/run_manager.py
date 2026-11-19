@@ -664,14 +664,16 @@ class RunManager:
     async def _refresh_limits(self) -> None:
         async with self._sm() as s:
             values = await settings_service.get_all(s)
-            reported = await limits_service.fresh(s)  # an account in use reports with every turn
-            accounts = [a for a in await account_service.list_accounts(s) if a.enabled and account_service.has_plan(a) and a.key not in reported]
+            # An account in use reports its limits with every turn, but not its plan.
+            reported, planned = await limits_service.fresh(s), await limits_service.plan_checked(s)
+            accounts = [a for a in await account_service.list_accounts(s) if a.enabled and account_service.has_plan(a) and not (a.key in reported and a.key in planned)]
             found = await asyncio.gather(
                 *(self.runner.limits(a.provider, settings_service.credentials(values, account=account_service.fields(a))) for a in accounts)
             )
             for account, report in zip(accounts, found):
                 if report.windows:
                     await limits_service.record(s, account.key, report.windows, complete=report.complete)
+                await limits_service.record_plan(s, account.key, report.plan, report.plan_size)
 
     async def wind_down(self, s: AsyncSession, agent: Agent, reason: str = "", *, jobs_end: bool = False) -> bool:
         """Let an agent finish safely: drop what it has not started and tell its running turn to wrap up.
@@ -1108,7 +1110,7 @@ class RunManager:
                 await s.commit()
                 bus.publish(project.id, "message.updated", MessageOut.model_validate(message))
             secret_env = secret_service.env(await secret_service.effective(s, project.id))
-            account = await account_service.pick(s, agent.provider, agent, conv)
+            account = await account_service.pick(s, agent.provider, agent, conv, fresh=turn.resume_session_id is None)
             if account is None and (why := await account_service.shut_out(s, agent.provider, agent)):
                 raise RuntimeError(why)  # the turn fails with the reason, instead of at the provider for a missing key
             if account:

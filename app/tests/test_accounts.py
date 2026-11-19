@@ -124,6 +124,59 @@ def test_a_turn_turned_away_by_a_used_up_limit_runs_on_another_subscription(clie
     assert client.get(f"/api/projects/{pid}/runs?limit=1").json()[0]["status"] == "failed"
 
 
+def test_turns_go_to_the_most_usage_left_and_stay_while_the_cache_is_warm(client, project):
+    """Percentages of plans of different sizes don't compare: half of a Max 20x is more than 90 % of a
+    Max 5x. Moving costs the prompt cache, so a conversation only moves when that is cold anyway."""
+    from datetime import timedelta
+
+    from plainboard.db import sessionmaker
+    from plainboard.models import Account, Conversation, Run, utcnow
+    from plainboard.services import limits as limits_service
+    from sqlalchemy import select, update
+
+    pid = project["id"]
+    big = accounts(client)["Claude"]
+    client.patch(f"/api/accounts/{big['id']}", json={"auth_mode": "oauth_token", "secret": "tok-big"})
+    small = client.post("/api/accounts", json={"provider": "claude_code", "label": "Small", "auth_mode": "oauth_token", "secret": "tok-small"}).json()
+    runs = client.app_ref.state.runs
+    # The provider names the first one's plan; the user gives the second one's size.
+    runner(client).limit_plans = {"tok-big": ("Max 20x", 20.0)}
+    wait_for(lambda: not (runs._limits_task and not runs._limits_task.done()))
+    client.portal.call(runs._refresh_limits)
+    assert (limits_of(client, big["id"])["plan"], limits_of(client, big["id"])["plan_size"]) == ("Max 20x", 20.0)
+    assert client.patch(f"/api/accounts/{small['id']}", json={"plan_size": 5}).json()["plan_size"] == 5
+    dev = make_dev(client, pid)
+
+    async def report(**used: float) -> None:
+        async with sessionmaker()() as s:
+            for label, value in used.items():
+                key = await s.scalar(select(Account.key).where(Account.label == {"big": "Claude", "small": "Small"}[label]))
+                await limits_service.record(s, key, [LimitWindow(name="seven_day", utilization=value)])
+
+    async def cool() -> None:  # the agent's last turn was two hours ago
+        async with sessionmaker()() as s:
+            await s.execute(update(Run).where(Run.agent_id == dev["id"]).values(finished_at=utcnow() - timedelta(hours=2)))
+            await s.commit()
+
+    async def new_session() -> None:  # its context was reset
+        async with sessionmaker()() as s:
+            await s.execute(update(Conversation).where(Conversation.agent_id == dev["id"]).values(provider_session_id=None))
+            await s.commit()
+
+    client.portal.call(lambda: report(big=0.5, small=0.1))
+    assert turn(client, pid, dev["id"]).claude_oauth_token == "tok-big"  # 10 left against 4.5
+    client.portal.call(lambda: report(big=0.8, small=0.1))
+    assert turn(client, pid, dev["id"]).claude_oauth_token == "tok-big"  # 4 against 4.5: it stays for the cache
+    client.portal.call(cool)
+    assert turn(client, pid, dev["id"]).claude_oauth_token == "tok-small"  # the cache is cold anyway
+    client.portal.call(lambda: report(big=0.8, small=0.9))
+    assert turn(client, pid, dev["id"]).claude_oauth_token == "tok-small"  # 0.5 against 4, but warm
+    client.portal.call(new_session)
+    assert turn(client, pid, dev["id"]).claude_oauth_token == "tok-big"  # a fresh context has no cache to keep
+    # Back to what the provider says (none for this one): as large as the others.
+    assert client.patch(f"/api/accounts/{small['id']}", json={"plan_size": 0}).json()["plan_size"] is None
+
+
 def test_codex_accounts_have_their_own_sign_in(client, project):
     pid = project["id"]
     claude = accounts(client)["Claude"]
@@ -156,6 +209,7 @@ def test_only_a_subscription_without_a_fresh_report_is_asked(client, project):
         async with sessionmaker()() as s:
             key = await s.scalar(select(Account.key).where(Account.label == label))
             await limits_service.record(s, key, [LimitWindow(name="seven_day", utilization=0.9)])
+            await limits_service.record_plan(s, key, None, None)  # its plan was asked for a moment ago
             row, stored = await limits_service._stored(s)
             stored[key]["updated_at"] = int(time.time() - age)
             row.value = __import__("json").dumps({"accounts": stored})

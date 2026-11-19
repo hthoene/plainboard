@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import hashlib
+import json
 import logging
 import re
 import time
+from pathlib import Path
 from datetime import UTC, datetime, timedelta
 from collections.abc import AsyncIterator
 from typing import Any
@@ -29,6 +32,7 @@ from claude_agent_sdk import (
     create_sdk_mcp_server,
     tool,
 )
+import httpx
 from claude_agent_sdk.types import RateLimitEvent, RateLimitInfo, StreamEvent
 from plainboard_protocol import (
     AssistantTextEvent,
@@ -94,6 +98,24 @@ EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 # your 5-hour limit · resets 7:10pm (UTC)", or in older versions "Claude AI usage limit reached|<unix time>".
 LIMIT_HIT = re.compile(r"hit your (?P<kind>[\w -]*?)\s*limit|usage limit reached(?:\|(?P<at>\d+))?", re.IGNORECASE)
 LIMIT_RESET = re.compile(r"resets (?:at )?(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<half>[ap]m)?(?:\s*\((?P<zone>[^)]+)\))?", re.IGNORECASE)
+
+
+# Claude's plans by rate limit tier, with their size as a multiple of Pro's usage. A plan Claude Code
+# names without a tier gets its name only (Max comes in two sizes); the user can give its size.
+PLAN_TIERS = {"default_claude_max_5x": ("Max 5x", 5.0), "default_claude_max_20x": ("Max 20x", 20.0)}
+PLAN_TYPES = {"pro": ("Pro", 1.0), "max": ("Max", None)}
+PROFILE_URL = "https://api.anthropic.com/api/oauth/profile"
+PLAN_KEEP_SECONDS = 6 * 3600  # a plan rarely changes; asking for it costs a request, no tokens
+
+
+def plan_of(subscription: str | None, tier: str | None) -> tuple[str | None, float | None]:
+    """Name and size of a plan from what Claude Code knows about the account."""
+    if tier in PLAN_TIERS:
+        return PLAN_TIERS[tier]
+    kind = (subscription or "").lower().removeprefix("claude_")
+    if not kind:
+        return None, None
+    return PLAN_TYPES.get(kind, (kind.replace("_", " ").title(), None))
 
 
 def auth_env(creds: Credentials) -> dict[str, str]:
@@ -440,6 +462,9 @@ PROBE_MODEL = next(m.id for m in MODELS if m.tier == "small")
 class ClaudeCodeProvider(Provider):
     name = "claude_code"
 
+    def __init__(self) -> None:
+        self._plans: dict[str, tuple[float, str | None, str | None]] = {}  # sign-in -> (when, subscription, tier)
+
     def info(self) -> ProviderInfo:
         return ProviderInfo(name=self.name, label="Claude Agent", models=MODELS, efforts=EFFORTS)
 
@@ -543,7 +568,47 @@ class ClaudeCodeProvider(Provider):
         async with ClaudeSDKClient(options) as client:
             # Claude Code's usage request has no public method in the SDK yet.
             answer = await client._query._send_control_request({"subtype": "get_usage", "skip_behaviors": True}, timeout=20)
+        if subscription := answer.get("subscription_type"):
+            when, _, tier = self._plans.get(self._sign_in(credentials), (0.0, None, None))
+            self._plans[self._sign_in(credentials)] = (when, subscription, tier)
         return usage_windows(answer.get("rate_limits"))
+
+    @staticmethod
+    def _sign_in(credentials: Credentials) -> str:
+        token = credentials.claude_oauth_token or "" if credentials.claude_auth_mode == "oauth_token" else ""
+        return credentials.claude_auth_mode + ":" + hashlib.sha256(token.encode()).hexdigest()[:16]
+
+    async def plan(self, credentials: Credentials) -> tuple[str | None, float | None]:
+        """From the account's profile (a token from ``claude setup-token`` may not be allowed to read
+        it), the sign-in stored by ``claude login``, or the usage answer."""
+        if credentials.claude_auth_mode == "api_key":
+            return None, None
+        key = self._sign_in(credentials)
+        when, subscription, tier = self._plans.get(key, (0.0, None, None))
+        if time.time() - when > PLAN_KEEP_SECONDS:
+            read_subscription, read_tier = await self._read_plan(credentials)
+            subscription, tier = read_subscription or subscription, read_tier or tier
+            self._plans[key] = (time.time(), subscription, tier)
+        return plan_of(subscription, tier)
+
+    async def _read_plan(self, credentials: Credentials) -> tuple[str | None, str | None]:
+        if credentials.claude_auth_mode == "runner_login":
+            try:
+                stored = json.loads((Path.home() / ".claude" / ".credentials.json").read_text()).get("claudeAiOauth") or {}
+            except (OSError, ValueError):
+                return None, None
+            return stored.get("subscriptionType"), stored.get("rateLimitTier")
+        if not credentials.claude_oauth_token:
+            return None, None
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(PROFILE_URL, headers={"Authorization": f"Bearer {credentials.claude_oauth_token}", "anthropic-beta": "oauth-2025-04-20"})
+            resp.raise_for_status()
+            organization = (resp.json() or {}).get("organization") or {}
+        except Exception as exc:
+            log.info("Claude's plan could not be read from the profile: %s", str(exc)[:200])
+            return None, None
+        return organization.get("organization_type"), organization.get("rate_limit_tier")
 
     async def _limits_of_a_turn(self, credentials: Credentials) -> list[LimitWindow]:
         """The limits as a turn reports them. A subscription that is signed in with a token

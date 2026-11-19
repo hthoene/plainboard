@@ -4,7 +4,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api, errorMessage } from "../../api/client";
-import { checks, qk, useAccounts, useMeta } from "../../api/queries";
+import { checks, qk, useAccounts, useLimits, useMeta } from "../../api/queries";
 import type { Account, CheckResult } from "../../api/types";
 import { Button, ErrorText, IconButton, Input, Toggle } from "../../components/ui";
 import { smallModel } from "../../lib/models";
@@ -60,10 +60,14 @@ export function AccountsEditor({ provider }: { provider: string }) {
 function AccountCard({ account, onChange }: { account: Account; onChange: (action: () => Promise<unknown>) => Promise<boolean> }) {
   const { t } = useTranslation();
   const meta = useMeta();
+  const limits = useLimits();
+  const detected = limits.data?.accounts.find((entry) => entry.account_id === account.id);
   const [label, setLabel] = useState(account.label);
+  const [size, setSize] = useState(account.plan_size?.toString() ?? "");
   const [secret, setSecret] = useState("");
   const [check, setCheck] = useState<CheckResult | null>(null);
   useEffect(() => setLabel(account.label), [account.label]);
+  useEffect(() => setSize(account.plan_size?.toString() ?? ""), [account.plan_size]);
 
   const patch = (body: Record<string, unknown>) => onChange(() => api.patch(`/accounts/${account.id}`, body));
   const secretLabel = SECRET_LABELS[`${account.provider}:${account.auth_mode}`];
@@ -142,6 +146,25 @@ function AccountCard({ account, onChange }: { account: Account; onChange: (actio
         </p>
       )}
       {account.provider === "codex" && account.auth_mode === "chatgpt" && <CodexSignIn accountId={account.id} />}
+      {account.auth_mode !== "api_key" && (
+        <label className="block space-y-1">
+          <span className="block font-medium text-fg-2">{t("accounts.planSize")}</span>
+          <Input
+            type="number"
+            min="0"
+            step="any"
+            className="w-32"
+            placeholder={detected?.plan_size?.toString() ?? ""}
+            value={size}
+            onChange={(e) => setSize(e.target.value)}
+            onBlur={() => Number(size || 0) !== (account.plan_size ?? 0) && patch({ plan_size: Number(size) || 0 })}
+          />
+          <span className="block text-fg-3">
+            {detected?.plan && `${t("accounts.planDetected", { plan: detected.plan })} · `}
+            {t("accounts.planSizeHint")}
+          </span>
+        </label>
+      )}
       {account.auth_mode !== "api_key" && (
         <p className="text-fg-2">{t(account.provider === "codex" ? "settings.codexOwnLoginNotice" : "settings.ownLoginNotice")}</p>
       )}

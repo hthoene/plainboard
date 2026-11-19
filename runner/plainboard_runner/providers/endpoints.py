@@ -146,6 +146,9 @@ class EndpointProvider(ClaudeCodeProvider):
     async def limits(self, credentials: Credentials) -> list[LimitWindow]:
         return []
 
+    async def plan(self, credentials: Credentials) -> tuple[str | None, float | None]:
+        return None, None
+
     async def models(self, credentials: Credentials) -> list[str]:
         """What the server says it offers. Both interfaces list models the same way."""
         url = self.address(credentials)

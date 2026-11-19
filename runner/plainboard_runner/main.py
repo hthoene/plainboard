@@ -200,7 +200,12 @@ async def limits(name: str, credentials: Credentials) -> LimitsEvent:
     except Exception as exc:
         log.warning("No limits from %s: %s", provider.name, exc)
         return LimitsEvent()
-    return LimitsEvent(windows=windows, complete=provider.limits_complete)
+    try:
+        plan, size = await provider.plan(credentials)
+    except Exception as exc:
+        log.info("No plan from %s: %s", provider.name, str(exc)[:200])
+        plan, size = None, None
+    return LimitsEvent(windows=windows, complete=provider.limits_complete, plan=plan, plan_size=size)
 
 
 @app.post("/providers/{name}/models", response_model=list[str])

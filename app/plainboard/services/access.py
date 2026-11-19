@@ -99,6 +99,7 @@ RULES: tuple[Rule, ...] = (
     Rule("/api/secrets", Need.ADMIN),
     Rule("/api/access-keys", Need.ADMIN),
     Rule("/api/inspect", Need.ADMIN),
+    Rule("/api/usage", Need.ADMIN),  # disk and memory of the whole installation
     Rule("/api/github", Need.ADMIN),  # lists what the installation's GitHub token sees
     Rule("/api/users", Need.ADMIN),
     Rule("/api/users/directory", Need.USER),  # names only: whom a project can be shared with

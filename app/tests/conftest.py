@@ -20,6 +20,7 @@ from plainboard_protocol import (
     EndpointInfo,
     LimitsEvent,
     LimitWindow,
+    MachineUsage,
     AssistantTextEvent,
     CheckResult,
     CompactionEvent,
@@ -337,6 +338,12 @@ class FakeRunner:
         if not credentials.github_token:
             return {"ok": False, "detail": "No GitHub token configured", "repos": []}
         return {"ok": True, "detail": "", "repos": [{"full_name": "acme/api", "name": "api", "clone_url": "https://github.com/acme/api.git"}]}
+
+    async def usage(self, measure: bool = False):
+        if not self.reachable:
+            raise RunnerError("Runner unreachable")
+        self.usage_measured = getattr(self, "usage_measured", 0) + measure
+        return getattr(self, "machine_usage", None) or MachineUsage()
 
     async def aclose(self) -> None:
         pass

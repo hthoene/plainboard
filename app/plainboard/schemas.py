@@ -144,6 +144,53 @@ class LimitsOut(BaseModel):
     accounts: list[AccountLimits] = Field(default_factory=list)  # the enabled accounts
 
 
+# --- disk and memory ------------------------------------------------------------------------
+
+
+class VolumeOut(BaseModel):
+    kinds: list[str]  # what is on it: data, uploads, workspaces, home
+    total: int
+    used: int
+    free: int
+    low: bool  # little room left
+
+
+class AgentUsageOut(BaseModel):
+    id: int
+    name: str
+    disk: int | None = None  # its workspace; None: not measured yet, or a folder its project shares
+    memory: int = 0  # of the processes working in its workspace: its turn, jobs, servers
+    processes: int = 0
+
+
+class ProjectUsageOut(BaseModel):
+    id: int
+    name: str
+    agents: list[AgentUsageOut]
+    uploads: int  # its attachments
+    other_disk: int  # a folder all its agents share, folders of former agents, the clones its branches land in
+    other_memory: int
+
+
+class FolderOut(BaseModel):
+    name: str
+    bytes: int
+
+
+class UsageOut(BaseModel):
+    runner_ok: bool
+    measured_at: UTCDateTime | None = None  # when the folders were last measured
+    measuring: bool = False
+    volumes: list[VolumeOut] = Field(default_factory=list)
+    projects: list[ProjectUsageOut] = Field(default_factory=list)
+    shared: list[FolderOut] = Field(default_factory=list)  # parts of the agents' home: caches, toolchains
+    other_disk: int = 0  # folders in the workspaces of no project
+    data: int | None = None  # the database and the key, in the app's data folder
+    memory_total: int = 0
+    memory_used: int = 0
+    memory_other: int = 0  # processes of the runner that work in no agent's folder: the runner itself, browsers
+
+
 # --- provider accounts ----------------------------------------------------------------------
 
 

@@ -1084,5 +1084,39 @@
       "messages_one": "{{count}} chat message",
       "messages_other": "{{count}} chat messages"
     }
+  },
+  "usage": {
+    "title": "Storage",
+    "description": "How much disk and memory PlainBoard uses: per volume, per project and agent, and what all agents share. Folder sizes are measured in the background every few hours.",
+    "runnerDown": "The runner cannot be reached: only the app's own volumes are shown.",
+    "volumes": "Volumes",
+    "kind": {
+      "data": "Database",
+      "uploads": "Uploads",
+      "workspaces": "Workspaces",
+      "home": "Agent home"
+    },
+    "volumeFigures": "{{used}} of {{total}} used · {{free}} free",
+    "low": "Little room left. Free some space before agents stop because the disk is full.",
+    "memory": "Memory of the machine",
+    "memoryFigures": "{{used}} of {{total}} in use",
+    "data": "Database and key (data folder)",
+    "projects": "Projects and agents",
+    "disk": "Disk",
+    "ram": "Memory",
+    "uploads": "Uploads",
+    "projectOther": "Other in this project",
+    "projectsHint": "An agent's disk is its own workspace; its memory is what runs in it now: its turn, jobs and preview servers. \"Other\" is a folder all agents of the project share, folders of former agents and the clones its branches land in.",
+    "shared": "Shared by all agents",
+    "sharedRest_one": "{{count}} more",
+    "sharedRest_other": "{{count}} more",
+    "otherFolders": "Workspace folders of no project",
+    "otherMemory": "Memory of the runner itself and its browsers",
+    "sharedHint": "The agents' home: toolchains, caches and sign-ins. It serves every agent, so it is not counted for one.",
+    "measure": "Measure now",
+    "measuring": "Measuring folders…",
+    "measuredAt": "Folders measured {{when}}.",
+    "notMeasured": "Folders not measured yet.",
+    "agentFigures": "Disk of its workspace · memory of what runs in it now"
   }
 }

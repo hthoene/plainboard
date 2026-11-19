@@ -28,6 +28,7 @@ import type {
   TaskDetail,
   TodoPage,
   TodoState,
+  Usage,
 } from "./types";
 
 export const qk = {
@@ -38,6 +39,7 @@ export const qk = {
   meta: ["meta"] as const,
   settings: ["settings"] as const,
   limits: ["limits"] as const,
+  usage: ["usage"] as const,
   accounts: ["accounts"] as const,
   projects: ["projects"] as const,
   agents: (pid: number) => ["agents", pid] as const,
@@ -156,6 +158,16 @@ export const checks = {
   github: (token?: string) => api.post<CheckResult>("/settings/check/github", token ? { token } : {}),
   projectGithub: (pid: number) => api.post<CheckResult>(`/projects/${pid}/check-github`),
 };
+
+/** Disk and memory (admins only). Folder sizes change rarely; while they are measured, look more often. */
+export function useUsage(enabled = true) {
+  return useQuery({
+    queryKey: qk.usage,
+    queryFn: () => api.get<Usage>("/usage"),
+    enabled,
+    refetchInterval: (query) => (query.state.data?.measuring ? 15_000 : 120_000),
+  });
+}
 
 export function useLimits() {
   return useQuery({ queryKey: qk.limits, queryFn: () => api.get<Limits>("/limits"), refetchInterval: 30_000 });

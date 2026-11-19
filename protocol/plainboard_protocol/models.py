@@ -174,6 +174,47 @@ class JobState(BaseModel):
     tail: str = ""  # end of the output, once the job has finished
 
 
+class VolumeUsage(BaseModel):
+    """One file system: what the paths on it share."""
+
+    paths: list[str]
+    fsid: int = 0  # the same file system seen from two containers has the same id
+    total: int
+    used: int
+    free: int  # what a process that is not root can still write
+
+
+FolderKind = Literal["workspace", "shared", "train"]
+
+
+class FolderUsage(BaseModel):
+    """Disk use of one folder: an agent's workspace, a part of the shared home, a train's clone."""
+
+    path: str
+    kind: FolderKind
+    bytes: int
+
+
+class ProcessMemory(BaseModel):
+    """Memory of the processes working in one folder (by their own working directory or a parent's)."""
+
+    folder: str | None  # a workspace folder, at most two levels below the root, or a train's clone. None: the rest
+    bytes: int
+    processes: int
+
+
+class MachineUsage(BaseModel):
+    """Disk and memory of the runner's machine. Folders are measured in the background, rarely."""
+
+    volumes: list[VolumeUsage] = Field(default_factory=list)
+    folders: list[FolderUsage] = Field(default_factory=list)
+    measured_at: float | None = None  # unix time the folders were measured; None: not yet
+    measuring: bool = False
+    memory_total: int = 0
+    memory_used: int = 0  # of the machine: total minus what is available
+    memory: list[ProcessMemory] = Field(default_factory=list)
+
+
 class JobPort(BaseModel):
     """A port on which a running job answers as a web server."""
 

@@ -15,7 +15,6 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 from plainboard_protocol import CandidatesSpec, CleanupCandidate, CleanupResult, DeleteSpec, MachineUsage, VolumeUsage
@@ -185,7 +184,7 @@ def when_text(reason: str, f: Forecast, settings: dict[str, Any]) -> str:
 @dataclass
 class Item:
     candidate: CleanupCandidate
-    project_id: int | None  # None: in the shared home and nobody's to tell
+    project_id: int | None  # None: shared, nobody's (no manager may delete it)
     agent: Agent | None = None  # whose folder it is in
 
 
@@ -199,8 +198,12 @@ class Listing:
     folders: list  # the CleanupFolders sent to the runner
 
     def visible(self, project_id: int) -> list[Item]:
-        """What one project's manager may see and delete: its own, and the shared home's that is nobody's."""
-        return [i for i in self.items if i.project_id in (project_id, None)]
+        """What one project's manager may delete: only his project's (its agents' folders, home folders surely its own)."""
+        return [i for i in self.items if i.project_id == project_id]
+
+    def shared(self) -> list[Item]:
+        """What belongs to no project (caches, home folders of unknown owner): shown, deleted only by an admin or the emergency cleanup."""
+        return [i for i in self.items if i.project_id is None]
 
     def attribution(self) -> dict[str, int]:
         """Folder (as the runner measures it) → project."""
@@ -222,13 +225,10 @@ def _repo_key(url: str) -> str:
     return url.removesuffix("/").removesuffix(".git")
 
 
-def _owner(c: CleanupCandidate, projects: list[Project], repos: dict[str, int]) -> int | None:
-    found = {repos[k] for r in c.remotes if (k := _repo_key(r)) in repos}
-    if len(found) == 1:
-        return found.pop()
-    name = Path(c.path).name.lower()
-    by_name = [p.id for p in projects if len(p.slug) >= 3 and p.slug.lower() in name]
-    return by_name[0] if len(by_name) == 1 else None
+def _owner(c: CleanupCandidate, repos: dict[str, int | None]) -> int | None:
+    """A home folder is a project's only if every clone in it is of that project's repositories (and of no other's)."""
+    found = {repos.get(_repo_key(r)) for r in c.remotes}
+    return found.pop() if len(found) == 1 and None not in found else None
 
 
 async def listing(session: AsyncSession, runner, machine: MachineUsage | None = None) -> Listing:
@@ -236,7 +236,10 @@ async def listing(session: AsyncSession, runner, machine: MachineUsage | None = 
     root = get_config().workspaces_root.rstrip("/")
     projects = list(await session.scalars(select(Project).order_by(Project.id)))
     agents = list(await session.scalars(select(Agent)))
-    repos = {_repo_key(r.url): r.project_id for r in await session.scalars(select(Repository))}
+    repos: dict[str, int | None] = {}
+    for r in await session.scalars(select(Repository)):
+        key = _repo_key(r.url)
+        repos[key] = r.project_id if repos.get(key, r.project_id) == r.project_id else None  # in two projects: nobody's
     busy = await cleanup_service.busy_agents(session)
     turns = await cleanup_service.last_turns(session)
     await session.commit()  # no transaction stays open while the runner works
@@ -251,18 +254,18 @@ async def listing(session: AsyncSession, runner, machine: MachineUsage | None = 
             agent = next((a for path, a in by_folder.items() if c.path == path or c.path.startswith(path + "/")), None)
             items.append(Item(c, project.id if project else None, agent))
         else:
-            items.append(Item(c, _owner(c, projects, repos)))
+            items.append(Item(c, _owner(c, repos) if c.what == "home" else None))
     items.sort(key=lambda i: -i.candidate.bytes)
     return Listing(items, projects, agents, busy, machine, folders)
 
 
 def item_line(item: Item, project_id: int, busy: set[int]) -> str:
     c = item.candidate
-    what = {"build": "build output", "folder": "folder of a removed agent", "cache": "cache", "home": "folder in the shared home"}[c.what]
+    what = {"build": "build output", "folder": "folder of a removed agent", "cache": "cache", "home": "home folder"}[c.what]
     if item.agent is not None and c.what == "build":
         what += f" of {item.agent.name}"
-    if c.what == "home":
-        what += ", yours (by its clones or name)" if item.project_id == project_id else ", owner unknown"
+    if c.what in ("home", "cache"):
+        what += ", yours (its clones are of your repositories)" if item.project_id == project_id else ", shared"
     safety = c.safety
     if safety == "busy" and item.agent is not None and item.agent.id in busy:
         safety = f"busy: {item.agent.name} works now"
@@ -297,42 +300,57 @@ def tool_listing(listing: Listing, project: Project, f: Forecast | None, setting
     small = [i for i in items if i.candidate.bytes < SMALL]
     if small:
         lines.append(f"{len(small)} smaller ones, {format_bytes(sum(i.candidate.bytes for i in small))} together, not shown.")
-    if len(lines) <= 2:
-        lines.append("Nothing to delete.")
+    if not items:
+        lines.append("Nothing of your project to delete.")
+    lines += shared_lines(listing, project.id, 10)
     return "\n".join(lines)
 
 
-def project_sizes(listing: Listing, measures: list[tuple[float, dict[str, int]]]) -> tuple[dict[int, int], dict[int, int], float | None]:
-    """Per project: bytes in the last measurement, growth since the one before, and its age in hours."""
+def shared_lines(listing: Listing, project_id: int, count: int) -> list[str]:
+    found = [i for i in listing.shared() if i.candidate.bytes >= SMALL]
+    if not found:
+        return []
+    return [
+        f"Shared, not yours ({format_bytes(sum(i.candidate.bytes for i in found))}; no manager may delete these, tell the user if they matter: an admin cleans them up):",
+        *[item_line(i, project_id, listing.busy) for i in found[:count]],
+    ]
+
+
+def project_sizes(listing: Listing, measures: list[tuple[float, dict[str, int]]]) -> tuple[dict[int | None, int], dict[int | None, int], float | None]:
+    """Per project (None: shared, nobody's): bytes in the last measurement, growth since the one before, and its age in hours."""
     owner = listing.attribution()
-    size: dict[int, int] = defaultdict(int)
-    growth: dict[int, int] = defaultdict(int)
+    size: dict[int | None, int] = defaultdict(int)
+    growth: dict[int | None, int] = defaultdict(int)
     if not measures:
         return size, growth, None
     _, now = measures[-1]
     for path, n in now.items():
-        if path in owner:
-            size[owner[path]] += n
+        size[owner.get(path)] += n
     hours = None
     if len(measures) > 1:
         at, before = measures[-2]
         hours = (measures[-1][0] - at) / 3600
         for path, n in now.items():
-            if path in owner:
-                growth[owner[path]] += n - before.get(path, 0)
+            growth[owner.get(path)] += n - before.get(path, 0)
     return size, growth, hours
 
 
 def cause(listing: Listing, measures: list[tuple[float, dict[str, int]]]) -> tuple[Project | None, str]:
-    """The project that causes it: the biggest grower since the last measurement, else the biggest user."""
+    """Whose manager hears it: the project that grows most since the last measurement, else the one that
+    uses the most room. If the shared home grows most, that manager hears it as shared, to tell the user."""
     size, growth, hours = project_sizes(listing, measures)
     own = [p for p in listing.projects if not p.workspace_path] or listing.projects
-    grower = max(own, key=lambda p: (growth.get(p.id, 0), -p.id), default=None)
-    if grower is not None and growth.get(grower.id, 0) >= 2**30 and hours is not None:
-        return grower, f"{grower.name} grows most: +{format_bytes(growth[grower.id])} in the {_hours(hours)} between the last two measurements."
     user = max(own, key=lambda p: (size.get(p.id, 0) + sum(i.candidate.bytes for i in listing.items if i.project_id == p.id and i.candidate.what == "home"), -p.id), default=None)
     if user is None:
         return None, ""
+    grower = max(own, key=lambda p: (growth.get(p.id, 0), -p.id))
+    if hours is not None and growth.get(None, 0) >= 2**30 and growth.get(None, 0) > growth.get(grower.id, 0):
+        return user, (
+            f"Most of the growth is shared, in no project's folders: +{format_bytes(growth[None])} in the {_hours(hours)} between the last two measurements "
+            "(see Shared below). Tell the user now: only an admin can clean that up."
+        )
+    if hours is not None and growth.get(grower.id, 0) >= 2**30:
+        return grower, f"{grower.name} grows most: +{format_bytes(growth[grower.id])} in the {_hours(hours)} between the last two measurements."
     return user, f"{user.name} uses the most room: {format_bytes(size.get(user.id, 0))} in its folders."
 
 
@@ -348,14 +366,14 @@ def notice_text(reason: str, f: Forecast, settings: dict[str, Any], listing: Lis
         lines.append("Workspaces: " + ", ".join(f"{name} {format_bytes(n)}" for name, n in workspaces[:SHOWN] if n) + ".")
     items = [i for i in listing.visible(project.id) if i.candidate.safety != "keep" and i.candidate.bytes >= SMALL]
     if items:
-        lines.append("Biggest items that can go (list_cleanup shows all, delete_cleanup deletes):")
+        lines.append("Biggest items of your project that can go (list_cleanup shows all, delete_cleanup deletes):")
         lines += [item_line(i, project.id, listing.busy) for i in items[:SHOWN]]
+    lines += shared_lines(listing, project.id, 5)
     if names := busy_names(listing, project.id):
         lines.append("Busy now: " + ", ".join(names) + ".")
     lines.append(
         "Delete what is safe with delete_cleanup. Busy members' build outputs: delete anyway with force=true (their next build is slower) "
-        "or tell the member to clean up. Folders in the shared home of unknown owner: tell your members to delete their own scratch and "
-        "build folders there, or delete with force=true. If that is not enough, tell the user."
+        "or tell the member to clean up. You can delete only your project's data. If that is not enough, or shared folders are big, tell the user."
     )
     return "\n".join(lines)
 
@@ -455,7 +473,7 @@ def delete_text(result: CleanupResult, refused: list[str]) -> str:
     if result.skipped:
         lines.append("Not deleted: " + "; ".join(result.skipped[:20]) + ".")
     if refused:
-        lines.append("Not a cleanup candidate of this project (list_cleanup shows them): " + ", ".join(refused[:20]) + ".")
+        lines.append("Refused, not your project's (only its own data can be deleted; shared folders only by an admin): " + ", ".join(refused[:20]) + ".")
     return "\n".join(lines) or "Nothing deleted."
 
 

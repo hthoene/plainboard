@@ -48,7 +48,7 @@ function Thumbs({ ids, attachments, onView, small }: { ids: number[]; attachment
 
 function OpenDecision({ decision, attachments, onView }: { decision: Decision; attachments: Attachment[]; onView: (id: number) => void }) {
   const { t } = useTranslation();
-  const { project, agents, agentById, openChat } = useShell();
+  const { project, agents, agentById, openChat, canWrite } = useShell();
   const qc = useQueryClient();
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -94,16 +94,19 @@ function OpenDecision({ decision, attachments, onView }: { decision: Decision; a
                   <div className="font-medium">{option.label}</div>
                   {option.description && <Markdown className="text-fg-2">{option.description}</Markdown>}
                 </div>
-                <Button size="sm" className="shrink-0" disabled={busy} onClick={() => send(index)}>
-                  {t("decision.choose")}
-                </Button>
+                {canWrite && (
+                  <Button size="sm" className="shrink-0" disabled={busy} onClick={() => send(index)}>
+                    {t("decision.choose")}
+                  </Button>
+                )}
               </div>
             </div>
           ))}
         </div>
       )}
-      <Textarea rows={2} value={note} disabled={busy} placeholder={t(decision.options.length ? "decision.notePlaceholder" : "decision.answerPlaceholder")} onChange={(e) => setNote(e.target.value)} />
-      <div className="flex flex-wrap items-center justify-end gap-2">
+      {!canWrite && <p className="text-fg-3">{t("members.readOnlyShort")}</p>}
+      {canWrite && <Textarea rows={2} value={note} disabled={busy} placeholder={t(decision.options.length ? "decision.notePlaceholder" : "decision.answerPlaceholder")} onChange={(e) => setNote(e.target.value)} />}
+      {canWrite && <div className="flex flex-wrap items-center justify-end gap-2">
         {asker && (
           <Button size="sm" variant="ghost" icon={<MessageCircle className="size-3.5" />} onClick={() => openChat(asker.id)}>
             {t("decision.askInChat", { name: asker.name })}
@@ -112,7 +115,7 @@ function OpenDecision({ decision, attachments, onView }: { decision: Decision; a
         <Button size="sm" variant="primary" disabled={busy || !note.trim()} onClick={() => send(null)}>
           {t("decision.sendAnswer")}
         </Button>
-      </div>
+      </div>}
       <ErrorText error={error} />
     </div>
   );

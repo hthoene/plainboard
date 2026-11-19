@@ -13,7 +13,7 @@ import { useShell } from "../layout/shell-context";
 
 export function NotesView() {
   const { t } = useTranslation();
-  const { project, agentById } = useShell();
+  const { project, agentById, canWrite } = useShell();
   const qc = useQueryClient();
   const notes = useNotes(project.id);
   const [selected, setSelected] = useState<number | "new" | null>(null);
@@ -43,7 +43,7 @@ export function NotesView() {
             <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-fg-3" />
             <Input className="pl-8" placeholder={t("notes.search")} value={query} onChange={(e) => setQuery(e.target.value)} />
           </div>
-          <Button variant="primary" size="md" icon={<Plus className="size-4" />} onClick={() => open("new")} aria-label={t("notes.new")} />
+          {canWrite && <Button variant="primary" size="md" icon={<Plus className="size-4" />} onClick={() => open("new")} aria-label={t("notes.new")} />}
         </div>
         <ul className="scroll-thin flex-1 overflow-y-auto">
           {list.map((n) => (
@@ -110,7 +110,7 @@ export function NotesView() {
 
 function NoteEditor({ note, onSaved, onDeleted }: { note?: Note; onSaved: (n: Note) => void; onDeleted?: () => void }) {
   const { t } = useTranslation();
-  const { project } = useShell();
+  const { project, canWrite } = useShell();
   const [title, setTitle] = useState(note?.title ?? "");
   const [content, setContent] = useState(note?.content ?? "");
   const [pinned, setPinned] = useState(note?.pinned ?? false);
@@ -160,8 +160,14 @@ function NoteEditor({ note, onSaved, onDeleted }: { note?: Note; onSaved: (n: No
           )}
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <Toggle checked={pinned} onChange={togglePin} label={t("notes.pinned")} />
-          <span className="hidden text-fg-3 sm:inline">{t("notes.pinnedHint")}</span>
+          {canWrite ? (
+            <>
+              <Toggle checked={pinned} onChange={togglePin} label={t("notes.pinned")} />
+              <span className="hidden text-fg-3 sm:inline">{t("notes.pinnedHint")}</span>
+            </>
+          ) : (
+            pinned && <span className="text-fg-3">{t("notes.pinned")}</span>
+          )}
           <div className="flex-1" />
           {editing ? (
             <>
@@ -171,10 +177,12 @@ function NoteEditor({ note, onSaved, onDeleted }: { note?: Note; onSaved: (n: No
               </Button>
             </>
           ) : (
+            canWrite && (
             <>
               <Button onClick={() => setEditing(true)}>{t("common.edit")}</Button>
               <Button variant="danger" icon={<Trash2 className="size-3.5" />} onClick={remove} aria-label={t("common.delete")} />
             </>
+            )
           )}
         </div>
         <ErrorText error={error} />

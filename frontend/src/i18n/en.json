@@ -312,6 +312,7 @@
     "attachments": "Attachments",
     "upload": "Upload",
     "dropFiles": "Drop files here or paste images",
+    "noFiles": "No files",
     "assignments": "Assignments",
     "state": "Where it stands",
     "stateHint": "Kept by PlainBoard from the reports of the assignments: what is done, open, decided, and what was tried and dropped. Agents get it with every assignment on this ticket, so nothing is done twice.",
@@ -833,7 +834,8 @@
     "remove": "Remove",
     "none": "Nobody yet. Only admins see this project.",
     "nobodyElse": "Everyone with an account is a member. An admin adds further people under PlainBoard settings → People.",
-    "readOnly": "You are a viewer of this project: you can read everything and change nothing."
+    "readOnly": "You are a viewer of this project: you can read everything and change nothing.",
+    "readOnlyShort": "You can view this project but not change it."
   },
   "wizard": {
     "steps": "Steps",

@@ -20,7 +20,7 @@ const PRIORITIES: Priority[] = ["low", "medium", "high", "urgent"];
 
 export function TaskModal({ taskId, onClose }: { taskId: number; onClose: () => void }) {
   const { t } = useTranslation();
-  const { project } = useShell();
+  const { project, canWrite } = useShell();
   const qc = useQueryClient();
   const task = useTask(taskId);
   const [error, setError] = useState<unknown>(null);
@@ -92,7 +92,7 @@ export function TaskModal({ taskId, onClose }: { taskId: number; onClose: () => 
       title={
         <div className="flex items-center gap-2">
           <span className="font-normal text-fg-3">#{data.number}</span>
-          <TitleEditor value={data.title} onSave={(title) => patch({ title })} />
+          <TitleEditor value={data.title} onSave={(title) => patch({ title })} canWrite={canWrite} />
         </div>
       }
     >
@@ -100,20 +100,22 @@ export function TaskModal({ taskId, onClose }: { taskId: number; onClose: () => 
         <div className="mb-4 flex flex-wrap items-center gap-2 rounded-sm bg-sunk px-3 py-2 text-fg-2">
           <Archive className="size-4 shrink-0" />
           <span className="flex-1">{t("archive.archivedOn", { date: formatDateTime(data.archived_at) })}</span>
-          <Button size="sm" icon={<ArchiveRestore className="size-3.5" />} onClick={() => patch({ archived: false })}>
-            {t("archive.restore")}
-          </Button>
+          {canWrite && (
+            <Button size="sm" icon={<ArchiveRestore className="size-3.5" />} onClick={() => patch({ archived: false })}>
+              {t("archive.restore")}
+            </Button>
+          )}
         </div>
       )}
-      {data.user_action && <UserAction taskId={taskId} action={data.user_action} />}
+      {data.user_action && canWrite && <UserAction taskId={taskId} action={data.user_action} />}
       <div className="mb-6 empty:hidden">
         <Decisions decisions={data.decisions} attachments={data.attachments} onView={setViewing} />
       </div>
-      <div className="grid gap-6 md:grid-cols-[1fr_220px]" onPaste={onPaste}>
+      <div className="grid gap-6 md:grid-cols-[1fr_220px]" onPaste={canWrite ? onPaste : undefined}>
         <div className="min-w-0 space-y-6">
-          <DescriptionEditor value={data.description} onSave={(description) => patch({ description })} />
-          <CustomerTexts title={data.customer_title} description={data.customer_description} onSave={patch} />
-          <Attachments attachments={data.attachments} reviewIds={reviewAttachmentIds(data.decisions)} onUpload={upload} onView={setViewing} />
+          <DescriptionEditor value={data.description} onSave={(description) => patch({ description })} canWrite={canWrite} />
+          <CustomerTexts title={data.customer_title} description={data.customer_description} onSave={patch} canWrite={canWrite} />
+          <Attachments attachments={data.attachments} reviewIds={reviewAttachmentIds(data.decisions)} onUpload={upload} onView={setViewing} canWrite={canWrite} />
           {data.state && (
             <section>
               <SectionTitle right={data.state_updated_at && <span className="text-fg-3">{timeAgo(data.state_updated_at)}</span>}>{t("ticket.state")}</SectionTitle>
@@ -122,42 +124,56 @@ export function TaskModal({ taskId, onClose }: { taskId: number; onClose: () => 
               </div>
             </section>
           )}
-          <Assignments assignments={data.assignments} />
-          <Comments key={taskId} taskId={taskId} comments={data.comments} total={data.comment_count} />
+          <Assignments assignments={data.assignments} canWrite={canWrite} />
+          <Comments key={taskId} taskId={taskId} comments={data.comments} total={data.comment_count} canWrite={canWrite} />
         </div>
         <aside className="order-first space-y-4 md:order-none">
-          <Button variant="primary" className="w-full" icon={<Play className="size-3.5" />} onClick={handToManager} disabled={data.manager_active}>
-            {data.manager_active ? t("ticket.withManager") : t("ticket.handToManager")}
-          </Button>
-          <p className="-mt-2 text-fg-3">{t("ticket.handToManagerHint")}</p>
+          {canWrite && (
+            <>
+              <Button variant="primary" className="w-full" icon={<Play className="size-3.5" />} onClick={handToManager} disabled={data.manager_active}>
+                {data.manager_active ? t("ticket.withManager") : t("ticket.handToManager")}
+              </Button>
+              <p className="-mt-2 text-fg-3">{t("ticket.handToManagerHint")}</p>
+            </>
+          )}
           <SideField label={t("ticket.status")}>
-            <Select value={data.status} onChange={(e) => patch({ status: e.target.value as TaskStatus })}>
-              {STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {t(`taskStatus.${s}`)}
-                </option>
-              ))}
-            </Select>
+            {canWrite ? (
+              <Select value={data.status} onChange={(e) => patch({ status: e.target.value as TaskStatus })}>
+                {STATUSES.map((s) => (
+                  <option key={s} value={s}>
+                    {t(`taskStatus.${s}`)}
+                  </option>
+                ))}
+              </Select>
+            ) : (
+              <div>{t(`taskStatus.${data.status}`)}</div>
+            )}
           </SideField>
           <SideField label={t("ticket.priority")}>
-            <Select value={data.priority} onChange={(e) => patch({ priority: e.target.value as Priority })}>
-              {PRIORITIES.map((p) => (
-                <option key={p} value={p}>
-                  {t(`priority.${p}`)}
-                </option>
-              ))}
-            </Select>
+            {canWrite ? (
+              <Select value={data.priority} onChange={(e) => patch({ priority: e.target.value as Priority })}>
+                {PRIORITIES.map((p) => (
+                  <option key={p} value={p}>
+                    {t(`priority.${p}`)}
+                  </option>
+                ))}
+              </Select>
+            ) : (
+              <div>{t(`priority.${data.priority}`)}</div>
+            )}
           </SideField>
           <SideField label={t("ticket.labels")}>
-            <LabelsEditor value={data.labels} onSave={(labels) => patch({ labels })} />
+            <LabelsEditor value={data.labels} onSave={(labels) => patch({ labels })} canWrite={canWrite} />
           </SideField>
           <div className="space-y-1 border-t border-line pt-3 text-fg-3">
             <div>{t("ticket.created", { when: timeAgo(data.created_at) })}</div>
             <div>{t("ticket.updated", { when: timeAgo(data.updated_at) })}</div>
           </div>
-          <Button variant="danger" size="sm" icon={<Trash2 className="size-3.5" />} onClick={remove}>
-            {t("common.delete")}
-          </Button>
+          {canWrite && (
+            <Button variant="danger" size="sm" icon={<Trash2 className="size-3.5" />} onClick={remove}>
+              {t("common.delete")}
+            </Button>
+          )}
           <ErrorText error={error} />
         </aside>
       </div>
@@ -236,9 +252,10 @@ function SectionTitle({ children, right }: { children: ReactNode; right?: ReactN
   );
 }
 
-function TitleEditor({ value, onSave }: { value: string; onSave: (v: string) => void }) {
+function TitleEditor({ value, onSave, canWrite }: { value: string; onSave: (v: string) => void; canWrite: boolean }) {
   const [draft, setDraft] = useState(value);
   useEffect(() => setDraft(value), [value]);
+  if (!canWrite) return <span className="min-w-0 flex-1 px-1 py-0.5">{value}</span>;
   return (
     <input
       value={draft}
@@ -250,12 +267,22 @@ function TitleEditor({ value, onSave }: { value: string; onSave: (v: string) => 
   );
 }
 
-function CustomerTexts({ title, description, onSave }: { title: string; description: string; onSave: (body: { customer_title?: string; customer_description?: string }) => void }) {
+function CustomerTexts({ title, description, onSave, canWrite }: { title: string; description: string; onSave: (body: { customer_title?: string; customer_description?: string }) => void; canWrite: boolean }) {
   const { t } = useTranslation();
   const [draftTitle, setDraftTitle] = useState(title);
   const [draftDescription, setDraftDescription] = useState(description);
   useEffect(() => setDraftTitle(title), [title]);
   useEffect(() => setDraftDescription(description), [description]);
+  if (!canWrite) {
+    if (!title && !description) return null;
+    return (
+      <section className="space-y-1">
+        <SectionTitle>{t("ticket.customerSection")}</SectionTitle>
+        {title && <p className="font-medium">{title}</p>}
+        {description && <p className="whitespace-pre-wrap">{description}</p>}
+      </section>
+    );
+  }
   return (
     <section className="space-y-2">
       <SectionTitle>{t("ticket.customerSection")}</SectionTitle>
@@ -281,7 +308,7 @@ function CustomerTexts({ title, description, onSave }: { title: string; descript
   );
 }
 
-function DescriptionEditor({ value, onSave }: { value: string; onSave: (v: string) => void }) {
+function DescriptionEditor({ value, onSave, canWrite }: { value: string; onSave: (v: string) => void; canWrite: boolean }) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(!value);
   const [draft, setDraft] = useState(value);
@@ -291,7 +318,8 @@ function DescriptionEditor({ value, onSave }: { value: string; onSave: (v: strin
     <section>
       <SectionTitle
         right={
-          !editing && (
+          !editing &&
+          canWrite && (
             <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
               {t("common.edit")}
             </Button>
@@ -300,7 +328,7 @@ function DescriptionEditor({ value, onSave }: { value: string; onSave: (v: strin
       >
         {t("ticket.description")}
       </SectionTitle>
-      {editing ? (
+      {editing && canWrite ? (
         <div className="space-y-2">
           <Textarea autoFocus={!!value} rows={8} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={t("ticket.descriptionPlaceholder")} className="font-mono" />
           <div className="flex gap-2">
@@ -326,7 +354,7 @@ function DescriptionEditor({ value, onSave }: { value: string; onSave: (v: strin
           </div>
         </div>
       ) : (
-        <div onDoubleClick={() => setEditing(true)} className="rounded-sm">
+        <div onDoubleClick={canWrite ? () => setEditing(true) : undefined} className="rounded-sm">
           <Markdown>{value}</Markdown>
         </div>
       )}
@@ -334,7 +362,7 @@ function DescriptionEditor({ value, onSave }: { value: string; onSave: (v: strin
   );
 }
 
-function LabelsEditor({ value, onSave }: { value: string[]; onSave: (v: string[]) => void }) {
+function LabelsEditor({ value, onSave, canWrite }: { value: string[]; onSave: (v: string[]) => void; canWrite: boolean }) {
   const { t } = useTranslation();
   const { project } = useShell();
   const [draft, setDraft] = useState("");
@@ -350,14 +378,16 @@ function LabelsEditor({ value, onSave }: { value: string[]; onSave: (v: string[]
           {value.map((label) => (
             <span key={label} className="inline-flex items-center gap-1 rounded-sm py-px pr-0.5 pl-1.5 ring-1 ring-line-2 ring-inset">
               <Label colors={project.label_colors} label={label} className="text-fg" />
-              <button type="button" onClick={() => onSave(value.filter((l) => l !== label))} aria-label={t("common.remove")} className="rounded-sm p-0.5 text-fg-3 hover:bg-sunk hover:text-fg">
-                <X className="size-3.5" />
-              </button>
+              {canWrite && (
+                <button type="button" onClick={() => onSave(value.filter((l) => l !== label))} aria-label={t("common.remove")} className="rounded-sm p-0.5 text-fg-3 hover:bg-sunk hover:text-fg">
+                  <X className="size-3.5" />
+                </button>
+              )}
             </span>
           ))}
         </div>
       )}
-      <Input value={draft} placeholder={t("ticket.addLabel")} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} onBlur={add} />
+      {canWrite && <Input value={draft} placeholder={t("ticket.addLabel")} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} onBlur={add} />}
     </div>
   );
 }
@@ -367,11 +397,13 @@ function Attachments({
   reviewIds,
   onUpload,
   onView,
+  canWrite,
 }: {
   attachments: Attachment[];
   reviewIds: Set<number>;
   onUpload: (files: FileList) => void;
   onView: (id: number) => void;
+  canWrite: boolean;
 }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
@@ -392,25 +424,31 @@ function Attachments({
     <section>
       <SectionTitle
         right={
-          <Button size="sm" variant="ghost" icon={<Upload className="size-3.5" />} onClick={() => input.current?.click()}>
-            {t("ticket.upload")}
-          </Button>
+          canWrite && (
+            <Button size="sm" variant="ghost" icon={<Upload className="size-3.5" />} onClick={() => input.current?.click()}>
+              {t("ticket.upload")}
+            </Button>
+          )
         }
       >
         {t("ticket.attachments")}
       </SectionTitle>
       <input ref={input} type="file" multiple hidden onChange={(e) => e.target.files && onUpload(e.target.files)} />
       <div
-        onDragOver={(e) => {
-          e.preventDefault();
-          setOver(true);
-        }}
-        onDragLeave={() => setOver(false)}
-        onDrop={onDrop}
-        className={clsx("rounded-sm border border-dashed p-2 transition-colors", over ? "border-fg bg-sunk" : "border-line")}
+        onDragOver={
+          canWrite
+            ? (e) => {
+                e.preventDefault();
+                setOver(true);
+              }
+            : undefined
+        }
+        onDragLeave={canWrite ? () => setOver(false) : undefined}
+        onDrop={canWrite ? onDrop : undefined}
+        className={clsx("rounded-sm p-2 transition-colors", canWrite && "border border-dashed", over ? "border-fg bg-sunk" : "border-line")}
       >
         {attachments.length === 0 ? (
-          <p className="py-3 text-center text-fg-3">{t("ticket.dropFiles")}</p>
+          <p className="py-3 text-center text-fg-3">{t(canWrite ? "ticket.dropFiles" : "ticket.noFiles")}</p>
         ) : (
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {attachments.map((a) => (
@@ -432,9 +470,11 @@ function Attachments({
                     {t("ticket.forReview")}
                   </Badge>
                 )}
-                <IconButton label={t("common.delete")} onClick={() => remove(a)} className="absolute top-1 right-1 bg-bg opacity-0 group-hover:opacity-100">
-                  <Trash2 className="size-3.5" />
-                </IconButton>
+                {canWrite && (
+                  <IconButton label={t("common.delete")} onClick={() => remove(a)} className="absolute top-1 right-1 bg-bg opacity-0 group-hover:opacity-100">
+                    <Trash2 className="size-3.5" />
+                  </IconButton>
+                )}
               </div>
             ))}
           </div>
@@ -446,7 +486,7 @@ function Attachments({
 
 const assignmentTone = { queued: "amber", running: "indigo", done: "green", failed: "red", cancelled: "zinc" } as const;
 
-function Assignments({ assignments }: { assignments: Assignment[] }) {
+function Assignments({ assignments, canWrite }: { assignments: Assignment[]; canWrite: boolean }) {
   const { t } = useTranslation();
   const { agentById, openChat } = useShell();
   const [open, setOpen] = useState<number | null>(null);
@@ -490,7 +530,7 @@ function Assignments({ assignments }: { assignments: Assignment[] }) {
                         {t("ticket.openAgentChat")}
                       </Button>
                     )}
-                    {(a.status === "queued" || a.status === "running") && (
+                    {canWrite && (a.status === "queued" || a.status === "running") && (
                       <Button size="sm" variant="danger" onClick={() => api.post(`/assignments/${a.id}/cancel`)}>
                         {t("common.cancel")}
                       </Button>
@@ -515,7 +555,7 @@ function mergeComments(a: Comment[], b: Comment[]) {
 }
 
 // The ticket only carries the newest comments; older ones are paged in on demand.
-function Comments({ taskId, comments, total }: { taskId: number; comments: Comment[]; total: number }) {
+function Comments({ taskId, comments, total, canWrite }: { taskId: number; comments: Comment[]; total: number; canWrite: boolean }) {
   const { t } = useTranslation();
   const { agentById } = useShell();
   const qc = useQueryClient();
@@ -583,6 +623,7 @@ function Comments({ taskId, comments, total }: { taskId: number; comments: Comme
             </div>
           );
         })}
+        {canWrite ? (
         <div className="flex items-end gap-2">
           <Textarea
             rows={2}
@@ -597,6 +638,9 @@ function Comments({ taskId, comments, total }: { taskId: number; comments: Comme
             <Send className="size-4" />
           </IconButton>
         </div>
+        ) : (
+          <p className="text-fg-3">{t("members.readOnlyShort")}</p>
+        )}
         {error && <p className="text-you-fg">{error}</p>}
       </div>
     </section>

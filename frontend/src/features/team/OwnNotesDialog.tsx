@@ -23,6 +23,7 @@ function useRefresh(agentId: number) {
 
 export function OwnNotesDialog({ agent, onClose }: { agent: Agent; onClose: () => void }) {
   const { t } = useTranslation();
+  const { canWrite } = useShell();
   const notes = useOwnNotes(agent.id);
   const refresh = useRefresh(agent.id);
   const [text, setText] = useState("");
@@ -49,7 +50,7 @@ export function OwnNotesDialog({ agent, onClose }: { agent: Agent; onClose: () =
   return (
     <Modal open onClose={onClose} width="max-w-2xl" title={t("ownNotes.title", { name: agent.name })}>
       <p className="mb-3 text-fg-3">{t("ownNotes.hint")}</p>
-      <div className="mb-4 space-y-2 rounded-sm p-3 ring-1 ring-line">
+      {canWrite && <div className="mb-4 space-y-2 rounded-sm p-3 ring-1 ring-line">
         <Textarea rows={2} value={text} maxLength={MAX_NOTE} placeholder={t("ownNotes.new", { name: agent.name })} onChange={(e) => setText(e.target.value)} />
         <div className="flex items-center justify-between gap-2">
           <span className="text-fg-3">{t("ownNotes.used", { used, budget: BUDGET })}</span>
@@ -58,7 +59,7 @@ export function OwnNotesDialog({ agent, onClose }: { agent: Agent; onClose: () =
           </Button>
         </div>
         {error && <p className="text-you-fg">{error}</p>}
-      </div>
+      </div>}
       {notes.isPending ? (
         <div className="flex justify-center py-6">
           <Spinner />
@@ -78,7 +79,7 @@ export function OwnNotesDialog({ agent, onClose }: { agent: Agent; onClose: () =
 
 function NoteItem({ note }: { note: OwnNote }) {
   const { t } = useTranslation();
-  const { agentById } = useShell();
+  const { agentById, canWrite } = useShell();
   const refresh = useRefresh(note.agent_id);
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(note.text);
@@ -107,7 +108,7 @@ function NoteItem({ note }: { note: OwnNote }) {
 
   return (
     <div className="rounded-sm px-2 py-2 hover:bg-sunk">
-      {editing ? (
+      {editing && canWrite ? (
         <div className="space-y-2">
           <Textarea rows={3} value={text} maxLength={MAX_NOTE} onChange={(e) => setText(e.target.value)} />
           <div className="flex justify-end gap-2">
@@ -126,20 +127,24 @@ function NoteItem({ note }: { note: OwnNote }) {
             <span className="flex-1">
               {creator ? t("ownNotes.byAgent", { name: creator.name }) : t("ownNotes.byUser")} · {timeAgo(note.updated_at)}
             </span>
-            <Button
-              size="sm"
-              variant="ghost"
-              icon={<Pencil className="size-3.5" />}
-              onClick={() => {
-                setText(note.text);
-                setEditing(true);
-              }}
-            >
-              {t("ownNotes.edit")}
-            </Button>
-            <Button size="sm" variant="ghost" icon={<Trash2 className="size-3.5" />} onClick={remove}>
-              {t("ownNotes.delete")}
-            </Button>
+            {canWrite && (
+              <>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  icon={<Pencil className="size-3.5" />}
+                  onClick={() => {
+                    setText(note.text);
+                    setEditing(true);
+                  }}
+                >
+                  {t("ownNotes.edit")}
+                </Button>
+                <Button size="sm" variant="ghost" icon={<Trash2 className="size-3.5" />} onClick={remove}>
+                  {t("ownNotes.delete")}
+                </Button>
+              </>
+            )}
           </div>
         </>
       )}

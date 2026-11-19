@@ -174,7 +174,7 @@ export function ChatPanel({
           agentId={agentId}
           cost={agent.total_cost_usd}
           context={`${formatTokens(conversation.data?.context_tokens ?? agent.context_tokens)} / ${formatTokens(agent.context_limit_tokens)}`}
-          disabled={!!running}
+          disabled={!!running || !canWrite}
         />
         {onExpand && (
           <IconButton label={t("chat.expand")} onClick={onExpand}>
@@ -216,12 +216,13 @@ export function ChatPanel({
         </div>
       </div>
 
+      {canWrite ? (
       <Composer
         seed={seed}
         agentId={agentId}
         agentName={agent.name}
         runningId={running?.id}
-        disabled={!agent.enabled || !canWrite}
+        disabled={!agent.enabled}
         className={column}
         status={
           activeRuns.length > 0
@@ -235,6 +236,9 @@ export function ChatPanel({
         files={files}
         onFilesChange={setFiles}
       />
+      ) : (
+        <p className={clsx(column, "shrink-0 border-t border-line py-3 text-fg-3")}>{t("members.readOnlyShort")}</p>
+      )}
     </div>
   );
 }

@@ -44,7 +44,8 @@ export function ModelSelect({ provider, value, onChange }: { provider?: Provider
 
 export function AgentEditor({ agent, onClose }: { agent?: Agent; onClose: () => void }) {
   const { t } = useTranslation();
-  const { project } = useShell();
+  const { project, canWrite } = useShell();
+  const readOnly = !canWrite;
   const qc = useQueryClient();
   const meta = useMeta();
   const settings = useSettings();
@@ -124,6 +125,9 @@ export function AgentEditor({ agent, onClose }: { agent?: Agent; onClose: () => 
       onClose={onClose}
       title={agent ? agent.name : t("team.add")}
       footer={
+        readOnly ? (
+          <Button onClick={onClose}>{t("common.close")}</Button>
+        ) : (
         <>
           {agent && !agent.is_manager && (
             <Button variant="danger" className="mr-auto" onClick={remove}>
@@ -135,8 +139,10 @@ export function AgentEditor({ agent, onClose }: { agent?: Agent; onClose: () => 
             {agent ? t("common.save") : t("team.create")}
           </Button>
         </>
+        )
       }
     >
+      <fieldset disabled={readOnly} className="contents">
       <div className="space-y-5">
         <div className="grid gap-4 sm:grid-cols-[1fr_1fr_auto]">
           <Field label={t("team.name")}>
@@ -303,6 +309,7 @@ export function AgentEditor({ agent, onClose }: { agent?: Agent; onClose: () => 
         </details>
         <ErrorText error={error} />
       </div>
+      </fieldset>
     </Modal>
   );
 }

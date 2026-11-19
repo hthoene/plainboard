@@ -13,6 +13,8 @@ export interface ShellApi {
   previews: Preview[];
   openChat: (agentId: number) => void;
   openTask: (taskId: number) => void;
+  /** PlainBoard settings, at a section (admins only: others see no settings). */
+  openSettings: (section?: string) => void;
   /** Show an address of the agents' environment (e.g. http://localhost:5173/) in the browser window. */
   openBrowser: (address: string) => void;
 }

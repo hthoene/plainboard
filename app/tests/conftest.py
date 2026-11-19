@@ -470,6 +470,8 @@ def client(tmp_path, monkeypatch):
         test_client.app_ref = app
         # A fresh installation has no users: its first admin is who the tests work as.
         assert test_client.post("/api/auth/setup", json={"username": "admin", "name": "Admin", "password": ADMIN_PASSWORD}).status_code == 201
+        # Direct messages to members are off by default; most tests write to members, so they start with it on.
+        assert test_client.put("/api/settings", json={"values": {"member_chat": True}}).status_code == 200
         yield test_client
     config.get_config.cache_clear()
     assert not FakeRunner.held, f"The runner was called between a write to the database and its commit: {sorted(set(FakeRunner.held))}"

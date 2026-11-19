@@ -46,6 +46,8 @@ SETTINGS: dict[str, SettingDef] = {
     # Up to how many parallel agents a manager may set for its project (0: managers can't change it).
     "manager_parallel_limit": SettingDef(6),
     "timezone": SettingDef("Europe/Berlin"),
+    # The user may also write to members, not only to the manager (api/chat.py). Agents among themselves are not affected.
+    "member_chat": SettingDef(False),
     "update_check": SettingDef(True),  # ask now and then whether a newer PlainBoard exists
     # The admin has gone through the basic settings once (the set-up in the browser). Until then the UI asks for them.
     "setup_done": SettingDef(False),

@@ -36,8 +36,8 @@ def test_runs_report_plan_limits_per_account(client, project):
     creds = turn(client, pid, dev["id"], "LIMITS five_hour 0.9 3600\nLIMITS seven_day_opus 0.4 3600\nLIMITS seven_day 0.7 -10")
     assert (creds.claude_auth_mode, creds.claude_oauth_token) == ("oauth_token", "tok-a")
     body = limits_of(client, claude["id"])
-    # The weekly window has reset; Claude's old 5-hour window is not shown any more.
-    assert {w["name"]: w["utilization"] for w in body["windows"]} == {"seven_day_opus": 0.4, "seven_day": 0.0} and body["updated_at"]
+    # The weekly window has reset.
+    assert {w["name"]: w["utilization"] for w in body["windows"]} == {"five_hour": 0.9, "seven_day_opus": 0.4, "seven_day": 0.0} and body["updated_at"]
     # A report that lists all windows forgets the ones it leaves out: a plan that dropped a limit.
     turn(client, pid, dev["id"], "LIMITS seven_day 0.1 3600 ALL")
     assert [w["name"] for w in limits_of(client, claude["id"])["windows"]] == ["seven_day"]
@@ -97,6 +97,31 @@ def test_turns_go_to_the_subscription_with_room(client, project):
     assert turn(client, pid, dev["id"]).anthropic_api_key == "sk-paid"  # pinned
     client.delete(f"/api/accounts/{paid['id']}")
     assert agents_by_slug(client, pid)["dev"]["account_id"] is None
+
+
+def test_a_turn_turned_away_by_a_used_up_limit_runs_on_another_subscription(client, project):
+    pid = project["id"]
+    first = accounts(client)["Claude"]
+    client.patch(f"/api/accounts/{first['id']}", json={"auth_mode": "oauth_token", "secret": "tok-a"})
+    client.post("/api/accounts", json={"provider": "claude_code", "label": "Second", "auth_mode": "oauth_token", "secret": "tok-b"})
+    dev = make_dev(client, pid)
+    assert turn(client, pid, dev["id"]).claude_oauth_token == "tok-a"
+
+    # The first one hits its 5-hour limit: the same turn runs again on the second one, and succeeds.
+    specs = len(runner(client).specs)
+    assert turn(client, pid, dev["id"], "REJECT tok-a five_hour 3600\nSAY done").claude_oauth_token == "tok-b"
+    assert [s.credentials.claude_oauth_token for s in runner(client).specs[specs:]] == ["tok-a", "tok-b"]
+    last = client.get(f"/api/projects/{pid}/runs?limit=1").json()[0]
+    assert last["status"] == "succeeded" and "done" in last["result_text"]
+    assert next(w for w in limits_of(client, first["id"])["windows"] if w["name"] == "five_hour")["status"] == "rejected"
+    # The following turns stay off it until the reset.
+    assert turn(client, pid, dev["id"]).claude_oauth_token == "tok-b"
+
+    # Both used up: the turn fails with the provider's message, as before.
+    specs = len(runner(client).specs)
+    turn(client, pid, dev["id"], "REJECT tok-b five_hour 3600")
+    assert len(runner(client).specs) == specs + 1
+    assert client.get(f"/api/projects/{pid}/runs?limit=1").json()[0]["status"] == "failed"
 
 
 def test_codex_accounts_have_their_own_sign_in(client, project):

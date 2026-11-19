@@ -544,8 +544,9 @@ def test_rate_limit_events_become_limit_windows():
 
     raw = {"unifiedWindows": {"five_hour": {"utilization": 0.4, "resetsAt": 100}, "seven_day": {"utilization": 0.1, "resetsAt": 200}}}
     windows = limit_windows(RateLimitInfo(status="allowed", raw=raw))
-    assert [(w.name, w.utilization, w.resets_at) for w in windows] == [("seven_day", 0.1, 200)]  # Claude has no 5-hour limit any more
-    assert limit_windows(RateLimitInfo(status="rejected", rate_limit_type="five_hour", resets_at=5)) == []
+    assert [(w.name, w.utilization, w.resets_at) for w in windows] == [("five_hour", 0.4, 100), ("seven_day", 0.1, 200)]
+    hit = limit_windows(RateLimitInfo(status="rejected", rate_limit_type="five_hour", resets_at=5))
+    assert [(w.name, w.utilization, w.resets_at, w.status) for w in hit] == [("five_hour", 1.0, 5, "rejected")]
     hit = limit_windows(RateLimitInfo(status="rejected", rate_limit_type="seven_day", resets_at=5))
     assert [(w.name, w.utilization, w.status) for w in hit] == [("seven_day", 1.0, "rejected")]
     assert limit_windows(RateLimitInfo(status="allowed")) == []
@@ -563,9 +564,35 @@ def test_usage_answer_becomes_limit_windows():
         "seven_day_sonnet": {"utilization": None, "resets_at": None},
         "seven_day_opus": None,
     }
-    (window,) = usage_windows(answer)
-    assert (window.name, window.utilization, window.resets_at) == ("seven_day", 0.4, int(datetime(2026, 10, 30, 12, tzinfo=UTC).timestamp()))
+    five, week = usage_windows(answer)
+    assert (five.name, five.utilization, five.resets_at) == ("five_hour", 0.1, None)
+    assert (week.name, week.utilization, week.resets_at) == ("seven_day", 0.4, int(datetime(2026, 10, 30, 12, tzinfo=UTC).timestamp()))
     assert usage_windows(None) == []
+
+
+def test_a_turn_turned_away_by_a_used_up_limit_reports_the_window():
+    from datetime import UTC, datetime
+
+    from claude_agent_sdk import ResultMessage
+    from claude_agent_sdk.types import RateLimitEvent, RateLimitInfo
+
+    from plainboard_runner.providers.claude_code import EventMapper, limit_hit
+
+    now = datetime(2026, 11, 19, 15, 38, tzinfo=UTC)
+    hit = limit_hit("You've hit your 5-hour limit · resets 7:10pm (UTC)", now)
+    assert (hit.name, hit.utilization, hit.status, hit.resets_at) == ("five_hour", 1.0, "rejected", int(datetime(2026, 11, 19, 19, 10, tzinfo=UTC).timestamp()))
+    assert limit_hit("You've hit your weekly limit · resets 2am (UTC)", now).resets_at == int(datetime(2026, 11, 20, 2, tzinfo=UTC).timestamp())
+    assert limit_hit("Claude AI usage limit reached|1795200000", now).resets_at == 1795200000
+    assert limit_hit("API Error: 500", now) is None and limit_hit(None) is None
+
+    def result(error: str) -> ResultMessage:
+        return ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=True, num_turns=0, session_id="s", result=error)
+
+    events = EventMapper().map(result("You've hit your 5-hour limit · resets 7:10pm (UTC)"))
+    assert [e.type for e in events] == ["limits", "result"] and events[0].windows[0].status == "rejected"
+    mapper = EventMapper()  # Claude Code reported the window itself: it is not reported twice
+    mapper.map(RateLimitEvent(rate_limit_info=RateLimitInfo(status="rejected", rate_limit_type="five_hour", resets_at=5), uuid="u", session_id="s"))
+    assert [e.type for e in mapper.map(result("You've hit your 5-hour limit · resets 7:10pm (UTC)"))] == ["result"]
 
 
 async def test_a_repository_uses_its_own_access(workspaces, tmp_path, monkeypatch):

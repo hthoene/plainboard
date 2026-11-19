@@ -1,7 +1,7 @@
 """The plan limits of every provider account as last reported. Reading them costs no tokens, or
 for a Claude subscription signed in with a token a handful (the runner asks with a minimal turn).
 
-Stored per account key. Window names: Claude's as it reports them (seven_day, seven_day_opus ...),
+Stored per account key. Window names: Claude's as it reports them (five_hour, seven_day, seven_day_opus ...),
 Codex's prefixed with codex_.
 """
 
@@ -22,7 +22,6 @@ from ..schemas import AccountLimits, LimitForecast, LimitsOut
 KEY = "provider_limits"
 DAY = 86400
 WEEKLY_MARK = "seven_day"
-RETIRED = {"five_hour"}  # Claude dropped its 5-hour limit; a window stored from before is not shown
 WEEK_DAYS = 7
 MIN_HISTORY_DAYS = 3
 TIGHT_ABOVE = 0.9
@@ -119,8 +118,6 @@ async def record(session: AsyncSession, account_key: str, windows: list[LimitWin
     for stored_window in known.values():  # stored before windows knew when they were last reported
         stored_window.setdefault("seen_at", stored.get("updated_at") or 0)
     known.update({w.name: {**w.model_dump(), "seen_at": int(now)} for w in windows})
-    for name in RETIRED:
-        known.pop(name, None)
     accounts[account_key] = {"windows": known, "growth": growth, "updated_at": int(now)}
     row.value = json.dumps({"accounts": accounts})
     session.add(row)
@@ -137,7 +134,7 @@ def _windows(stored: dict, now: float) -> list[LimitWindow]:
     models), and a plan can be reset before a window's own reset time. An account that is avoided
     because of such a window would never get the request that reports it afresh. If the limit
     still holds, the first request that touches it brings it back."""
-    kept = [w for w in stored.get("windows", {}).values() if w["name"] not in RETIRED]
+    kept = list(stored.get("windows", {}).values())
     newest = max((w.get("seen_at") or 0 for w in kept), default=0)
     windows = [LimitWindow(**{k: v for k, v in w.items() if k != "seen_at"}) for w in kept if newest - (w.get("seen_at") or newest) < UNREPORTED_SECONDS]
     for window in windows:

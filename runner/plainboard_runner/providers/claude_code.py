@@ -9,8 +9,9 @@ from __future__ import annotations
 import asyncio
 import collections
 import logging
+import re
 import time
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -89,8 +90,10 @@ MODELS = [
     ModelInfo(id="claude-fable-5-1", label="Claude Fable 5.1", tier="xlarge"),
 ]
 EFFORTS = ["low", "medium", "high", "xhigh", "max"]
-# Claude no longer has a 5-hour limit; a report of it is ignored.
-RETIRED_WINDOWS = {"five_hour"}
+# What Claude Code says when a turn is turned away because a plan limit is used up, e.g. "You've hit
+# your 5-hour limit · resets 7:10pm (UTC)", or in older versions "Claude AI usage limit reached|<unix time>".
+LIMIT_HIT = re.compile(r"hit your (?P<kind>[\w -]*?)\s*limit|usage limit reached(?:\|(?P<at>\d+))?", re.IGNORECASE)
+LIMIT_RESET = re.compile(r"resets (?:at )?(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<half>[ap]m)?(?:\s*\((?P<zone>[^)]+)\))?", re.IGNORECASE)
 
 
 def auth_env(creds: Credentials) -> dict[str, str]:
@@ -211,11 +214,10 @@ def limit_windows(info: RateLimitInfo) -> list[LimitWindow]:
     windows = {
         name: LimitWindow(name=name, utilization=window["utilization"], resets_at=window.get("resetsAt"), status=window.get("status"))
         for name, window in (info.raw.get("unifiedWindows") or {}).items()
-        if name not in RETIRED_WINDOWS
     }
     kind = info.rate_limit_type
     known = info.utilization is not None or info.status == "rejected"
-    if kind and kind != "overage" and kind not in RETIRED_WINDOWS and kind not in windows and known:
+    if kind and kind != "overage" and kind not in windows and known:
         used = info.utilization if info.utilization is not None else 1.0
         windows[kind] = LimitWindow(name=kind, utilization=used, resets_at=info.resets_at, status=info.status)
     return list(windows.values())
@@ -224,12 +226,44 @@ def limit_windows(info: RateLimitInfo) -> list[LimitWindow]:
 def usage_windows(rate_limits: dict[str, Any] | None) -> list[LimitWindow]:
     """Limit windows from Claude Code's usage answer, which has percentages and ISO dates."""
     windows = []
-    for name in ("seven_day", "seven_day_opus", "seven_day_sonnet"):
+    for name in ("five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet"):
         window = (rate_limits or {}).get(name) or {}
         if window.get("utilization") is not None:
             resets = window.get("resets_at")
             windows.append(LimitWindow(name=name, utilization=window["utilization"] / 100, resets_at=int(datetime.fromisoformat(resets).timestamp()) if resets else None))
     return windows
+
+
+def _reset_time(text: str, now: datetime) -> int | None:
+    """The next time of day named in "resets 7:10pm (UTC)", as unix seconds."""
+    from zoneinfo import ZoneInfo
+
+    if not (found := LIMIT_RESET.search(text)):
+        return None
+    hour, minute = int(found["hour"]), int(found["minute"] or 0)
+    if found["half"]:
+        hour = hour % 12 + (12 if found["half"].lower() == "pm" else 0)
+    if hour > 23 or minute > 59:
+        return None
+    try:
+        zone = ZoneInfo(found["zone"].strip()) if found["zone"] else UTC
+    except Exception:
+        zone = UTC
+    local = now.astimezone(zone)
+    at = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if at <= local:
+        at += timedelta(days=1)
+    return int(at.timestamp())
+
+
+def limit_hit(error: str | None, now: datetime | None = None) -> LimitWindow | None:
+    """The window a turn was turned away by, from Claude Code's error text; None for another error."""
+    if not error or not (found := LIMIT_HIT.search(error)):
+        return None
+    kind = (found["kind"] or "").lower()
+    name = "five_hour" if "5-hour" in kind or "five" in kind else "seven_day_opus" if "opus" in kind else "seven_day_sonnet" if "sonnet" in kind else "seven_day" if "week" in kind else "five_hour"
+    resets = int(found["at"]) if found["at"] else _reset_time(error, now or datetime.now(UTC))
+    return LimitWindow(name=name, utilization=1.0, resets_at=resets, status="rejected")
 
 
 class UrgentNoticeWatch:
@@ -329,6 +363,7 @@ class EventMapper:
     def __init__(self) -> None:
         self.context_tokens = 0
         self.last_text: str | None = None
+        self.rejected = False  # Claude reported a used-up limit in this turn
 
     def map(self, message: Any) -> list[RunEvent]:
         events: list[RunEvent] = []
@@ -339,6 +374,7 @@ class EventMapper:
                 events.append(TextDeltaEvent(text=delta.get("text", "")))
         elif isinstance(message, RateLimitEvent):
             if windows := limit_windows(message.rate_limit_info):
+                self.rejected = self.rejected or any(w.status == "rejected" for w in windows)
                 events.append(LimitsEvent(windows=windows))
         elif isinstance(message, SystemMessage):
             if message.subtype == "init" and message.data.get("session_id"):
@@ -376,6 +412,10 @@ class EventMapper:
             error = None
             if message.is_error:
                 error = "; ".join(message.errors or []) or message.result or message.subtype
+                # A turn turned away by a used-up limit: the account counts as used up until the reset,
+                # also when Claude Code did not report the window itself.
+                if not self.rejected and (hit := limit_hit(error)):
+                    events.append(LimitsEvent(windows=[hit]))
             events.append(
                 ResultEvent(
                     session_id=message.session_id,

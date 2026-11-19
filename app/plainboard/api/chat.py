@@ -49,7 +49,7 @@ async def upload(agent_id: int, session: Session, files: list[UploadFile] = File
     agent = await agent_service.get(session, agent_id)
     out = []
     for file in files:
-        attachment = await board_service.store_attachment(session, agent.project_id, file.filename or "file", file.content_type or "", await file.read())
+        attachment = await board_service.store_attachment(session, agent.project_id, file.filename or "file", file.content_type or "", file.file)
         out.append(AttachmentOut.model_validate(attachment))
     return out
 

@@ -211,6 +211,12 @@ async def job_ports(ids: list[str]) -> dict[str, list[JobPort]]:
     return await ports.of_jobs(ids)
 
 
+@app.post("/jobs/listening", response_model=dict[str, list[int]])
+async def job_listening(ids: list[str]) -> dict[str, list[int]]:
+    """Every port these jobs listen on, web server or not: the app opens a preview only on one of them."""
+    return await ports.listening_of_jobs(ids)
+
+
 @app.post("/jobs/{job_id}/stop")
 async def stop_job(job_id: str) -> dict[str, bool]:
     return {"stopped": jobs.stop(job_id)}

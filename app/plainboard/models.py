@@ -212,6 +212,17 @@ class User(Timestamps, Base):
     avatar_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # 0: none
 
 
+class UserSession(Base):
+    """A signed-in browser. The login cookie names one; signing out deletes it, so a copied cookie is
+    of no use afterwards. Not project data: moving a project takes none along."""
+
+    __tablename__ = "user_sessions"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+
 class ProjectRole(StrEnum):
     VIEWER = "viewer"  # reads everything of the project, changes nothing
     MEMBER = "member"  # works in it: tickets, chats with the agents, the team, notes

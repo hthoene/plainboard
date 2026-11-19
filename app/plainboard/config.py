@@ -20,6 +20,14 @@ class Config(BaseSettings):
     internal_url: str = "http://app:8080"
     password: str | None = None
     max_upload_mb: int = 50
+    max_import_mb: int = 4096  # a project file (services/transfer.py), compressed; what it unpacks to is capped there
+    # Security (api/guard.py). A separate address for previews, e.g. https://preview.example.com: agents'
+    # servers then never run on PlainBoard's own origin. Empty: they run under /preview/<port>/ on it, sandboxed.
+    preview_origin: str = ""
+    preview_sandbox: bool = True  # without preview_origin: the CSP sandbox (no access to PlainBoard, but no cookies either)
+    secure_cookies: str = ""  # true | false; empty: Secure when the request came over HTTPS (also X-Forwarded-Proto)
+    hsts: bool = True  # Strict-Transport-Security, only on responses over HTTPS
+    allowed_origins: str = ""  # further origins (comma separated) whose pages may use the signed-in API and sockets
     scheduler_interval_seconds: float = 20.0
     job_watch_interval_seconds: float = 10.0
     limits_interval_seconds: float = 900.0  # how often the plan limits of all subscriptions are read

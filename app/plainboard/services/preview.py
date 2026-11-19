@@ -6,7 +6,16 @@ sent back under its prefix, and its cookies and headers are made to fit PlainBoa
 
 What cannot be repaired from outside is a page that reads its own address (client-side routing):
 such an app is given its base path instead and opened at /preview-base/<port>/, which reaches it
-unchanged."""
+unchanged.
+
+A preview is code of an agent, so it must not run as PlainBoard: on PlainBoard's origin its scripts
+could use the API as whoever opened it. With ``preview_origin`` set, previews are served only there
+(a link on PlainBoard's address forwards with a short-lived token, which becomes a cookie of that
+origin for this port); without it, every preview response gets the CSP sandbox, which gives the page
+an origin of its own (no cookies of PlainBoard, no reading its API, no storage).
+
+Who opens a port: it has to belong to a server job that runs (``Owners``), and the viewer needs a role
+in that job's project, or be an admin, or hold a share of exactly that project's port."""
 
 from __future__ import annotations
 
@@ -16,6 +25,7 @@ import html
 import re
 import secrets
 import time
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from urllib.parse import urlsplit
 
@@ -25,7 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from plainboard_protocol import JobPort
 
 from ..config import get_config
-from ..models import Job, PreviewShare, utcnow
+from ..models import Job, JobStatus, PreviewShare, utcnow
 from ..schemas import PreviewOut
 from ..security import SESSION_COOKIE, sign, unsign
 from .errors import ServiceError
@@ -36,6 +46,12 @@ BASE_PREFIX = "/preview-base"  # for a server that was told this is its base pat
 PORT_COOKIE = "plainboard_preview"  # the last previewed port: WebSockets to the root have no other hint
 UNLOCK_COOKIE_PREFIX = "pb_preview_key_"  # per port: the visitor gave the password of a shared preview
 UNLOCK_MAX_AGE = 60 * 60 * 24 * 7
+AUTH_COOKIE_PREFIX = "pb_preview_auth_"  # per port, on the preview origin: who came from PlainBoard to it
+ENTER_MAX_AGE = 120  # the token in the link from PlainBoard to the preview origin
+AUTH_MAX_AGE = 60 * 60 * 24 * 7  # and the cookie made of it (ends with the PlainBoard session anyway)
+# Without a preview origin: the page runs in an origin of its own. No allow-same-origin, ever.
+SANDBOX = "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads"
+OWNERS_SECONDS = 5.0  # how long the ports of the running servers are taken as known
 _REFERER_PATH = re.compile(rf"^(?:{BASE_PREFIX}|{PREFIX})/(\d+)(?:/|$)")
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "[::1]"}
 # Per connection, or decided by this proxy.
@@ -45,6 +61,19 @@ _DROP_RESPONSE = {"connection", "keep-alive", "upgrade", "te", "trailer", "trans
 _DROP_RESPONSE |= {"strict-transport-security", "clear-site-data"}
 # Referrer policies under which a page does not tell its own site which page asked.
 _PATHLESS_REFERRER = {"no-referrer": "same-origin", "origin": "origin-when-cross-origin", "strict-origin": "strict-origin-when-cross-origin"}
+
+
+def origin() -> str:
+    """The separate origin previews are served from; empty: PlainBoard's own (sandboxed)."""
+    return get_config().preview_origin.strip().rstrip("/")
+
+
+def sandboxed() -> bool:
+    return not origin() and get_config().preview_sandbox
+
+
+def _own_cookie(name: str) -> bool:
+    return name in (SESSION_COOKIE, PORT_COOKIE) or name.startswith((UNLOCK_COOKIE_PREFIX, AUTH_COOKIE_PREFIX))
 
 
 def runner_host() -> str:
@@ -81,7 +110,7 @@ def request_headers(headers: list[tuple[str, str]], port: int) -> list[tuple[str
         if key in _DROP_REQUEST:
             continue
         if key == "cookie":
-            kept = [c for c in value.split(";") if c.strip().split("=", 1)[0] not in (SESSION_COOKIE, PORT_COOKIE) and not c.strip().startswith(UNLOCK_COOKIE_PREFIX)]
+            kept = [c for c in value.split(";") if not _own_cookie(c.strip().split("=", 1)[0])]
             if not kept:
                 continue
             value = ";".join(kept).strip()
@@ -94,12 +123,14 @@ def request_headers(headers: list[tuple[str, str]], port: int) -> list[tuple[str
     return out
 
 
-def response_headers(headers: list[tuple[str, str]], port: int, secure: bool = True) -> list[tuple[str, str]]:
-    """Headers for the browser. ``secure``: the browser reached PlainBoard over HTTPS."""
-    out = []
+def response_headers(headers: list[tuple[str, str]], port: int, secure: bool = True, sandbox: bool = False) -> list[tuple[str, str]]:
+    """Headers for the browser. ``secure``: the browser reached PlainBoard over HTTPS. ``sandbox``: the
+    page runs in an origin of its own, so every request it sends is cross-origin to the browser: the
+    Referer keeps its path only under a policy that sends it everywhere (the root redirect needs it)."""
+    out = [("Content-Security-Policy", SANDBOX), ("Referrer-Policy", "no-referrer-when-downgrade")] if sandbox else []
     for name, value in headers:
         key = name.lower()
-        if key in _DROP_RESPONSE:
+        if key in _DROP_RESPONSE or (sandbox and key == "referrer-policy"):
             continue
         if key == "location":
             value = rewrite_location(value, port)
@@ -128,7 +159,7 @@ def repair_cookie(value: str, secure: bool) -> str | None:
     would replace one of PlainBoard's own cookies."""
     first, *attributes = [part.strip() for part in value.split(";")]
     name = first.split("=", 1)[0].strip()
-    if name in (SESSION_COOKIE, PORT_COOKIE) or name.startswith(UNLOCK_COOKIE_PREFIX):
+    if _own_cookie(name):
         return None
     kept = []
     for attribute in attributes:
@@ -241,6 +272,72 @@ async def running(session: AsyncSession, project_id: int, jobs: list[Job], ports
                 )
             )
     return sorted(out, key=lambda p: p.port)
+
+
+class Owners:
+    """Which project's server listens on a port: the running server jobs and what the runner finds them
+    listening on. Asked again after ``OWNERS_SECONDS``, sooner for a port not known yet (a server just
+    started), and at once when the job a port was known for no longer runs (the port was given up)."""
+
+    def __init__(self) -> None:
+        self._ports: dict[int, tuple[int, int]] = {}  # port -> (job id, project id)
+        self._at = -OWNERS_SECONDS
+
+    async def project_of(self, session: AsyncSession, port: int, listening: Callable[[list[str]], Awaitable[dict[str, list[int]]]]) -> int | None:
+        age = time.monotonic() - self._at
+        known = self._ports.get(port)
+        if known is not None and age < OWNERS_SECONDS:
+            job = await session.get(Job, known[0])
+            if job is not None and job.status == JobStatus.RUNNING:
+                return known[1]
+        elif known is None and age < 1.0:
+            return None
+        jobs = servers(list(await session.scalars(select(Job).where(Job.status == JobStatus.RUNNING))))
+        by_runner = {job.runner_id: job for job in jobs}
+        found = await listening(list(by_runner)) if by_runner else {}
+        self._ports = {p: (by_runner[rid].id, by_runner[rid].project_id) for rid, ports in found.items() if rid in by_runner for p in ports if _previewed(p)}
+        self._at = time.monotonic()
+        known = self._ports.get(port)
+        return known[1] if known else None
+
+
+# --- from PlainBoard to the preview origin -------------------------------------------------------
+
+
+def enter_token(user_id: int, version: int, session_id: str, port: int) -> str:
+    return sign({"u": user_id, "v": version, "s": session_id, "p": port}, "preview-enter")
+
+
+def _read(value: str | None, purpose: str, max_age: int, port: int) -> tuple[int, int, str] | None:
+    data = unsign(value, purpose, max_age)
+    try:
+        return (int(data["u"]), int(data["v"]), str(data["s"])) if data and data.get("p") == port else None
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def read_enter(token: str | None, port: int) -> tuple[int, int, str] | None:
+    """The user (id, session version, session) a link to the preview origin was made for."""
+    return _read(token, "preview-enter", ENTER_MAX_AGE, port)
+
+
+def auth_cookie(port: int) -> str:
+    return f"{AUTH_COOKIE_PREFIX}{port}"
+
+
+def auth_value(user_id: int, version: int, session_id: str, port: int) -> str:
+    return sign({"u": user_id, "v": version, "s": session_id, "p": port}, "preview-auth")
+
+
+def read_auth(value: str | None, port: int) -> tuple[int, int, str] | None:
+    return _read(value, "preview-auth", AUTH_MAX_AGE, port)
+
+
+def enter_next(port: int, next_path: str) -> str:
+    """Where the preview origin sends the visitor on: only into this port's preview."""
+    if next_path.startswith((prefix(port) + "/", prefix(port, True) + "/")) and "//" not in next_path and "\\" not in next_path:
+        return next_path
+    return prefix(port) + "/"
 
 
 # --- sharing: without a share only the signed-in user opens a preview ---------------------------

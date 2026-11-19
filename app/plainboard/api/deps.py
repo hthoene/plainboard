@@ -14,6 +14,7 @@ from ..security import SESSION_COOKIE
 from ..services import access
 from ..services.access import Need, Principal
 from ..services.errors import ServiceError
+from .guard import origin_ok
 
 
 async def _session() -> AsyncIterator[AsyncSession]:
@@ -43,7 +44,10 @@ async def authorize(request: Request) -> None:
 
 
 async def socket_role(conn: HTTPConnection, project_id: int, need: Need) -> bool:
-    """Whether a socket's user has this role in the project (sockets have no route rule)."""
+    """Whether a socket's user has this role in the project (sockets have no route rule), and the socket
+    was opened by a page of PlainBoard: the login cookie would come along from any page of the same site."""
+    if not origin_ok(conn.headers):
+        return False
     async with sessionmaker()() as session:
         who = await access.principal(session, conn.cookies.get(SESSION_COOKIE))
         if who is None or who.user is None:

@@ -57,8 +57,6 @@ async def lifespan(app: FastAPI):
     updates = app.state.updates = UpdateWatcher(sessionmaker(), runner, config.update_interval_seconds)
     cleanup = app.state.cleanup = CleanupWatcher(sessionmaker(), runs, config.cleanup_interval_seconds)
     app.state.preview_client = preview.new_client()
-    if not config.preview_origin and config.preview_sandbox:
-        log.info("Previews run sandboxed on this address. PLAINBOARD_PREVIEW_ORIGIN gives them one of their own (see docs/guide.md, Security).")
     await runs.start()
     scheduler.start()
     job_watcher.start()

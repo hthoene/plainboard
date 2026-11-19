@@ -6,7 +6,7 @@ import time
 from collections.abc import AsyncIterator
 
 import httpx
-from plainboard_protocol import ProjectFiles, TidyResult, TidySpec, CheckResult, CompletionResult, CompletionSpec, Credentials, JobPort, JobSpec, JobState, LimitsEvent, MachineUsage, ProviderAccount, ProviderInfo, PullRequestCheck, PullRequestState, RepoSpec, RunEvent, RunSpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, UpstreamState, parse_event
+from plainboard_protocol import ProjectFiles, TidyResult, TidySpec, CheckResult, CleanupResult, CleanupSpec, CompletionResult, CompletionSpec, Credentials, JobPort, JobSpec, JobState, LimitsEvent, MachineUsage, ProviderAccount, ProviderInfo, PullRequestCheck, PullRequestState, RepoSpec, RunEvent, RunSpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, UpstreamState, parse_event
 
 
 class RunnerError(RuntimeError):
@@ -182,6 +182,15 @@ class RunnerClient:
             resp = await (self._client.post("/usage/measure", timeout=30) if measure else self._client.get("/usage", timeout=30))
             resp.raise_for_status()
             return MachineUsage.model_validate(resp.json())
+        except (httpx.HTTPError, ValueError) as exc:
+            raise RunnerError(f"Runner unreachable: {exc}") from exc
+
+    async def clean_up(self, spec: CleanupSpec) -> CleanupResult:
+        """Free room on the workspaces' volume; can take long (sizes, deleting big folders)."""
+        try:
+            resp = await self._client.post("/cleanup", json=spec.model_dump(mode="json"), timeout=3 * 3600)
+            resp.raise_for_status()
+            return CleanupResult.model_validate(resp.json())
         except (httpx.HTTPError, ValueError) as exc:
             raise RunnerError(f"Runner unreachable: {exc}") from exc
 

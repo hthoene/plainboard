@@ -43,15 +43,23 @@ def _spawn_task(coro) -> None:
     task.add_done_callback(_tasks.discard)
 
 
-def _prune() -> None:
+def prune() -> int:
+    """Forget jobs and delete logs past the retention; the bytes that freed."""
     cutoff = time.time() - RETENTION_SECONDS
     for job_id, job in list(_jobs.items()):
         if job.finished_at and job.finished_at < cutoff:
             del _jobs[job_id]
     active = {job.log_path for job in _jobs.values()}
+    freed = 0
     for file in JOBS_ROOT.glob("*.log"):
-        if file not in active and file.stat().st_mtime < cutoff:
-            file.unlink(missing_ok=True)
+        try:
+            st = file.stat()
+            if file not in active and st.st_mtime < cutoff:
+                file.unlink(missing_ok=True)
+                freed += st.st_blocks * 512 or st.st_size  # blocks can lag behind on some file systems
+        except OSError:
+            pass
+    return freed
 
 
 async def _watch(job: Job) -> None:
@@ -66,7 +74,7 @@ async def start(spec: JobSpec, cwd: Path | None = None) -> JobState:
     cwd = cwd or resolve_workspace(WorkspaceSpec(path=spec.workspace))
     cwd.mkdir(parents=True, exist_ok=True)
     JOBS_ROOT.mkdir(parents=True, exist_ok=True)
-    _prune()
+    prune()
     log_path = JOBS_ROOT / f"{spec.id}.log"
     with log_path.open("wb") as out:
         proc = await asyncio.create_subprocess_exec(

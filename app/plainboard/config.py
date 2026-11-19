@@ -25,6 +25,7 @@ class Config(BaseSettings):
     limits_interval_seconds: float = 900.0  # how often the plan limits of all subscriptions are read
     landing_interval_seconds: float = 30.0  # how often trains of finished branches are looked at
     tidy_interval_seconds: float = 600.0  # how often it is looked whether a repository is due for removing merged branches
+    cleanup_interval_seconds: float = 3600.0  # how often disk and memory are looked at for an automatic cleanup (statvfs: cheap)
     standstill_interval_seconds: float = 120.0  # how often the boards are looked at for ready work next to free slots
     # A train waits this long for further branches after the first one is ready: members often
     # finish within minutes of each other, and whoever misses a train waits a whole check run.

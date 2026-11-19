@@ -20,6 +20,9 @@ def init_engine(url: str) -> AsyncEngine:
         def _sqlite_pragmas(dbapi_conn, _record):  # noqa: ANN001
             cur = dbapi_conn.cursor()
             cur.execute("PRAGMA journal_mode=WAL")
+            # In WAL mode safe against corruption, and a sync per checkpoint instead of per commit.
+            cur.execute("PRAGMA synchronous=NORMAL")
+            cur.execute("PRAGMA journal_size_limit=67108864")  # the WAL file shrinks back to 64 MB after a checkpoint
             cur.execute("PRAGMA foreign_keys=ON")
             cur.execute("PRAGMA busy_timeout=30000")
             cur.close()

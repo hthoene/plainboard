@@ -11,9 +11,10 @@ from collections.abc import AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket
 from fastapi.responses import StreamingResponse
-from plainboard_protocol import ACCOUNT_KEY_PATTERN, DEFAULT_ACCOUNT, BranchRef, CheckResult, CommitRef, CompletionResult, CompletionSpec, Credentials, ErrorEvent, JobPort, JobSpec, JobState, LimitsEvent, MachineUsage, ProjectFiles, ProviderAccount, ProviderInfo, PullRequestCheck, PullRequestRef, PullRequestState, RepoSpec, RunSpec, TidyResult, TidySpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, UpstreamRef, UpstreamState
+from plainboard_protocol import ACCOUNT_KEY_PATTERN, DEFAULT_ACCOUNT, BranchRef, CheckResult, CleanupResult, CleanupSpec, CommitRef, CompletionResult, CompletionSpec, Credentials, ErrorEvent, JobPort, JobSpec, JobState, LimitsEvent, MachineUsage, ProjectFiles, ProviderAccount, ProviderInfo, PullRequestCheck, PullRequestRef, PullRequestState, RepoSpec, RunSpec, TidyResult, TidySpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, UpstreamRef, UpstreamState
 from pydantic import BaseModel, Field
 
+from . import cleanup
 from . import github
 from .browser import browsers
 from . import jobs
@@ -69,6 +70,21 @@ async def measure_usage_now() -> MachineUsage:
     """Measure the folders again now, in the background."""
     usage.measure_soon(force=True)
     return await usage.current()
+
+
+_cleaning = asyncio.Lock()
+
+
+@app.post("/cleanup", response_model=CleanupResult)
+async def clean_up(body: CleanupSpec) -> CleanupResult:
+    """Free room with what can be made again (see cleanup.py); one cleanup at a time."""
+    if _cleaning.locked():
+        return CleanupResult(skipped=["a cleanup runs already"])
+    async with _cleaning:
+        result = await asyncio.to_thread(cleanup.run, body)
+    if result.freed:
+        usage.measure_soon(force=True)  # the sizes shown are out of date now
+    return result
 
 
 @app.get("/providers", response_model=list[ProviderInfo])

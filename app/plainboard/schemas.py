@@ -177,6 +177,25 @@ class FolderOut(BaseModel):
     bytes: int
 
 
+class CleanedOut(BaseModel):
+    path: str
+    what: str  # build | cache | folder | logs | server
+    bytes: int = 0
+
+
+class CleanupOut(BaseModel):
+    """The last automatic cleanup (services/cleanup.py)."""
+
+    at: UTCDateTime
+    level: str  # soft | hard | memory
+    freed: int = 0
+    free_before: int = 0
+    total: int = 0
+    items: list[CleanedOut] = Field(default_factory=list)  # the biggest
+    kept: list[str] = Field(default_factory=list)  # folders left alone, with the reason
+    told: bool = False  # the manager was told: still short of room
+
+
 class UsageOut(BaseModel):
     runner_ok: bool
     measured_at: UTCDateTime | None = None  # when the folders were last measured
@@ -189,6 +208,8 @@ class UsageOut(BaseModel):
     memory_total: int = 0
     memory_used: int = 0
     memory_other: int = 0  # processes of the runner that work in no agent's folder: the runner itself, browsers
+    cleanup: CleanupOut | None = None
+    servers_stopped: CleanupOut | None = None  # by the memory cleanup, the last time
 
 
 # --- provider accounts ----------------------------------------------------------------------

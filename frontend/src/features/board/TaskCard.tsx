@@ -43,8 +43,8 @@ export function Label({ colors, label, className, tag }: { colors: Record<string
  * theirs. */
 export function TaskCard({ task, overlay, done }: { task: Task; overlay?: boolean; done?: boolean }) {
   const { t } = useTranslation();
-  const { project, openTask, agentById } = useShell();
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: `t-${task.id}`, disabled: overlay });
+  const { project, openTask, agentById, canWrite } = useShell();
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: `t-${task.id}`, disabled: overlay || !canWrite });
   const running = useRunningRuns(project.id);
   const since = useSince();
 

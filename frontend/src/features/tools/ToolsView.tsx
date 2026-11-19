@@ -24,16 +24,18 @@ const fromLines = (text: string) =>
 
 export function ToolsView() {
   const { t } = useTranslation();
-  const { project, agentById } = useShell();
+  const { project, agentById, isOwner } = useShell();
   const servers = useMcpServers(project.id);
   const [editing, setEditing] = useState<McpServer | "new" | null>(null);
 
   return (
     <div className="flex h-full flex-col">
       <PageHead title={t("tools.title")}>
-        <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setEditing("new")}>
-          {t("tools.add")}
-        </Button>
+        {isOwner && (
+          <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setEditing("new")}>
+            {t("tools.add")}
+          </Button>
+        )}
       </PageHead>
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
       <div className="max-w-5xl px-4 pt-3 pb-6">
@@ -74,7 +76,8 @@ export function ToolsView() {
 
 function McpEditor({ server, onClose }: { server?: McpServer; onClose: () => void }) {
   const { t } = useTranslation();
-  const { project } = useShell();
+  const { project, isOwner } = useShell();
+  const readOnly = !isOwner;
   const qc = useQueryClient();
   const [form, setForm] = useState({
     name: server?.name ?? "",
@@ -128,6 +131,9 @@ function McpEditor({ server, onClose }: { server?: McpServer; onClose: () => voi
       width="max-w-lg"
       title={server ? server.name : t("tools.add")}
       footer={
+        readOnly ? (
+          <Button onClick={onClose}>{t("common.close")}</Button>
+        ) : (
         <>
           {server && (
             <Button variant="danger" className="mr-auto" onClick={remove}>
@@ -139,8 +145,10 @@ function McpEditor({ server, onClose }: { server?: McpServer; onClose: () => voi
             {t("common.save")}
           </Button>
         </>
+        )
       }
     >
+      <fieldset disabled={readOnly} className="contents">
       <div className="space-y-4">
         <div className="grid grid-cols-[1fr_140px] gap-3">
           <Field label={t("tools.name")} hint={t("tools.nameHint")}>
@@ -182,6 +190,7 @@ function McpEditor({ server, onClose }: { server?: McpServer; onClose: () => voi
         {!server && <Toggle checked={form.global_scope} onChange={(global_scope) => set({ global_scope })} label={t("tools.globalToggle")} />}
         <ErrorText error={error} />
       </div>
+      </fieldset>
     </Modal>
   );
 }

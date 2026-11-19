@@ -13,7 +13,7 @@ import { TodoDialog } from "./TodoDialog";
 /** The team as a ruled list: who, what for, on which model, and how full its context is. */
 export function TeamView() {
   const { t } = useTranslation();
-  const { agents, openChat, project } = useShell();
+  const { agents, openChat, project, canWrite } = useShell();
   const repos = useRepositories(project.id);
   const me = useMe();
   const usage = useUsage(!!me?.is_admin); // the whole installation's: for admins only
@@ -29,9 +29,11 @@ export function TeamView() {
   return (
     <div className="flex h-full flex-col">
       <PageHead title={t("team.title")}>
-        <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setEditing("new")}>
-          {t("team.add")}
-        </Button>
+        {canWrite && (
+          <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setEditing("new")}>
+            {t("team.add")}
+          </Button>
+        )}
       </PageHead>
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
       <div className="max-w-5xl px-4 pt-3 pb-6">

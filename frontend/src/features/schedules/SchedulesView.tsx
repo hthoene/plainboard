@@ -18,7 +18,7 @@ const PRESETS = [
 
 export function SchedulesView() {
   const { t } = useTranslation();
-  const { project, agentById } = useShell();
+  const { project, agentById, canWrite } = useShell();
   const qc = useQueryClient();
   const schedules = useSchedules(project.id);
   const [editing, setEditing] = useState<Schedule | "new" | null>(null);
@@ -31,9 +31,11 @@ export function SchedulesView() {
   return (
     <div className="flex h-full flex-col">
       <PageHead title={t("schedules.title")}>
-        <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setEditing("new")}>
-          {t("schedules.new")}
-        </Button>
+        {canWrite && (
+          <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setEditing("new")}>
+            {t("schedules.new")}
+          </Button>
+        )}
       </PageHead>
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
       <div className="max-w-5xl px-4 pt-3 pb-6">
@@ -60,7 +62,7 @@ export function SchedulesView() {
                       {s.last_run_at && ` · ${t("schedules.last", { when: timeAgo(s.last_run_at) })}`}
                     </div>
                   </button>
-                  <Toggle checked={s.enabled} onChange={(v) => toggle(s, v)} label="" />
+                  {canWrite && <Toggle checked={s.enabled} onChange={(v) => toggle(s, v)} label="" />}
                 </li>
               );
             })}
@@ -75,7 +77,8 @@ export function SchedulesView() {
 
 function ScheduleEditor({ schedule, onClose }: { schedule?: Schedule; onClose: () => void }) {
   const { t } = useTranslation();
-  const { project, agents } = useShell();
+  const { project, agents, canWrite } = useShell();
+  const readOnly = !canWrite;
   const qc = useQueryClient();
   const settings = useSettings();
   const manager = agents.find((a) => a.is_manager);
@@ -129,6 +132,9 @@ function ScheduleEditor({ schedule, onClose }: { schedule?: Schedule; onClose: (
       width="max-w-lg"
       title={schedule ? schedule.name : t("schedules.new")}
       footer={
+        readOnly ? (
+          <Button onClick={onClose}>{t("common.close")}</Button>
+        ) : (
         <>
           {schedule && (
             <Button variant="danger" className="mr-auto" onClick={remove}>
@@ -140,8 +146,10 @@ function ScheduleEditor({ schedule, onClose }: { schedule?: Schedule; onClose: (
             {t("common.save")}
           </Button>
         </>
+        )
       }
     >
+      <fieldset disabled={readOnly} className="contents">
       <div className="space-y-4">
         <Field label={t("schedules.name")}>
           <Input autoFocus value={form.name} onChange={(e) => set({ name: e.target.value })} placeholder={t("schedules.namePlaceholder")} />
@@ -184,6 +192,7 @@ function ScheduleEditor({ schedule, onClose }: { schedule?: Schedule; onClose: (
         </div>
         <ErrorText error={error} />
       </div>
+      </fieldset>
     </Modal>
   );
 }

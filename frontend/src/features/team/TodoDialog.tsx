@@ -24,6 +24,7 @@ function useRefresh() {
 
 export function TodoDialog({ agent, onClose }: { agent: Agent; onClose: () => void }) {
   const { t } = useTranslation();
+  const { canWrite } = useShell();
   const [state, setState] = useState<TodoState>("open");
 
   return (
@@ -44,7 +45,7 @@ export function TodoDialog({ agent, onClose }: { agent: Agent; onClose: () => vo
           </button>
         ))}
       </div>
-      {state === "open" ? <NewTodo agentId={agent.id} /> : <p className="mb-3 text-fg-3">{t("todos.doneHint")}</p>}
+      {state === "open" ? canWrite && <NewTodo agentId={agent.id} /> : <p className="mb-3 text-fg-3">{t("todos.doneHint")}</p>}
       <TodoList key={state} agentId={agent.id} state={state} />
     </Modal>
   );
@@ -123,7 +124,7 @@ function TodoList({ agentId, state }: { agentId: number; state: TodoState }) {
 
 function TodoItem({ todo }: { todo: Todo }) {
   const { t } = useTranslation();
-  const { agents, agentById } = useShell();
+  const { agents, agentById, canWrite } = useShell();
   const refresh = useRefresh();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -168,7 +169,7 @@ function TodoItem({ todo }: { todo: Todo }) {
   return (
     <div className="rounded-sm px-2 py-1.5 hover:bg-sunk">
       <div className="flex items-start gap-2">
-        <button
+        {canWrite && <button
           type="button"
           aria-label={done ? t("todos.reopen") : t("todos.markDone")}
           title={done ? t("todos.reopen") : t("todos.markDone")}
@@ -176,7 +177,7 @@ function TodoItem({ todo }: { todo: Todo }) {
           className={clsx("mt-0.5 shrink-0", done ? "text-ok" : "text-fg-3 hover:text-fg")}
         >
           {done ? <CheckCircle2 className="size-4.5" /> : <Circle className="size-4.5" />}
-        </button>
+        </button>}
         <button type="button" onClick={() => setOpen(!open)} className="min-w-0 flex-1 text-left">
           <span className={clsx(done && "text-fg-3 line-through")}>{todo.title}</span>
           {todo.description.trim() && !open && <FileText className="ml-1.5 inline size-3.5 text-fg-3" />}
@@ -185,7 +186,7 @@ function TodoItem({ todo }: { todo: Todo }) {
       </div>
       {open && (
         <div className="mt-2 ml-6.5 space-y-3">
-          {editing ? (
+          {editing && canWrite ? (
             <div className="space-y-2">
               <Input value={title} maxLength={300} onChange={(e) => setTitle(e.target.value)} />
               <Textarea rows={8} value={description} placeholder={t("todos.newDescription")} onChange={(e) => setDescription(e.target.value)} />
@@ -205,19 +206,23 @@ function TodoItem({ todo }: { todo: Todo }) {
                 <span className="flex-1">
                   {creator ? t("todos.byAgent", { name: creator.name }) : t("todos.byUser")} · {timeAgo(todo.created_at)}
                 </span>
-                <Button size="sm" variant="ghost" icon={<Pencil className="size-3.5" />} onClick={startEditing}>
-                  {t("todos.edit")}
-                </Button>
-                <Select aria-label={t("todos.moveTo")} value={todo.agent_id} onChange={(e) => patch({ agent_id: Number(e.target.value) })} className="w-40">
-                  {agents.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}
-                    </option>
-                  ))}
-                </Select>
-                <Button size="sm" variant="danger" icon={<Trash2 className="size-3.5" />} onClick={remove}>
-                  {t("todos.delete")}
-                </Button>
+                {canWrite && (
+                  <>
+                    <Button size="sm" variant="ghost" icon={<Pencil className="size-3.5" />} onClick={startEditing}>
+                      {t("todos.edit")}
+                    </Button>
+                    <Select aria-label={t("todos.moveTo")} value={todo.agent_id} onChange={(e) => patch({ agent_id: Number(e.target.value) })} className="w-40">
+                      {agents.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.name}
+                        </option>
+                      ))}
+                    </Select>
+                    <Button size="sm" variant="danger" icon={<Trash2 className="size-3.5" />} onClick={remove}>
+                      {t("todos.delete")}
+                    </Button>
+                  </>
+                )}
               </div>
             </>
           )}

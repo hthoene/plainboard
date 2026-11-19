@@ -370,6 +370,65 @@ If it does not work:
   answer `{"status":"ok"}`.
 - **The board loads but never changes by itself:** WebSockets do not get through.
 
+## Security
+
+**Previews.** Previews open at `/preview/<port>/` on PlainBoard's address with no setup, for the
+people with a role in the project and admins (or with a share). A preview page there runs as
+PlainBoard, so it could use PlainBoard as whoever opens it. To keep agents' code apart from
+PlainBoard, give previews a name of their own, one line in `.env`:
+
+```bash
+PLAINBOARD_PREVIEW_ORIGIN=https://preview.example.com
+```
+
+Point that name at the same PlainBoard (a second name in the proxy, see below). A preview link on
+PlainBoard's address then forwards there, with a token that is good for two minutes and one port.
+The preview origin keeps it as its own cookie for that port, which ends when you sign out of
+PlainBoard. It serves previews and nothing else: neither the board, the API nor PlainBoard's login.
+The proxy has to pass on the `Host` the browser asked for (Caddy and Cloudflare do; nginx needs
+`proxy_set_header Host $host`), else PlainBoard can't tell the two names apart.
+
+Without a name of their own, `PLAINBOARD_PREVIEW_SANDBOX=true` puts previews on PlainBoard's address
+into the browser's sandbox (`Content-Security-Policy: sandbox`, without `allow-same-origin`). The page
+then has an origin of its own: it can't read PlainBoard or its API, and has no `localStorage`,
+`sessionStorage`, IndexedDB or cookies. The browser also sends no cookies, not even the login,
+with what such a page loads. A shared preview needs no login, so it works as long as it needs no
+storage. A private one shows its first page but loads nothing of its own (scripts, styles, hot
+reload); dev servers open fully in the **Browser** view.
+
+**HTTPS behind a reverse proxy.** PlainBoard takes a request as HTTPS when the proxy says so in
+`X-Forwarded-Proto: https` (Caddy, nginx with the configuration above, and Cloudflare send it). Then:
+
+- the login cookie is `Secure`, so the browser never sends it over plain HTTP. If your proxy does
+  not send the header, set `PLAINBOARD_SECURE_COOKIES=true`. `false` never marks it Secure.
+- every answer carries `Strict-Transport-Security: max-age=31536000`, so the browser uses HTTPS
+  only for this name for a year. To leave it out (the name will be served over HTTP again, or
+  your proxy sets HSTS itself), set `PLAINBOARD_HSTS=false`.
+
+**Other sites.** A change to PlainBoard (any request but reading) is refused when the browser says it
+comes from a page of another address (`Origin`, else `Referer`). The live updates and the browser
+window open only for PlainBoard's own pages too. A request without either header (scripts,
+`curl`, the public API with its key) is not affected. If another address of yours has to use the
+signed-in API, name it: `PLAINBOARD_ALLOWED_ORIGINS=https://other.example.com` (comma separated).
+
+**Signing out** ends the session on the server: a copy of the login cookie is of no use afterwards.
+Changing your password signs out all other browsers.
+
+**Attachments** open in the browser only if their content is a picture (PNG, JPEG, GIF, WebP), a
+PDF or plain text. Everything else, HTML and SVG included, is downloaded. A single file may be up to
+50 MB, a project file up to 4 GB. A project file is also refused if it holds more than 100,000
+entries or unpacks to more than 16 GB.
+
+**Example: Cloudflare in front** (as at `https://plainboard.example.com`). Add a second name, e.g.
+`preview.example.com`, proxied by Cloudflare to the same PlainBoard as the first: a DNS record
+plus, with a tunnel, a second public hostname with the same service. Then set
+`PLAINBOARD_PREVIEW_ORIGIN=https://preview.example.com` and restart (`docker compose up -d`).
+Cloudflare sends `X-Forwarded-Proto: https`, so the cookie is Secure and HSTS is sent with no
+further setting. Under SSL/TLS, *Always Use HTTPS* keeps sending plain HTTP over to HTTPS.
+
+With nginx, the preview name is a second `server` block like the one above with `server_name
+preview.example.com`.
+
 ## PostgreSQL
 
 PlainBoard keeps its data in one SQLite file in the data volume. That needs nothing and is the right
@@ -410,10 +469,13 @@ ${PLAINBOARD_DATABASE:-}` in the app's `environment:` if your file is older and 
 
 Web servers that agents start (dev servers, preview builds) open through PlainBoard at
 `/preview/<port>/`, e.g. <http://localhost:8080/preview/5173/>: no ports to publish, and behind the
-PlainBoard sign-in. Agents post the link in the chat. A preview is private; ask the manager to share
+PlainBoard sign-in. Agents post the link in the chat. A preview is private: it opens for the people
+with a role in the project whose agent started the server, and for admins. Ask the manager to share
 one with a password or publicly for a few days, e.g. for a customer. The server has to listen on
-`0.0.0.0`. A preview runs on PlainBoard's own address, so only preview code you trust like your
-agents.
+`0.0.0.0`, and it has to be started as a server job (`start_job` with `server`) that still runs: a
+port that no such job of a project listens on opens for nobody. A preview runs on PlainBoard's own
+address unless it has one of its own ([Security](#security)), so only preview code you trust like
+your agents.
 
 Which previews run right now is always shown: in the sidebar under **Previews** (a row opens the
 page in a new tab), and with everything about them on the start page of the **Browser** view: its

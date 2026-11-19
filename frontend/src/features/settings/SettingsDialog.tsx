@@ -87,7 +87,7 @@ export function SettingsDialog({ open, onClose, section }: { open: boolean; onCl
   };
   const MODELS = ["default_provider", "default_manager_model", "default_worker_model", "default_summary_model", "default_manager_effort", "default_worker_effort", "default_summary_effort", "default_context_limit", "default_keep_recent"];
   const PACE = ["max_parallel_runs", "manager_parallel_limit"];
-  const GENERAL = ["timezone", "update_check"];
+  const GENERAL = ["timezone", "member_chat", "update_check"];
   const CLEANUP = ["cleanup", "cleanup_soft_free_percent", "cleanup_hard_free_percent", "cleanup_memory_free_percent"];
 
   const account: SettingsSection = { id: "account", label: t("account.title"), description: t("account.hint"), content: <AccountEditor /> };
@@ -228,6 +228,10 @@ export function SettingsDialog({ open, onClose, section }: { open: boolean; onCl
               <Field label={t("settings.timezone")} hint={t("settingsPage.general.timezoneHint")}>
                 <Input value={values.timezone ?? ""} onChange={(e) => set({ timezone: e.target.value })} placeholder="Europe/Berlin" />
               </Field>
+              <div className="space-y-1">
+                <Toggle checked={values.member_chat ?? false} onChange={(v) => set({ member_chat: v })} label={t("settings.memberChat")} />
+                <p className="text-fg-3">{t("settings.memberChatHint")}</p>
+              </div>
               <div className="space-y-1">
                 <Toggle checked={values.update_check ?? true} onChange={(v) => set({ update_check: v })} label={t("settings.updateCheck")} />
                 <p className="text-fg-3">

@@ -346,8 +346,9 @@ def test_tickets_left_in_review_move_to_done_unless_they_wait_for_the_user(clien
     assert comment["author_kind"] == "system" and "3 days in review" in comment["body"]
 
 
-def test_preview_opens_a_server_in_the_runner_through_plainboard(client, monkeypatch):
+def test_preview_opens_a_server_in_the_runner_through_plainboard(client, project, monkeypatch):
     import httpx
+    from conftest import serve_preview
     from fastapi import FastAPI, Request
     from fastapi.responses import JSONResponse, RedirectResponse
 
@@ -378,6 +379,7 @@ def test_preview_opens_a_server_in_the_runner_through_plainboard(client, monkeyp
         return out
 
     client.app_ref.state.preview_client = httpx.AsyncClient(transport=httpx.ASGITransport(app=site))
+    serve_preview(client, project["id"], 5173)
     client.cookies.set("theme", "dark")  # next to the PlainBoard login the client already has
 
     resp = client.get("/preview/5173/?q=1")
@@ -411,7 +413,8 @@ def test_preview_opens_a_server_in_the_runner_through_plainboard(client, monkeyp
     cookies = headers.get_list("set-cookie")
     assert "sid=1; Path=/; HttpOnly" in cookies and "theme=dark; SameSite=Lax" in cookies
     assert not any(c.startswith("pb_session") for c in cookies)
-    assert headers["referrer-policy"] == "same-origin" and "strict-transport-security" not in headers and "clear-site-data" not in headers
+    assert "strict-transport-security" not in headers and "clear-site-data" not in headers
+    assert headers["referrer-policy"] == "same-origin" and "content-security-policy" not in headers  # no sandbox unless asked for
 
     assert client.get("/preview/8090/").status_code == 404  # the runner's own API
     assert client.get("/preview/80/").status_code == 404
@@ -420,13 +423,17 @@ def test_preview_opens_a_server_in_the_runner_through_plainboard(client, monkeyp
     assert client.get("/preview/5173/").status_code == 401
 
 
-def test_preview_says_when_nothing_listens(client):
+def test_preview_says_when_nothing_listens(client, project):
     import httpx
+    from conftest import serve_preview
 
     def refuse(request):
         raise httpx.ConnectError("refused")
 
     client.app_ref.state.preview_client = httpx.AsyncClient(transport=httpx.MockTransport(refuse))
+    resp = client.get("/preview/3000/")  # no server job listens there
+    assert resp.status_code == 404 and "0.0.0.0" in resp.text
+    serve_preview(client, project["id"], 3000)  # one does, but only on 127.0.0.1
     resp = client.get("/preview/3000/")
     assert resp.status_code == 502 and "0.0.0.0" in resp.text
 
@@ -460,6 +467,7 @@ def test_a_preview_is_private_until_it_is_shared_with_a_password_or_publicly(cli
     import httpx
     from fastapi import FastAPI
 
+    from conftest import serve_preview
     from plainboard.db import sessionmaker
     from plainboard.services import preview as preview_service
 
@@ -470,6 +478,8 @@ def test_a_preview_is_private_until_it_is_shared_with_a_password_or_publicly(cli
         return {"page": "home"}
 
     client.app_ref.state.preview_client = httpx.AsyncClient(transport=httpx.ASGITransport(app=site))
+    serve_preview(client, project["id"], 5173)
+    serve_preview(client, project["id"], 5174)
     client.cookies.clear()  # a visitor without a PlainBoard account
 
     def share(access, **kwargs):
@@ -500,3 +510,23 @@ def test_a_preview_is_private_until_it_is_shared_with_a_password_or_publicly(cli
 
     assert client.post("/api/auth/login", json={"username": "admin", "password": ADMIN_PASSWORD}).status_code == 200
     assert client.get("/preview/5173/").json() == {"page": "home"}
+
+
+def test_messages_to_members_need_the_setting(client, project):
+    pid = project["id"]
+    manager = agents_by_slug(client, pid)["manager"]
+    dev = client.post(f"/api/projects/{pid}/agents", json={"name": "Dev", "role": "developer"}).json()
+    assert client.put("/api/settings", json={"values": {"member_chat": False}}).status_code == 200
+    assert client.post(f"/api/agents/{manager['id']}/messages", json={"text": "SAY hi"}).status_code == 202
+    resp = client.post(f"/api/agents/{dev['id']}/messages", json={"text": "SAY hi"})
+    assert resp.status_code == 403 and "Direct messages to members are off" in resp.json()["detail"]
+    assert client.get(f"/api/agents/{dev['id']}/conversation").status_code == 200  # reading stays possible
+    assert client.put("/api/settings", json={"values": {"member_chat": True}}).status_code == 200
+    assert client.post(f"/api/agents/{dev['id']}/messages", json={"text": "SAY hi"}).status_code == 202
+
+
+def test_messages_to_members_are_off_by_default(client, project):
+    dev = client.post(f"/api/projects/{project['id']}/agents", json={"name": "Dev", "role": "developer"}).json()
+    assert client.put("/api/settings", json={"values": {"member_chat": None}}).status_code == 200  # as on a new installation
+    assert client.get("/api/settings").json()["values"]["member_chat"] is False
+    assert client.post(f"/api/agents/{dev['id']}/messages", json={"text": "SAY hi"}).status_code == 403

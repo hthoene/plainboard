@@ -155,6 +155,13 @@ def _holds(answer: tuple[str, bool] | None) -> float:
     return NOTHING_SECONDS if answer is None else TITLED_SECONDS if answer[0] else UNTITLED_SECONDS
 
 
+async def listening_of_jobs(ids: list[str]) -> dict[str, list[int]]:
+    """The ports these jobs listen on (from MIN_PORT), without asking what answers there."""
+    sessions = jobs.sessions(ids)
+    found = await asyncio.to_thread(find, sessions) if sessions else {}
+    return {job_id: sorted(ports) for job_id, ports in found.items()}
+
+
 async def of_jobs(ids: list[str]) -> dict[str, list[JobPort]]:
     """The web servers of these jobs, as far as they run: job id -> its ports."""
     sessions = jobs.sessions(ids)

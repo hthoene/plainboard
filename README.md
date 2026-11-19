@@ -141,6 +141,12 @@ services:
     environment:
       # The setup password: asked once, when the first account is created in the browser.
       PLAINBOARD_PASSWORD: ${PLAINBOARD_PASSWORD:-}
+      # Security (docs/guide.md, "Security"): previews on a name of their own, and HTTPS behind a proxy.
+      PLAINBOARD_PREVIEW_ORIGIN: ${PLAINBOARD_PREVIEW_ORIGIN:-}
+      PLAINBOARD_PREVIEW_SANDBOX: ${PLAINBOARD_PREVIEW_SANDBOX:-false}
+      PLAINBOARD_SECURE_COOKIES: ${PLAINBOARD_SECURE_COOKIES:-}
+      PLAINBOARD_HSTS: ${PLAINBOARD_HSTS:-true}
+      PLAINBOARD_ALLOWED_ORIGINS: ${PLAINBOARD_ALLOWED_ORIGINS:-}
       # Empty: SQLite in the data volume. Or your PostgreSQL: postgresql://user:password@host:5432/name
       PLAINBOARD_DATABASE: ${PLAINBOARD_DATABASE:-}
       PLAINBOARD_RUNNER_URL: http://runner:8090

@@ -13,6 +13,7 @@ from ..events import bus
 from ..models import Agent, FlowEvent, Run, Schedule, TaskTransition, utcnow
 from ..schemas import ScheduleCreate, ScheduleOut, ScheduleUpdate
 from . import flow_log
+from . import landings as landing_service
 from . import settings as settings_service
 from .errors import NotFound, ServiceError
 
@@ -172,10 +173,12 @@ async def due(session: AsyncSession, now: datetime) -> list[Schedule]:
 
 async def quiet(session: AsyncSession, schedule: Schedule) -> bool:
     """Whether nothing happened in the schedule's project since its last run: no turn but its own, no
-    ticket moved, nothing landed or noted in the work log."""
+    ticket moved, nothing landed or noted in the work log, and no base branch is red."""
     since = schedule.last_run_at
     if since is None:
         return False
+    if await landing_service.red_repositories(session, schedule.project_id):
+        return False  # a red base branch is never a quiet project: it has to be repaired
     turn = select(Run.id).where(Run.project_id == schedule.project_id, Run.created_at > since, or_(Run.schedule_id.is_(None), Run.schedule_id != schedule.id))
     moved = select(TaskTransition.id).where(TaskTransition.project_id == schedule.project_id, TaskTransition.at > since)
     noted = select(FlowEvent.id).where(FlowEvent.project_id == schedule.project_id, FlowEvent.at > since, FlowEvent.kind != SKIPPED)

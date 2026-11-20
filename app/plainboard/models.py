@@ -268,6 +268,7 @@ class Repository(Timestamps, Base):
     tidied_at: Mapped[datetime | None] = mapped_column(DateTime)
     # When the manager was last told that most of this repository's check runs fail (landing._keeps_failing).
     failing_told_at: Mapped[datetime | None] = mapped_column(DateTime)
+    red_told_at: Mapped[datetime | None] = mapped_column(DateTime)  # the manager was last reminded that its base branch stays red
     # How git reaches it: "default" (the general GitHub token, or none), "token" (its own HTTPS
     # access token, any host) or "ssh" (its own key pair, e.g. a deploy key).
     auth: Mapped[str] = mapped_column(String(20), default="default", server_default="default")
@@ -497,6 +498,7 @@ class Train(Timestamps, Base):
     direct: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     failed_checks: Mapped[str] = mapped_column(Text, default="", server_default="")  # names, one per line
     escalated: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())  # the manager was told the base stays red
+    rerun_at: Mapped[datetime | None] = mapped_column(DateTime)  # a look at the base branch (size 0): its failed jobs were run once more
 
 
 class FlowEvent(Base):

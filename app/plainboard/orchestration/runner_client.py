@@ -253,6 +253,11 @@ class RunnerClient:
         body = {"credentials": credentials.model_dump(mode="json"), "repo": repo, "sha": sha}
         return [PullRequestCheck.model_validate(c) for c in (await self._github("/github/commit-checks", body, 120)).json()]
 
+    async def rerun_failed(self, credentials: Credentials, repo: str, run_ids: list[int]) -> int:
+        """Run the failed jobs of these workflow runs of Actions once more; how many were started again."""
+        body = {"credentials": credentials.model_dump(mode="json"), "repo": repo, "run_ids": run_ids}
+        return int((await self._github("/github/rerun-failed", body, 150)).json().get("rerun", 0))
+
     async def merge_pull_request(
         self, credentials: Credentials, repo: str, number: int, *, methods: list[str] | None = None, key: str | None = None, remote: RepoSpec | None = None, delete_branches: dict[str, str] | None = None
     ) -> CheckResult:

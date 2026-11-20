@@ -198,7 +198,7 @@ async def overview(session: AsyncSession, project_id: int, hours: int = 24, now:
         out.loops = sorted(((a, names.get(a, "?"), count, command) for (a, command), count in loops.items()), key=lambda item: item[2], reverse=True)
 
     for status, size, seconds, direct in await session.execute(
-        select(Train.status, Train.size, Train.check_seconds, Train.direct).where(Train.project_id == project_id, Train.finished_at >= since, Train.status.in_((TrainStatus.LANDED, TrainStatus.FAILED)))
+        select(Train.status, Train.size, Train.check_seconds, Train.direct).where(Train.project_id == project_id, Train.size > 0, Train.finished_at >= since, Train.status.in_((TrainStatus.LANDED, TrainStatus.FAILED)))
     ):
         out.check_rounds += 1
         out.check_failed += status == TrainStatus.FAILED
@@ -281,6 +281,6 @@ def forget_cache() -> None:
 
 async def running_trains(session: AsyncSession, project_id: int, now: datetime | None = None) -> list[str]:
     now = now or utcnow()
-    rows = await session.scalars(select(Train).where(Train.project_id == project_id, Train.status == TrainStatus.CHECKING).order_by(Train.id))
+    rows = await session.scalars(select(Train).where(Train.project_id == project_id, Train.size > 0, Train.status == TrainStatus.CHECKING).order_by(Train.id))
     return [f"{train.size} branch{'es' if train.size != 1 else ''} ({duration(_span(train.created_at, now))})" for train in rows]
 

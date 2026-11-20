@@ -401,14 +401,14 @@ async def in_flight(session: AsyncSession, project_id: int, now: datetime | None
 
 
 async def red_bases(session: AsyncSession, project_id: int, now: datetime | None = None) -> list[str]:
-    """For the manager's turn: base branches that fail their checks while finished branches wait for the repair.
-    From the database, like everything in flight: who repairs it, and whether anybody does."""
+    """For the manager's turn: base branches that fail their checks, however long ago that began, and whether
+    finished branches wait for the repair. From the database, like everything in flight: who repairs it, and whether anybody does."""
     from . import landings as landing_service
 
     now = now or utcnow()
     lines = []
-    for repo in list(await session.scalars(select(Repository).where(Repository.project_id == project_id, Repository.land_first).order_by(Repository.id))):
-        red = await landing_service.red_base(session, repo.id, now)
+    for repo in list(await session.scalars(select(Repository).where(Repository.project_id == project_id).order_by(Repository.id))):
+        red = await landing_service.red_now(session, repo.id)
         if red is None:
             continue
         fixes = [a.id for a in red.repairs]
@@ -425,10 +425,12 @@ async def red_bases(session: AsyncSession, project_id: int, now: datetime | None
         else:
             repair = "Nobody repairs it: delegate the repair with base_repair=true, so its branch lands while the others wait"
         checks = ", ".join(red.train.failed_checks.split("\n")[:4]) or "its checks"
-        lines.append(
-            f"{red.train.base} of {repo.name} has failed its checks for {duration((now - red.since).total_seconds())} ({truncate(checks, 120)}). "
-            f"Finished branches wait for its repair ({held} now), at most {duration((red.until - now).total_seconds())} more; then they land as they are. {repair}."
+        waits = (
+            f"Finished branches wait for its repair ({held} now), at most {duration((red.until - now).total_seconds())} more; then they land as they are."
+            if now < red.until
+            else "Finished branches land again as they are, on a red base."
         )
+        lines.append(f"{red.train.base} of {repo.name} has failed its checks for {duration((now - red.since).total_seconds())} ({truncate(checks, 120)}). {waits} {repair}.")
     return lines
 
 

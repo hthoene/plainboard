@@ -12,6 +12,12 @@ failure is repaired there by one assignment. Nothing waits for a check run then,
 takes nothing back; the price is a base branch that is red for a while. While it is red, only its
 repair lands (``red_base``), for a limited time.
 
+Every repository whose base branch has checks PlainBoard can read is also watched where nothing lands
+first: after each landing and whenever its base branch moves (a merge past PlainBoard, a push), the
+checks of the new head are looked at, as a train without branches (``Train.size`` 0, ``direct``).
+A red result is repaired like one of a batch that landed first: the same red phase, repairs, hold
+and escalation. Until the base branch is green again the manager is reminded now and then.
+
 How a train is checked depends on the repository:
 - its check command (``repository.check_command``): PlainBoard runs it on the merged branches and
   pushes to the base branch if it succeeds. Plain git, any host.
@@ -22,7 +28,7 @@ How a train is checked depends on the repository:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from plainboard_protocol import RepoSpec
@@ -125,9 +131,17 @@ async def hand_over(
     return landing
 
 
-async def running_train(session: AsyncSession, repository_id: int) -> Train | None:
-    q = select(Train).where(Train.repository_id == repository_id, Train.status.in_(RUNNING_TRAINS)).order_by(Train.id.desc()).limit(1)
-    return await session.scalar(q)
+async def running_train(session: AsyncSession, repository_id: int, direct: bool | None = None) -> Train | None:
+    """``direct``: only a look at the base branch (True), or only a train of branches (False)."""
+    q = select(Train).where(Train.repository_id == repository_id, Train.status.in_(RUNNING_TRAINS))
+    if direct is not None:
+        q = q.where(Train.direct.is_(direct))
+    return await session.scalar(q.order_by(Train.id.desc()).limit(1))
+
+
+def is_guard(train: Train) -> bool:
+    """A look at the checks of the base branch's head with no branches of its own (see the module doc)."""
+    return train.direct and train.size == 0
 
 
 async def members(session: AsyncSession, train: Train) -> list[Landing]:
@@ -184,6 +198,7 @@ class RedBase:
     since: datetime  # when the first check run of this red phase ended
     until: datetime  # from then on everything lands again
     repairs: list[Assignment]  # ordered for it and not cancelled, newest first
+    streak: list[Train] = field(default_factory=list)  # the failed batches of this red phase, newest first
 
 
 async def _last_result(session: AsyncSession, repository_id: int) -> Train | None:
@@ -192,18 +207,26 @@ async def _last_result(session: AsyncSession, repository_id: int) -> Train | Non
     return await session.scalar(select(Train).where(Train.repository_id == repository_id, Train.direct, done).order_by(Train.id.desc()).limit(1))
 
 
-async def red_base(session: AsyncSession, repository_id: int, now: datetime) -> RedBase | None:
-    """Set while finished branches wait for the repair of this repository's base branch (RED_HOLD_SECONDS)."""
+async def red_now(session: AsyncSession, repository_id: int) -> RedBase | None:
+    """Set while the base branch of this repository is red: its latest checks failed. However long ago."""
     last = await _last_result(session, repository_id)
     if last is None or last.status != TrainStatus.FAILED:
         return None
     streak = [last, *await red_streak(session, last)]
     since = streak[-1].finished_at or streak[-1].created_at
-    until = since + timedelta(seconds=RED_HOLD_SECONDS)
-    if now >= until:
-        return None
     ordered = select(Assignment).where(Assignment.train_id.in_([t.id for t in streak]), Assignment.status != AssignmentStatus.CANCELLED)
-    return RedBase(last, since, until, list(await session.scalars(ordered.order_by(Assignment.id.desc()))))
+    return RedBase(last, since, since + timedelta(seconds=RED_HOLD_SECONDS), list(await session.scalars(ordered.order_by(Assignment.id.desc()))), streak)
+
+
+async def red_base(session: AsyncSession, repository_id: int, now: datetime) -> RedBase | None:
+    """Set while finished branches wait for the repair of this repository's base branch (RED_HOLD_SECONDS)."""
+    red = await red_now(session, repository_id)
+    return red if red is not None and now < red.until else None
+
+
+async def red_repositories(session: AsyncSession, project_id: int) -> list[Repository]:
+    """The project's repositories whose base branch is red now."""
+    return [repo for repo in await session.scalars(select(Repository).where(Repository.project_id == project_id).order_by(Repository.id)) if await red_now(session, repo.id)]
 
 
 async def checks_unreadable(session: AsyncSession, train: Train) -> bool:
@@ -217,7 +240,7 @@ async def checks_unreadable(session: AsyncSession, train: Train) -> bool:
 async def latest_red(session: AsyncSession, project_id: int) -> Train | None:
     """The batch a repair of a base branch is for: the latest one that failed, of a base branch that is red now."""
     found: Train | None = None
-    for repository_id in list(await session.scalars(select(Repository.id).where(Repository.project_id == project_id, Repository.land_first))):
+    for repository_id in list(await session.scalars(select(Repository.id).where(Repository.project_id == project_id))):
         last = await _last_result(session, repository_id)
         if last is not None and last.status == TrainStatus.FAILED and (found is None or last.id > found.id):
             found = last

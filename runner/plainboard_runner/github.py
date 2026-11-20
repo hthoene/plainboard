@@ -121,6 +121,19 @@ async def commit_checks(credentials: Credentials, repo: str, sha: str) -> list[P
     return list(checks.values())
 
 
+async def rerun_failed(credentials: Credentials, repo: str, run_ids: list[int]) -> int:
+    """Re-run the failed jobs of workflow runs of Actions; how many runs were started again. A token
+    without "Actions: write" may not: then 0, and nothing else happens."""
+    started = 0
+    for run_id in run_ids:
+        try:
+            await run_cmd(["gh", "api", "-X", "POST", f"repos/{repo}/actions/runs/{run_id}/rerun-failed-jobs"], cwd=None, env=git_env(credentials), timeout=60)
+            started += 1
+        except WorkspaceError:
+            pass
+    return started
+
+
 def parse_check_runs(items: list[dict[str, Any]]) -> list[PullRequestCheck]:
     checks: dict[str, PullRequestCheck] = {}
     for item in items:

@@ -305,6 +305,14 @@ class PullRequestState(BaseModel):
     checks: list[PullRequestCheck] = Field(default_factory=list)
 
 
+class RerunRef(BaseModel):
+    """Workflow runs of Actions on GitHub whose failed jobs are run once more (``repo`` is owner/name)."""
+
+    credentials: Credentials
+    repo: str = Field(pattern=r"^[\w.-]+/[\w.-]+$")
+    run_ids: list[int] = Field(max_length=20)
+
+
 class CommitRef(BaseModel):
     """A commit on GitHub whose checks are wanted (``repo`` is owner/name)."""
 

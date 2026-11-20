@@ -75,6 +75,8 @@ export interface Repository {
   token_user: string;
   has_token: boolean;
   ssh_public_key: string;
+  /** The base branch, while its checks fail. */
+  red_base?: string | null;
   created_at: string;
 }
 

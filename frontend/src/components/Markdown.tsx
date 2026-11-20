@@ -1,9 +1,9 @@
 import clsx from "clsx";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useArchivedTasks, useTasks } from "../api/queries";
-import { AppWindow } from "lucide-react";
+import { AppWindow, Check, Copy } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useShell } from "../features/layout/shell-context";
 import { browserAddress } from "../lib/preview";
@@ -143,6 +143,66 @@ function PreviewLink({ address, children }: { address: string; children: ReactNo
   );
 }
 
+/** Copies text; falls back to a hidden textarea where navigator.clipboard is missing (plain HTTP). */
+async function copyText(text: string) {
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // fall through to the textarea
+    }
+  }
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.cssText = "position:fixed;top:0;left:0;opacity:0;pointer-events:none";
+  document.body.appendChild(area);
+  area.select();
+  try {
+    document.execCommand("copy");
+  } finally {
+    area.remove();
+  }
+}
+
+const hastText = (node: { value?: string; children?: unknown[] }): string =>
+  node.value ?? (node.children as { value?: string; children?: unknown[] }[] | undefined)?.map(hastText).join("") ?? "";
+
+/** A fenced code block with a copy button in its top-right corner (on hover where there is one, else always). */
+function CodeBlock({ text, children }: { text: string; children: ReactNode }) {
+  const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<number>(undefined);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const label = t(copied ? "common.copied" : "common.copy");
+  return (
+    <div className="group/code relative my-2">
+      {/* Right padding keeps the button off the text. */}
+      <pre style={{ margin: 0, paddingRight: "2.5rem" }} className="scroll-thin">
+        {children}
+      </pre>
+      <button
+        type="button"
+        title={label}
+        aria-label={label}
+        onClick={async () => {
+          await copyText(text);
+          setCopied(true);
+          window.clearTimeout(timer.current);
+          timer.current = window.setTimeout(() => setCopied(false), 1500);
+        }}
+        className="absolute top-1.5 right-1.5 inline-flex size-7 items-center justify-center rounded-sm text-fg-3 hover:bg-line hover:text-fg focus-visible:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/code:opacity-100"
+      >
+        {copied ? <Check className="size-4 text-ok" /> : <Copy className="size-4" />}
+        <span role="status" className="sr-only">
+          {copied ? label : ""}
+        </span>
+      </button>
+    </div>
+  );
+}
+
 export function Markdown({ children, className }: { children: string; className?: string }) {
   return (
     <div className={clsx("prose-chat break-words", className)}>
@@ -157,6 +217,9 @@ export function Markdown({ children, className }: { children: string; className?
             return address ? <PreviewLink address={address}>{link}</PreviewLink> : link;
           },
           img: ({ src, alt }) => (typeof src === "string" ? <ZoomableImage src={src} alt={alt ?? ""} /> : null),
+          pre: ({ node, children }) => (
+            <CodeBlock text={(node ? hastText(node) : "").replace(/\r?\n$/, "")}>{children}</CodeBlock>
+          ),
           table: ({ node: _node, ...props }) => (
             <div className="scroll-thin overflow-x-auto">
               <table {...props} />

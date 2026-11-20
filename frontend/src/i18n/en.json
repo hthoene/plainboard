@@ -1,6 +1,8 @@
 {
   "common": {
     "cancel": "Cancel",
+    "copy": "Copy",
+    "copied": "Copied",
     "close": "Close",
     "delete": "Delete",
     "download": "Download",

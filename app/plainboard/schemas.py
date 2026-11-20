@@ -295,6 +295,7 @@ class RepositoryOut(ORM):
     token_user: str = ""
     has_token: bool = False
     ssh_public_key: str = ""  # to add at the git host, e.g. as a deploy key
+    red_base: str | None = None  # the base branch, while its checks fail
     created_at: UTCDateTime
 
 

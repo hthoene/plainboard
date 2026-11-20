@@ -657,10 +657,18 @@ def train_repair_instructions(repo: str, base: str, branches: list[str], evidenc
     )
 
 
-def base_red_instructions(repo: str, base: str, branches: list[str], evidence: str, round_no: int, max_rounds: int) -> str:
-    listed = "\n".join(f"- {b}" for b in branches) or "- (nothing new landed: it failed before)"
-    return (
-        f"{base} of {repo} does not pass its checks. These branches landed on it together, right before the checks ran:\n{listed}\n\n"
+def base_red_instructions(repo: str, base: str, branches: list[str], evidence: str, round_no: int, max_rounds: int, *, checked: bool = False) -> str:
+    """``checked``: what landed passed its own checks first (trains); the base branch failed after that."""
+    if checked:
+        listed = "\n".join(f"- {b}" for b in branches) or "- (nothing of PlainBoard's: it was merged or pushed past it)"
+        head = (
+            f"{base} of {repo} does not pass its checks, although what landed passed its checks before. Likely causes: a check that runs only "
+            f"on {base}, two changes that only break together, or something merged past PlainBoard. Landed since its checks last passed:\n{listed}\n\n"
+        )
+    else:
+        listed = "\n".join(f"- {b}" for b in branches) or "- (nothing new landed: it failed before)"
+        head = f"{base} of {repo} does not pass its checks. These branches landed on it together, right before the checks ran:\n{listed}\n\n"
+    return head + (
         f"{evidence}\n\n"
         "Nothing is taken back: repair it forward, in one go.\n"
         f"1. Read every failure once. Start a new branch from origin/{base}.\n"

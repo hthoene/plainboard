@@ -90,7 +90,7 @@ async def overview(session: AsyncSession, project_id: int, days: int = 30, now: 
         target = current if key == "current" else previous if key == "previous" else by_day.get(key)
         if target is not None:
             target.landing_seconds = int(median(values))
-    checked = select(Train.status, Train.finished_at).where(Train.project_id == project_id, Train.finished_at >= before, Train.status.in_((TrainStatus.LANDED, TrainStatus.FAILED)))
+    checked = select(Train.status, Train.finished_at).where(Train.project_id == project_id, Train.size > 0, Train.finished_at >= before, Train.status.in_((TrainStatus.LANDED, TrainStatus.FAILED)))
     for status, finished_at in await session.execute(checked):
         for item in (period(finished_at), by_day.get(finished_at.date().isoformat())):
             if item is not None:

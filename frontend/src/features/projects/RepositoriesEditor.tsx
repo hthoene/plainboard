@@ -23,6 +23,7 @@ export interface RepoDraft {
   ssh_private_key: string; // write-only: one's own key instead of a created one
   ssh_public_key: string;
   new_ssh_key: boolean;
+  red_base?: string | null; // read-only: the base branch, while its checks fail
 }
 
 // Not crypto.randomUUID: browsers only have it over HTTPS or on localhost.
@@ -57,6 +58,7 @@ export const toDraft = (r: Repository): RepoDraft => ({
   quick_check_command: r.quick_check_command ?? "",
   land_first: r.land_first ?? false,
   tidy_branches: r.tidy_branches ?? false,
+  red_base: r.red_base ?? null,
   auth: r.auth,
   token: "",
   token_user: r.token_user,
@@ -218,6 +220,7 @@ export function RepositoriesEditor({
                     <span className="ml-1.5 font-normal text-fg-3">· {t(repo.auth === "ssh" ? "projects.repoAccessBadgeSsh" : "projects.repoAccessBadgeToken")}</span>
                   )}
                   {repo.land_first && <span className="ml-1.5 font-normal text-fg-3">· {t("projects.repoLandFirstBadge")}</span>}
+                  {repo.red_base && <span className="ml-1.5 text-you-fg">· {t("projects.repoBaseRed", { branch: repo.red_base })}</span>}
                 </div>
                 <div className="truncate font-mono text-fg-3">{repo.url}</div>
               </button>

@@ -97,15 +97,14 @@ def text(found: list[Finding], hours: int, limit: int = 8) -> str:
 async def _red_base(session, project_id, repos, agents, since, now) -> list[Finding]:
     out = []
     for repo in repos:
-        if not repo.land_first:
-            continue
         lately = select(Train).where(Train.repository_id == repo.id, Train.direct, Train.status.in_((TrainStatus.LANDED, TrainStatus.FAILED))).order_by(Train.id.desc()).limit(20)
         streak = []
         for train in await session.scalars(lately):
             if train.status != TrainStatus.FAILED:
                 break
             streak.append(train)
-        if len(streak) < 2:
+        # Red for two landings in a row, or one red base branch that nothing has made green for an hour.
+        if not streak or (len(streak) < 2 and (now - (streak[0].finished_at or streak[0].created_at)).total_seconds() < 3600):
             continue
         names = Counter(name for t in streak for name in t.failed_checks.split("\n") if name)
         repairs = await session.scalar(
@@ -115,7 +114,7 @@ async def _red_base(session, project_id, repos, agents, since, now) -> list[Find
             Finding(
                 "red_base",
                 90,
-                f"{streak[-1].base or 'The base branch'} of {repo.name} has failed its checks for {len(streak)} landings in a row",
+                f"{streak[-1].base or 'The base branch'} of {repo.name} has failed its checks for {len(streak)} landings in a row" if len(streak) > 1 else f"{streak[0].base or 'The base branch'} of {repo.name} fails its checks",
                 f"Red for {_age(streak[-1].finished_at or streak[-1].created_at, now)}. Failing: {_listed([f'{n} ({c}x)' for n, c in names.most_common()], 6)}. Repairs so far: {repairs or 0}.",
                 "Work that starts now builds on a broken base. Delegate the repair with what the failed logs say, or change the check if the check is what is wrong.",
             )
@@ -128,7 +127,7 @@ FAILING_TOLD_SECONDS = 12 * 3600  # how often at most the manager is told by its
 
 async def failing_checks(session: AsyncSession, repo: Repository, since: datetime) -> Finding | None:
     """Most of a repository's check runs since then failed (and there were a few)."""
-    runs = (await session.execute(select(Train.status, Train.failed_checks).where(Train.repository_id == repo.id, Train.finished_at >= since, Train.status.in_((TrainStatus.LANDED, TrainStatus.FAILED))))).all()
+    runs = (await session.execute(select(Train.status, Train.failed_checks).where(Train.repository_id == repo.id, Train.size > 0, Train.finished_at >= since, Train.status.in_((TrainStatus.LANDED, TrainStatus.FAILED))))).all()
     failed = [names for status, names in runs if status == TrainStatus.FAILED]
     if len(runs) < 4 or len(failed) / len(runs) < 0.4:
         return None

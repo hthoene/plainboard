@@ -218,11 +218,15 @@ async def to_out(session: AsyncSession, repos: list[Repository]) -> list[Reposit
         )
         for agent_id, repo_id in rows.all():
             links.setdefault(repo_id, []).append(agent_id)
+    from . import landings as landing_service  # it imports this module
+
     out = []
     for repo in repos:
         item = RepositoryOut.model_validate(repo)
         item.agent_ids = sorted(links.get(repo.id, []))
         item.has_token = bool(repo.token_enc)
+        red = await landing_service.red_now(session, repo.id)
+        item.red_base = (red.train.base or repo.default_branch or "main") if red else None
         out.append(item)
     return out
 

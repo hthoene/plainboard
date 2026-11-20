@@ -218,6 +218,7 @@
     "repoLandChecked": "After the checks pass",
     "repoLandCheckedHint": "PlainBoard merges all finished branches, checks them once together, and only what passes reaches the base branch. Right for a branch you release from, and where checks are quick and reliable.",
     "repoLandFirstBadge": "merges at once",
+    "repoBaseRed": "{{branch}} is red",
     "repoQuickCheck": "Quick check (command)",
     "repoCheck": "Full check (command)",
     "githubMissing": "A repository is missing?",

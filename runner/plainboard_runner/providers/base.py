@@ -8,6 +8,10 @@ from plainboard_protocol import CheckResult, CompletionResult, CompletionSpec, C
 from ..tool_bridge import ToolBridge
 
 
+class ProviderError(RuntimeError):
+    """A failed turn whose text already names the error that caused it."""
+
+
 class Provider(ABC):
     """An LLM backend able to run agentic turns.
 

@@ -94,7 +94,7 @@ class BranchTidy:
         repo.tidied_at = now  # also after a failure: tried again tomorrow, not with every look
         await s.commit()
         try:
-            result = await self._runs.runner.tidy_branches(spec)
+            result = await self._runs.runners.of(project.id).tidy_branches(spec)
         except RunnerError as exc:
             await flow_log.record(s, project.id, "branches.tidy_failed", repository=repo.name, what=str(exc)[:300])
             return

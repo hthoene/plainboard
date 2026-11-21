@@ -90,6 +90,7 @@ RULES: tuple[Rule, ...] = (
     Rule("/api/health", Need.PUBLIC),
     Rule("/api/internal", Need.PUBLIC),
     Rule("/api/public", Need.PUBLIC),
+    Rule("/api/runners/connect", Need.PUBLIC),  # an external runner's socket: its own token
     # --- the installation
     Rule("/api/auth/me", Need.USER),
     Rule("/api/meta", Need.USER),
@@ -101,6 +102,7 @@ RULES: tuple[Rule, ...] = (
     Rule("/api/secrets", Need.ADMIN),
     Rule("/api/access-keys", Need.ADMIN),
     Rule("/api/inspect", Need.ADMIN),
+    Rule("/api/runners", Need.ADMIN),  # external runners: their tokens and machines
     Rule("/api/usage", Need.ADMIN),  # disk and memory of the whole installation
     Rule("/api/github", Need.ADMIN),  # lists what the installation's GitHub token sees
     Rule("/api/users", Need.ADMIN),
@@ -117,7 +119,8 @@ RULES: tuple[Rule, ...] = (
     _project("/previews", write=Need.MEMBER),  # which servers run; a member stops one
     _project("/export", read=Need.OWNER),  # the whole project as a file, credentials included
     _project("/secrets", read=Need.OWNER),
-    _project("/accounts", read=Need.ADMIN, write=Need.ADMIN),  # which of the installation's subscriptions it may use: not its owner's call
+    _project("/accounts", read=Need.ADMIN, write=Need.ADMIN),
+    _project("/runner"),  # which runner its agents use: its owner chooses  # which of the installation's subscriptions it may use: not its owner's call
     _project("/public-api-keys", read=Need.OWNER),
     _of("/api/agents/{agent_id}", "agent_id", Agent),
     _of("/api/agent-notes/{note_id}", "note_id", AgentNote),

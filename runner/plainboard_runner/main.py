@@ -7,14 +7,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket
 from fastapi.responses import StreamingResponse
 from plainboard_protocol import ACCOUNT_KEY_PATTERN, DEFAULT_ACCOUNT, BranchRef, CandidatesSpec, CheckResult, CleanupCandidate, CleanupResult, CleanupSpec, CommitRef, CompletionResult, CompletionSpec, Credentials, DeleteSpec, ErrorEvent, JobPort, JobSpec, JobState, LimitsEvent, MachineUsage, ProjectFiles, ProviderAccount, ProviderInfo, PullRequestCheck, PullRequestRef, PullRequestState, RepoSpec, RerunRef, RunSpec, TidyResult, TidySpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, TrimSpec, UpstreamRef, UpstreamState
 from pydantic import BaseModel, Field
 
 from . import cleanup
+from . import config
+from . import connect
 from . import errors
 from . import github
 from .browser import browsers
@@ -31,7 +35,24 @@ from .workspace import WorkspaceError, config_args, git_env, prepare_workspace, 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("plainboard.runner")
 
-app = FastAPI(title="PlainBoard Runner")
+_background: set[asyncio.Task[None]] = set()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    _background.add(asyncio.create_task(usage.keep_measured()))
+    _background.add(asyncio.create_task(usage.keep_sampling()))
+    # An external runner connects out to PlainBoard (connect.py); the built-in one is called by the app.
+    task = asyncio.create_task(connect.serve(), name="connect") if connect.enabled() else None
+    try:
+        yield
+    finally:
+        if task:
+            task.cancel()
+        await browsers.close_all()
+
+
+app = FastAPI(title="PlainBoard Runner", lifespan=lifespan)
 app.include_router(translate.router)  # for the harness of a turn on a model server that speaks Chat Completions
 _active: dict[str, asyncio.Task[None]] = {}
 
@@ -45,20 +66,6 @@ async def health() -> dict[str, str]:
 async def browser(websocket: WebSocket, key: str) -> None:
     """A browser in this container, shown in PlainBoard (see browser.py). One per key."""
     await browsers.serve(websocket, key)
-
-
-@app.on_event("shutdown")
-async def close_browsers() -> None:
-    await browsers.close_all()
-
-
-_background: set[asyncio.Task[None]] = set()
-
-
-@app.on_event("startup")
-async def measure_usage() -> None:
-    _background.add(asyncio.create_task(usage.keep_measured()))
-    _background.add(asyncio.create_task(usage.keep_sampling()))
 
 
 @app.get("/usage", response_model=MachineUsage)
@@ -192,6 +199,8 @@ async def _execute(spec: RunSpec, queue: asyncio.Queue[str | None]) -> None:
 async def start_run(spec: RunSpec) -> StreamingResponse:
     if spec.run_id in _active:
         raise HTTPException(409, "Run already active")
+    if connect.enabled():  # an external runner: tool calls go straight to PlainBoard's address
+        spec.bridge.base_url = connect.APP_URL
     queue: asyncio.Queue[str | None] = asyncio.Queue()
     task = asyncio.create_task(_execute(spec, queue))
     _active[spec.run_id] = task
@@ -210,6 +219,31 @@ async def start_run(spec: RunSpec) -> StreamingResponse:
                 task.cancel()
 
     return StreamingResponse(stream(), media_type="application/x-ndjson")
+
+
+_UPLOAD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
+
+
+def _upload(name: str):
+    if not _UPLOAD_NAME.fullmatch(name) or ".." in name:
+        raise HTTPException(400, "Not an attachment's name")
+    return config.UPLOADS_DIR / name
+
+
+@app.post("/uploads/missing")
+async def missing_uploads(names: list[str]) -> list[str]:
+    """An external runner has no uploads volume: which of the project's attachments it lacks (the app sends them)."""
+    return [name for name in names if _UPLOAD_NAME.fullmatch(name) and ".." not in name and not _upload(name).is_file()]
+
+
+@app.put("/uploads/{name}")
+async def put_upload(name: str, request: Request) -> dict[str, bool]:
+    path = _upload(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    part = path.with_name(f".{name}.part")
+    part.write_bytes(await request.body())
+    part.replace(path)
+    return {"ok": True}
 
 
 @app.get("/runs")

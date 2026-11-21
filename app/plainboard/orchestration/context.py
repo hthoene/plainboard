@@ -31,7 +31,6 @@ from ..services import settings as settings_service
 from ..services import todos as todo_service
 from ..services.util import truncate
 from . import prompts
-from .runner_client import RunnerClient
 
 log = logging.getLogger(__name__)
 
@@ -77,8 +76,8 @@ def render_message(message: Message) -> str:
 
 
 class ContextManager:
-    def __init__(self, runner: RunnerClient):
-        self.runner = runner
+    def __init__(self, runners):
+        self.runners = runners  # orchestration/runners.Runners: a summary is made on the project's runner
 
     async def _uncovered(self, session: AsyncSession, conv: Conversation, *, before_id: int | None, text_only: bool) -> list[Message]:
         q = select(Message).where(Message.conversation_id == conv.id, Message.id > conv.summary_until_message_id)
@@ -201,7 +200,7 @@ class ContextManager:
         cost = 0.0
         tokens_in = tokens_out = 0
         for chunk in self._chunks([render_message(m) for m in to_summarize]):
-            result = await self.runner.complete(
+            result = await self.runners.of(agent.project_id).complete(
                 CompletionSpec(
                     provider=agent.provider,
                     model=agent.summary_model,

@@ -8,7 +8,6 @@ read what goes through it. Only for the signed-in user: it is a browser inside t
 from __future__ import annotations
 
 from fastapi import APIRouter, WebSocket
-from websockets.asyncio.client import connect
 from websockets.exceptions import InvalidHandshake
 
 from ..db import sessionmaker
@@ -36,7 +35,11 @@ async def project_browser(websocket: WebSocket, project_id: int) -> None:
             return
     await websocket.accept()
     try:
-        upstream = await connect(websocket.app.state.runner.browser_url(f"project-{project_id}"), max_size=None, open_timeout=30, ping_interval=None, compression=None)  # frames are JPEG: compressing them again only costs time
+        runners = websocket.app.state.runs.runners
+        key = f"project-{project_id}"
+        upstream = await runners.socket(
+            runners.runner_id(project_id), None, f"/browser/{key}", url=runners.builtin.browser_url(key), max_size=None, open_timeout=30, ping_interval=None, compression=None
+        )  # frames are JPEG: compressing them again only costs time
     except (OSError, TimeoutError, InvalidHandshake):
         await websocket.send_json({"t": "error", "message": "The runner can't be reached, or it has no browser yet (rebuild it)."})
         await websocket.close()

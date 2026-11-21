@@ -6,7 +6,7 @@ from starlette.websockets import WebSocketDisconnect
 
 
 def test_browser_window_is_passed_on_to_the_runner_for_the_signed_in_user(client, project, monkeypatch):
-    from plainboard.api import browser as browser_api
+    from plainboard.orchestration import runners as runners_module
 
     sent, asked = [], []
 
@@ -37,7 +37,7 @@ def test_browser_window_is_passed_on_to_the_runner_for_the_signed_in_user(client
         asked.append(url)
         return Upstream()
 
-    monkeypatch.setattr(browser_api, "connect", connect)
+    monkeypatch.setattr(runners_module, "connect", connect)
     with client.websocket_connect(f"/api/projects/{project['id']}/browser") as ws:
         assert ws.receive_json() == {"t": "state", "url": ""}
         assert ws.receive_bytes() == b"\xff\xd8frame"

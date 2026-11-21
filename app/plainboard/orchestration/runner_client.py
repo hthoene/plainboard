@@ -37,10 +37,13 @@ def unreachable(exc: BaseException) -> str:
 
 
 class RunnerClient:
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, transport: httpx.AsyncBaseTransport | None = None):
+        """``transport``: an external runner's tunnel (orchestration/tunnel.py) instead of the network."""
         # No connection is kept for the next request: uvicorn closes an idle one after a few seconds, and a
         # request that reuses it just then (likely on a loaded host) is reset with no message.
-        self._client = httpx.AsyncClient(base_url=base_url, timeout=httpx.Timeout(60, connect=10), limits=httpx.Limits(max_keepalive_connections=0))
+        self._client = httpx.AsyncClient(
+            base_url=base_url, timeout=httpx.Timeout(60, connect=10), limits=httpx.Limits(max_keepalive_connections=0), transport=transport
+        )
         self._providers: tuple[float, list[ProviderInfo]] | None = None
 
     async def stream_run(self, spec: RunSpec) -> AsyncIterator[RunEvent]:
@@ -202,6 +205,18 @@ class RunnerClient:
         if resp.status_code >= 400:
             raise RunnerError(resp.text[:600])
         return TidyResult.model_validate(resp.json())
+
+    async def missing_uploads(self, names: list[str]) -> list[str]:
+        """Which of these attachment files the runner does not have (an external runner has no uploads volume)."""
+        return [str(n) for n in (await self._post_job("/uploads/missing", names)).json()]
+
+    async def put_upload(self, name: str, content: bytes) -> None:
+        try:
+            resp = await self._client.put(f"/uploads/{name}", content=content, timeout=300)
+        except httpx.HTTPError as exc:
+            raise RunnerError(f"Runner unreachable: {exc}") from exc
+        if resp.status_code >= 400:
+            raise RunnerError(resp.text[:300])
 
     async def usage(self, measure: bool = False) -> MachineUsage:
         """Disk and memory of the runner's machine; ``measure``: measure the folders again, in the background."""

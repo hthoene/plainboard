@@ -236,7 +236,7 @@ class LandingWatcher:
             return True
         if train.mode == landing_service.GITHUB:
             return await self._watch_pull_request(s, r, train, members, now)
-        state = (await self._runs.runner.job_status([train.job_id or ""])).get(train.job_id or "")
+        state = (await self._runs.runners.of(r.repo.project_id).job_status([train.job_id or ""])).get(train.job_id or "")
         if state is None:  # the runner restarted and the check with it: again, with the next train
             await self._abort(s, r, train, members, now)
             return True
@@ -248,7 +248,7 @@ class LandingWatcher:
             await self._failed(s, r, train, members, f"the check command ended with exit code {state.exit_code}", evidence, ["check command"])
             return True
         spec = TrainLandSpec(credentials=r.credentials, key=r.key, remote=r.remote, base=train.base, head_sha=train.head_sha, delete_branches={m.branch: m.head_sha for m in members})
-        landed = await self._runs.runner.land_train(spec)
+        landed = await self._runs.runners.of(r.repo.project_id).land_train(spec)
         if landed.ok:
             await self._landed(s, r, train, members, now)
         elif base_moved(landed.detail):
@@ -259,7 +259,7 @@ class LandingWatcher:
 
     async def _watch_pull_request(self, s: AsyncSession, r: Repo, train: Train, members: list[Landing], now: datetime) -> bool:
         assert r.slug and train.number
-        state = await self._runs.runner.pull_request(r.credentials, r.slug, train.number)
+        state = await self._runs.runners.of(r.repo.project_id).pull_request(r.credentials, r.slug, train.number)
         if state.state == "merged":  # by PlainBoard, or by someone who merged it by hand
             await self._landed(s, r, train, members, now)
             return True
@@ -270,7 +270,7 @@ class LandingWatcher:
         if train.status == TrainStatus.BLOCKED:
             return False  # until someone merges it or closes it
         if state.mergeable == "conflict":  # the base branch moved under it: assemble again
-            await self._runs.runner.close_pull_request(r.credentials, r.slug, train.number)
+            await self._runs.runners.of(r.repo.project_id).close_pull_request(r.credentials, r.slug, train.number)
             await self._abort(s, r, train, members, now)
             return True
         result = checks_result(state, (now - train.created_at).total_seconds())
@@ -278,13 +278,13 @@ class LandingWatcher:
             return False  # checks still running, or GitHub has not worked out yet whether it can be merged
         self._finished(train, now)
         if result == "failed":
-            await self._runs.runner.close_pull_request(r.credentials, r.slug, train.number)
+            await self._runs.runners.of(r.repo.project_id).close_pull_request(r.credentials, r.slug, train.number)
             failed = [c for c in state.checks if c.state == "fail"]
             listed = "\n".join(f"- {c.name}" + (f": {c.link}" if c.link else "") for c in failed[:15])
             evidence = f"Failed checks ({train.url}):\n{listed}\nRead the failed logs once: the links, or gh run view <run id> --log-failed."
             await self._failed(s, r, train, members, "failed checks: " + ", ".join(c.name for c in failed[:8]), evidence, [c.name for c in failed])
             return True
-        merged = await self._runs.runner.merge_pull_request(
+        merged = await self._runs.runners.of(r.repo.project_id).merge_pull_request(
             r.credentials, r.slug, train.number, methods=MERGE_METHODS, key=r.key, remote=r.remote, delete_branches={m.branch: m.head_sha for m in members}
         )
         if merged.ok:
@@ -465,14 +465,14 @@ class LandingWatcher:
         # the database's one writer for as long as git takes, and every write of everyone waits for
         # that: seen as a click in a ticket that took nine seconds, and turns that started late.
         await s.commit()
-        result = await self._runs.runner.assemble_train(spec)
+        result = await self._runs.runners.of(r.repo.project_id).assemble_train(spec)
         by_branch = {p.branch: p for p in pick}
         on_train = [by_branch[b] for b in result.merged if b in by_branch]
         train = None
         if on_train:
             job_id = secrets.token_hex(8) if r.mode == landing_service.COMMAND else None
             if job_id:
-                await self._runs.runner.check_train(TrainCheckSpec(credentials=r.credentials, key=r.key, id=job_id, command=r.repo.check_command.strip()))
+                await self._runs.runners.of(r.repo.project_id).check_train(TrainCheckSpec(credentials=r.credentials, key=r.key, id=job_id, command=r.repo.check_command.strip()))
             train = Train(
                 project_id=r.project.id, repository_id=r.repo.id, mode=r.mode, group_no=group, status=TrainStatus.CHECKING, created_at=now, branch=spec.branch,
                 base=result.base, head_sha=result.head_sha, size=len(on_train), number=result.number, url=result.url, job_id=job_id,
@@ -506,7 +506,7 @@ class LandingWatcher:
         busy = await landing_service.busy(s, r.repo.id, now)  # after the look above: who is back resolves nothing any more
         waiting = [w for w in waiting if not (busy.files and self._held.get(w.id) == busy.key)]
         for landing in [w for w in waiting if not w.branch]:  # handed over as a pull request number, before trains
-            state = await self._runs.runner.pull_request(r.credentials, r.slug, landing.number) if r.slug and landing.number else None
+            state = await self._runs.runners.of(r.repo.project_id).pull_request(r.credentials, r.slug, landing.number) if r.slug and landing.number else None
             landing.branch = state.branch if state and state.state == "open" else ""
             if not landing.branch:
                 landing.status = LandingStatus.CLOSED
@@ -577,13 +577,13 @@ class LandingWatcher:
             busy_files=list(busy.files),
         )
         await s.commit()  # nothing of the database is held while the runner merges and pushes (see _depart)
-        result = await self._runs.runner.assemble_train(spec)
+        result = await self._runs.runners.of(r.repo.project_id).assemble_train(spec)
         by_branch = {p.branch: p for p in pick}
         landed = [by_branch[b] for b in result.merged if b in by_branch]
         pushed = None
         if landed:
             heads = {m.branch: result.merged[m.branch] for m in landed}
-            pushed = await self._runs.runner.land_train(TrainLandSpec(credentials=r.credentials, key=r.key, remote=r.remote, base=result.base, head_sha=result.head_sha, delete_branches=heads))
+            pushed = await self._runs.runners.of(r.repo.project_id).land_train(TrainLandSpec(credentials=r.credentials, key=r.key, remote=r.remote, base=result.base, head_sha=result.head_sha, delete_branches=heads))
         if pushed is None or not pushed.ok:
             if pushed is not None and base_moved(pushed.detail):
                 return  # someone else pushed to the base branch meanwhile: merged again with the next look
@@ -603,7 +603,7 @@ class LandingWatcher:
             )  # fmt: skip
             if r.mode == landing_service.COMMAND:
                 train.job_id = secrets.token_hex(8)
-                await self._runs.runner.check_train(TrainCheckSpec(credentials=r.credentials, key=r.key, id=train.job_id, command=r.repo.check_command.strip()))
+                await self._runs.runners.of(r.repo.project_id).check_train(TrainCheckSpec(credentials=r.credentials, key=r.key, id=train.job_id, command=r.repo.check_command.strip()))
             elif r.mode is None:
                 train.status, train.finished_at = TrainStatus.LANDED, now  # nothing checks this repository
             s.add(train)
@@ -660,7 +660,7 @@ class LandingWatcher:
         if not base:
             return  # nothing landed yet, and no base branch is named: once a train ran, it is known
         await s.commit()
-        head = await self._runs.runner.branch_head(r.credentials, r.remote, base)
+        head = await self._runs.runners.of(r.repo.project_id).branch_head(r.credentials, r.remote, base)
         seen = running.head_sha if running else await s.scalar(select(Train.head_sha).where(Train.repository_id == r.repo.id, Train.direct).order_by(Train.id.desc()).limit(1))
         if not head or head == seen:
             return
@@ -704,7 +704,7 @@ class LandingWatcher:
         links: dict[str, str] = {}
         evidence = ""
         if train.mode == landing_service.COMMAND:
-            state = (await self._runs.runner.job_status([train.job_id or ""])).get(train.job_id or "")
+            state = (await self._runs.runners.of(r.repo.project_id).job_status([train.job_id or ""])).get(train.job_id or "")
             if state is not None and state.running:
                 return False
             result = "none" if state is None else "passed" if state.exit_code == 0 else "failed"
@@ -713,7 +713,7 @@ class LandingWatcher:
                 evidence = f"Check command: {r.repo.check_command.strip()}\nIt ended with exit code {state.exit_code}. Last output:\n{r.redact(state.tail)}\nFull log: {state.log_path}"  # type: ignore[operator]
         else:
             try:
-                checks = await self._runs.runner.commit_checks(r.credentials, r.slug, train.head_sha) if r.slug else []
+                checks = await self._runs.runners.of(r.repo.project_id).commit_checks(r.credentials, r.slug, train.head_sha) if r.slug else []
             except RunnerError as exc:
                 return await self._unreadable(s, r, train, now, exc)
             result = base_result(checks, (now - (train.rerun_at or train.created_at)).total_seconds())
@@ -726,7 +726,7 @@ class LandingWatcher:
                 # Every train passed its checks, and still: it may be a check that fails at random. Its failed
                 # jobs run once more on the same commit before anybody repairs anything.
                 runs = sorted({int(m.group(1)) for link in links.values() if (m := ACTIONS_RUN.search(link or ""))})[:20]
-                if runs and await self._runs.runner.rerun_failed(r.credentials, r.slug, runs):
+                if runs and await self._runs.runners.of(r.repo.project_id).rerun_failed(r.credentials, r.slug, runs):
                     train.rerun_at = now
                     await s.commit()
                     await flow_log.record(s, r.project.id, "base.rerun", train_id=train.id, checks=failed, runs=len(runs))
@@ -873,7 +873,7 @@ class LandingWatcher:
         if failed is None or failed.size != len(pick):
             return False  # a branch was taken off: the others may pass without it
         for landing in pick:
-            if await self._runs.runner.branch_head(r.credentials, r.remote, landing.branch) != landing.failed_sha:
+            if await self._runs.runners.of(r.repo.project_id).branch_head(r.credentials, r.remote, landing.branch) != landing.failed_sha:
                 return False
         for landing in pick:
             landing.status, landing.train_id, landing.group_no = LandingStatus.STUCK, None, None

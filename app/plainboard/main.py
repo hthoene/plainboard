@@ -9,7 +9,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import accounts, auth, browser, chat, internal, knowledge, preview, projects, public, repositories, secrets, system, tasks, todos, users, ws
+from .api import accounts, auth, browser, chat, internal, knowledge, preview, projects, public, repositories, runners, secrets, system, tasks, todos, users, ws
 from .api.deps import authorize
 from .api.guard import Guard
 from .config import get_config
@@ -79,13 +79,14 @@ async def lifespan(app: FastAPI):
         await job_watcher.stop()
         await scheduler.stop()
         await runs.stop()
+        await runs.runners.aclose()
         await runner.aclose()
         await app.state.preview_client.aclose()
         await dispose_engine()
 
 
 # Every route of these is checked against its rule in services/access.py before it runs.
-API_MODULES = (auth, system, accounts, users, projects, public, repositories, secrets, tasks, todos, chat, knowledge, internal)
+API_MODULES = (auth, system, accounts, users, projects, public, repositories, runners, secrets, tasks, todos, chat, knowledge, internal)
 
 
 def create_app() -> FastAPI:
@@ -105,6 +106,7 @@ def create_app() -> FastAPI:
 
     for module in API_MODULES:
         app.include_router(module.router, dependencies=[Depends(authorize)])
+    app.include_router(runners.sockets)  # an external runner's tunnel: its token
     for module in (ws, browser, preview):  # sockets and the preview proxy check by themselves
         app.include_router(module.router)
 

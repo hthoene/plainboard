@@ -124,6 +124,7 @@ class FakeRunner:
         self.reruns: list[list[int]] = []  # workflow runs whose failed jobs were run once more
         self.on_base: set[str] = set()  # branches the base branch already contains
         self.train_specs: list = []
+        self.emptied: set[str] = set()  # runs whose turn ended without a step once
         self.train_results: list[TrainResult] = []
         self.check_specs: list = []
         self.land_specs: list = []
@@ -188,6 +189,11 @@ class FakeRunner:
                     return
             elif line.startswith("COMPACT "):
                 yield CompactionEvent(tokens_before=int(line.split()[1]))
+            elif line == "EMPTY" or (line == "EMPTY_ONCE" and spec.run_id not in self.emptied):
+                # Claude Code ended the turn at once: no step, no text
+                self.emptied.add(spec.run_id)
+                yield ResultEvent(session_id=session_id)
+                return
         text = " | ".join(said) or "ok"
         yield AssistantTextEvent(text=text)
         yield UsageEvent(context_tokens=context)

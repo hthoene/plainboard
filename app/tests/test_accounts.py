@@ -1,3 +1,5 @@
+import json
+
 from conftest import agents_by_slug, idle, wait_for
 from plainboard.orchestration.limits_watcher import LimitsWatcher
 from plainboard_protocol import LimitWindow
@@ -441,3 +443,98 @@ def test_a_project_can_be_limited_to_some_subscriptions(client, project):
     assert client.get(f"/api/projects/{pid}").json()["account_ids"] == [shared["id"]]
     as_admin(client)
     assert client.put(f"/api/projects/{pid}/accounts", json={"account_ids": []}).json()["account_ids"] == []
+
+
+def test_the_plan_size_the_user_gave_is_shown_with_the_limits(client):
+    first = accounts(client)["Claude"]
+    client.patch(f"/api/accounts/{first['id']}", json={"auth_mode": "oauth_token", "secret": "tok-a", "plan_size": 20})
+    assert limits_of(client, first["id"])["plan_size"] == 20
+
+
+def report_limits(client, **windows: tuple[float, str | None]) -> None:
+    """Record a five_hour window per account label: (used, status)."""
+    import time
+
+    from plainboard.db import sessionmaker
+    from plainboard.models import Account
+    from plainboard.services import limits as limits_service
+    from sqlalchemy import select
+
+    async def record() -> None:
+        async with sessionmaker()() as s:
+            for label, (used, status) in windows.items():
+                key = await s.scalar(select(Account.key).where(Account.label == label))
+                await limits_service.record(s, key, [LimitWindow(name="five_hour", utilization=used, resets_at=int(time.time()) + 3600, status=status)])
+
+    client.portal.call(record)
+
+
+def test_turns_wait_while_every_subscription_is_used_up(client, project):
+    """Production, 2026-11-21: the second subscription had hit its weekly limit until 14:00, the first
+    then hit its 5-hour limit. There was no account to switch to, and every report and wake-up that
+    followed started a turn that failed at once with the limit message."""
+    pid = project["id"]
+    first = accounts(client)["Claude"]
+    client.patch(f"/api/accounts/{first['id']}", json={"auth_mode": "oauth_token", "secret": "tok-a"})
+    client.post("/api/accounts", json={"provider": "claude_code", "label": "Second", "auth_mode": "oauth_token", "secret": "tok-b"})
+    make_dev(client, pid)
+    manager = agents_by_slug(client, pid)["manager"]
+    report_limits(client, Claude=(1.0, "rejected"), Second=(1.0, "rejected"))
+
+    # Someone who waits for an answer still gets one (here: the manager's chat), and is told the truth.
+    specs = len(runner(client).specs)
+    args = {"agent": "dev", "title": "Implement endpoints", "instructions": "SAY API done"}
+    chat(client, manager["id"], "TOOL delegate " + json.dumps(args))
+    wait_for(lambda: len(runner(client).specs) > specs and all(r["status"] != "running" for r in client.get(f"/api/projects/{pid}/runs").json()))
+    assert "All subscriptions are used up until" in runner(client).specs[specs].prompt
+    # The assignment waits instead of failing.
+    (assignment,) = client.get(f"/api/projects/{pid}/assignments").json()
+    assert next(r for r in client.get(f"/api/projects/{pid}/runs").json() if r["assignment_id"] == assignment["id"])["status"] == "queued"
+
+    # One is free again: the assignment runs there.
+    report_limits(client, Second=(0.1, "allowed"))
+    runs = client.app_ref.state.runs
+    client.portal.call(runs._wake.set)
+    wait_for(lambda: client.get(f"/api/projects/{pid}/assignments").json()[0]["status"] == "done")
+    assert next(s for s in runner(client).specs if "SAY API done" in s.prompt and "TOOL delegate" not in s.prompt).credentials.claude_oauth_token == "tok-b"
+
+
+def test_after_a_limit_the_agent_is_told_the_subscriptions_are_available_again(client, project):
+    from plainboard.orchestration.prompts import SUMMARY_SYSTEM
+
+    pid = project["id"]
+    first = accounts(client)["Claude"]
+    client.patch(f"/api/accounts/{first['id']}", json={"auth_mode": "oauth_token", "secret": "tok-a"})
+    client.post("/api/accounts", json={"provider": "claude_code", "label": "Second", "auth_mode": "oauth_token", "secret": "tok-b"})
+    dev = make_dev(client, pid)
+    turn(client, pid, dev["id"], "REJECT tok-a five_hour 3600\nREJECT tok-b five_hour 3600")
+    messages = client.get(f"/api/agents/{dev['id']}/conversation").json()["messages"]
+    assert [(m["role"], m["kind"], m["meta"]) for m in messages[-1:]] == [("system", "error", {"limit": True})]
+    assert not any(m["role"] == "assistant" and "limit" in m["content"] for m in messages)
+
+    report_limits(client, Second=(0.1, "allowed"))
+    turn(client, pid, dev["id"])
+    assert "Subscriptions: available again (the earlier limit message no longer applies)." in runner(client).specs[-1].prompt
+    turn(client, pid, dev["id"])  # the agent has answered since: nothing more to say
+    assert "Subscriptions" not in runner(client).specs[-1].prompt
+    assert "never keep them" in SUMMARY_SYSTEM
+
+
+def test_a_turn_without_a_single_step_is_not_a_finished_assignment(client, project):
+    pid = project["id"]
+    make_dev(client, pid)
+    manager = agents_by_slug(client, pid)["manager"]
+
+    # Once: it runs again and the assignment is done with its report.
+    chat(client, manager["id"], "TOOL delegate " + json.dumps({"agent": "dev", "title": "First", "instructions": "EMPTY_ONCE\nSAY API done"}))
+    wait_for(lambda: idle(client, pid) and client.get(f"/api/projects/{pid}/assignments").json()[0]["status"] != "running")
+    (first,) = client.get(f"/api/projects/{pid}/assignments").json()
+    assert (first["status"], first["result"]) == ("done", "API done")
+
+    # Again on the second try: the assignment failed, and the manager is told so.
+    chat(client, manager["id"], "TOOL delegate " + json.dumps({"agent": "dev", "title": "Second", "instructions": "EMPTY"}))
+    wait_for(lambda: idle(client, pid) and len(client.get(f"/api/projects/{pid}/assignments").json()) == 2)
+    second = next(a for a in client.get(f"/api/projects/{pid}/assignments").json() if a["title"] == "Second")
+    assert second["status"] == "failed"
+    run = next(r for r in client.get(f"/api/projects/{pid}/runs").json() if r["assignment_id"] == second["id"])
+    assert run["status"] == "failed" and "without a single step" in run["error"]

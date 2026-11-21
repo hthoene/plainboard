@@ -315,6 +315,7 @@ Write a dense, factual summary in English with these sections (omit empty ones):
 ## Current state & open items
 ## Important facts about the user/team
 Keep every identifier, path, URL, number and name exactly. Drop chit-chat and anything obsolete.
+Used-up usage limits, rate limits and failed turns are passing states, not facts: never keep them.
 Merge the previous summary with the new transcript; the result replaces both."""
 
 
@@ -874,8 +875,24 @@ def language_note(language: str) -> str:
     )
 
 
-def with_preface(text: str, *, now: str, inbox: list[str], board: str = "") -> str:
+def subscriptions_line(tz_name: str, used_up_until: int | None, limited_before: bool) -> str:
+    """The truth about the subscriptions, only when it matters: a limit message earlier in the
+    conversation would otherwise be taken for a lasting fact."""
+    if used_up_until:
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz = ZoneInfo("UTC")
+        return "All subscriptions are used up until " + datetime.fromtimestamp(used_up_until, UTC).astimezone(tz).strftime("%H:%M %Z") + "."
+    if limited_before:
+        return "Subscriptions: available again (the earlier limit message no longer applies)."
+    return ""
+
+
+def with_preface(text: str, *, now: str, inbox: list[str], board: str = "", subscriptions: str = "") -> str:
     preface = [now]
+    if subscriptions:
+        preface.append(subscriptions)
     if inbox:
         preface.append("Updates since your last turn:\n" + "\n".join(f"- {item}" for item in inbox))
     if board:

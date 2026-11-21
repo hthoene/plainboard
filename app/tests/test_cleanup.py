@@ -9,7 +9,7 @@ from plainboard_protocol import CleanedItem, CleanupCandidate, CleanupResult, Fo
 from sqlalchemy import select
 
 from plainboard.db import sessionmaker
-from plainboard.models import Agent, FlowEvent, Job, Project, utcnow
+from plainboard.models import Agent, FlowEvent, InboxItem, Job, Project, Repository, utcnow
 from plainboard.services import cleanup, storage
 
 from conftest import agents_by_slug, idle, wait_for
@@ -112,7 +112,7 @@ def test_at_the_target_the_manager_is_told_once_and_nothing_is_deleted(client, p
     fake.candidates = [
         CleanupCandidate(path=f"/workspaces/{slug}/manager/repo/target", what="build", bytes=30 * GB, safety="busy"),
         CleanupCandidate(path="/home/agent/fw-jobs", what="home", bytes=26 * GB, safety="unsure", why="fw-jobs/run.log is not in a clone"),
-        CleanupCandidate(path="/home/agent/.cache/sccache", what="cache", bytes=21 * GB, safety="safe"),
+        CleanupCandidate(path="/home/agent/.cache/sccache", what="cache", bytes=21 * GB, safety="safe", tool="sccache"),
     ]
     assert _tick(client) == storage.FAST_SECONDS
     assert not getattr(fake, "cleanups", [])  # below the emergency level nothing goes by itself
@@ -120,7 +120,8 @@ def test_at_the_target_the_manager_is_told_once_and_nothing_is_deleted(client, p
     prompt = _told(fake, "Disk space")[0]
     assert "Clean up now." in prompt and "Workspaces: Manager 40.0 GB." in prompt
     assert f"- 30.0 GB /workspaces/{slug}/manager/repo/target: build output of Manager; busy\n" in prompt
-    assert "Shared, not yours (47.0 GB; no manager may delete these" in prompt and "- 21.0 GB /home/agent/.cache/sccache: cache, shared; safe" in prompt
+    assert "Shared, not yours (47.0 GB; PlainBoard trims the shared tool caches itself" in prompt and "admin" not in prompt
+    assert "- 21.0 GB /home/agent/.cache/sccache: cache, shared: sccache's shared cache, PlainBoard trims it itself; safe" in prompt
     assert "26.0 GB /home/agent/fw-jobs: home folder, shared; unsure: fw-jobs/run.log is not in a clone" in prompt
     view = client.get("/api/usage").json()["storage"]
     assert view["notify_percent"] == 80 and view["emergency_percent"] == 97 and round(view["percent"]) == 85
@@ -206,7 +207,7 @@ def test_the_manager_lists_and_deletes_only_his_projects_data_by_the_safety_rule
     assert theirs not in listed  # another project's data is not even shown
     assert "Shared, not yours (4.0 GB;" in listed and "- 4.0 GB /home/agent/scratch: home folder, shared; safe" in listed
     assert first.startswith("Deleted 5.0 GB: " + safe) and f"{busy}: busy" in first and f"{kept}: keep" in first
-    refused = f"Refused, not your project's (only its own data can be deleted; shared folders only by an admin): {theirs}, {shared}, /etc."
+    refused = f"Refused, not your project's (only its own data can be deleted): {theirs}, {shared}, /etc."
     assert refused in first
     assert forced.startswith("Deleted 3.0 GB: " + busy) and f"{kept}: keep" in forced and f"{theirs}, {shared}." in forced  # force changes nothing about whose it is
     assert [d.paths for d in fake.deletes] == [[safe, busy, kept], [busy, kept]]
@@ -220,15 +221,91 @@ def test_the_manager_lists_and_deletes_only_his_projects_data_by_the_safety_rule
     assert [c["by"] for c in client.get("/api/usage").json()["cleanups"]] == ["Manager", "Manager"]
 
 
-def test_a_home_folder_is_a_projects_only_if_all_its_clones_are_of_that_projects_repositories():
-    mine, other = Project(id=1, name="Mine", slug="mine"), Project(id=2, name="PaperPaw", slug="paperpaw")
-    repos = {storage._repo_key("https://github.com/acme/paperpaw.git"): 2, storage._repo_key("https://github.com/acme/mine"): 1}
-    by_remote = CleanupCandidate(path="/home/agent/fw-jobs", what="home", safety="safe", remotes=["git@github.com:acme/paperpaw.git"])
-    mixed = CleanupCandidate(path="/home/agent/dt-jobs", what="home", safety="safe", remotes=["git@github.com:acme/paperpaw.git", "https://github.com/acme/mine.git"])
-    foreign = CleanupCandidate(path="/home/agent/tgt", what="home", safety="safe", remotes=["https://github.com/acme/paperpaw", "https://github.com/rust-lang/cargo"])
-    by_name = CleanupCandidate(path="/home/agent/paperpaw-scratch", what="home", safety="safe")
-    assert [storage._owner(c, repos) for c in (by_remote, mixed, foreign, by_name)] == [2, None, None, None]
-    cache = CleanupCandidate(path="/home/agent/.cache/sccache", what="cache", safety="safe")
-    listing = storage.Listing([storage.Item(by_remote, 2), storage.Item(cache, None)], [mine, other], [], set(), MachineUsage(), [])
-    assert listing.visible(1) == [] and [i.candidate.path for i in listing.visible(2)] == ["/home/agent/fw-jobs"]
-    assert [i.candidate.path for i in listing.shared()] == ["/home/agent/.cache/sccache"]
+def test_a_home_folder_is_a_projects_by_its_name_commands_scripts_or_clones_and_only_one_projects():
+    mine, paw, pawtools = Project(id=1, name="Mine", slug="mine"), Project(id=2, name="PaperPaw", slug="paperpaw"), Project(id=3, name="Paw Tools", slug="pawtools")
+    mine.setup_script = "mkdir -p $HOME/mine-venvs\n"
+    repos = [
+        Repository(project_id=2, name="paperpaw", url="https://github.com/acme/paperpaw.git", quick_check_command="CARGO_TARGET_DIR=~/.cache/ck-target cargo check", check_command=""),
+        Repository(project_id=1, name="mine", url="https://github.com/acme/mine", check_command="", quick_check_command=""),
+        Repository(project_id=3, name="paperpaw-tools", url="https://github.com/acme/paperpaw-tools", check_command="", quick_check_command=""),
+    ]
+    keys = {storage._repo_key(r.url): r.project_id for r in repos}
+    o = storage.Owners([mine, paw, pawtools], repos, keys, "/workspaces")
+
+    def owner(path, what="home", **kw):
+        return storage.owner(CleanupCandidate(path=path, what=what, safety="safe", **kw), o)
+
+    assert owner("/home/agent/.cache/paperpaw-quick-check", "cache") == (2, "its name")
+    assert owner("/home/agent/paperpaw_scratch") == (2, "its name")
+    assert owner("/home/agent/paperpawx")[0] is None  # not as a whole word
+    assert owner("/home/agent/.cache/ck-target", "cache") == (2, "used by the quick check of paperpaw")
+    assert owner("/home/agent/.cache/ck-target-old", "cache")[0] is None
+    assert owner("/home/agent/mine-venvs") == (1, "its name, used by the setup script")
+    assert owner("/home/agent/scripts-out", mentioned=["/workspaces/mine/dev"]) == (1, "named in files in your workspaces")
+    assert owner("/home/agent/fw-jobs", remotes=["git@github.com:acme/paperpaw.git"]) == (2, "its clones are of your repositories")
+    # ambiguous: shared
+    assert owner("/home/agent/.cache/paperpaw-tools-build", "cache") == (None, "unclear whose: it matches PaperPaw and Paw Tools")
+    assert owner("/home/agent/dt-jobs", remotes=["git@github.com:acme/paperpaw.git", "https://github.com/acme/mine.git"])[0] is None
+    assert owner("/home/agent/tgt", remotes=["https://github.com/acme/paperpaw", "https://github.com/rust-lang/cargo"]) == (None, "unclear whose: it holds clones of other repositories too")
+    assert owner("/home/agent/.cache/sccache", "cache", tool="sccache") == (None, "sccache's shared cache, PlainBoard trims it itself")
+    assert owner("/home/agent/stuff") == (None, "")
+
+
+def test_the_manager_deletes_a_cache_of_his_project_and_another_manager_cannot(client, project):
+    pid, slug = project["id"], project["slug"]
+    other = client.post("/api/projects", json={"name": "Other Project", "description": "Someone else's"}).json()
+    wait_for(lambda: idle(client, pid) and idle(client, other["id"]))
+    fake = client.app_ref.state.runner
+    fake.machine_usage = MachineUsage(volumes=[_volume(85)])
+    cache = f"/home/agent/.cache/{slug}-quick-check"
+    fake.candidates = [CleanupCandidate(path=cache, what="cache", bytes=37 * GB, safety="safe", entries={"set1": 30 * GB, "set2": 7 * GB}, modified=time.time() - 7200)]
+    theirs = agents_by_slug(client, other["id"])["manager"]
+    call = "TOOL list_cleanup {}\nTOOL delete_cleanup " + json.dumps({"paths": [cache]})
+    assert client.post(f"/api/agents/{theirs['id']}/messages", json={"text": call}).status_code == 202
+    wait_for(lambda: idle(client, other["id"]) and len(_results(client, theirs["id"])) >= 2)
+    listed, refused = _results(client, theirs["id"])[-2:]
+    assert f"{cache}: cache, shared; safe" not in listed and cache not in listed  # another project's: not even shown
+    assert refused == f"Refused, not your project's (only its own data can be deleted): {cache}."
+
+    manager = agents_by_slug(client, pid)["manager"]
+    assert client.post(f"/api/agents/{manager['id']}/messages", json={"text": call}).status_code == 202
+    wait_for(lambda: idle(client, pid) and len(_results(client, manager["id"])) >= 2)
+    listed, deleted = _results(client, manager["id"])[-2:]
+    assert f"- 37.0 GB {cache}: cache, yours: its name; safe (last changed 2 h ago; holds set1 30.0 GB, set2 7.0 GB)" in listed
+    assert deleted.startswith(f"Deleted 37.0 GB: {cache}")
+
+
+def _inbox(client, agent_id):
+    async def read():
+        async with sessionmaker()() as s:
+            return [i.text for i in await s.scalars(select(InboxItem).where(InboxItem.agent_id == agent_id))]
+
+    return client.portal.call(read)
+
+
+def test_above_the_target_shared_caches_are_trimmed_and_their_users_hear_it(client, project):
+    pid, slug = project["id"], project["slug"]
+    other = client.post("/api/projects", json={"name": "Other Project", "description": "Someone else's"}).json()
+    wait_for(lambda: idle(client, pid) and idle(client, other["id"]))
+    manager, theirs = agents_by_slug(client, pid)["manager"], agents_by_slug(client, other["id"])["manager"]
+    fake = client.app_ref.state.runner
+    sccache = "/home/agent/.cache/sccache"
+    fake.trim_result = CleanupResult(freed=8 * GB, items=[CleanedItem(path=sccache, what="cache", bytes=8 * GB, users=[f"/workspaces/{slug}/manager"])])
+    fake.machine_usage = MachineUsage(volumes=[_volume(78)])
+    _tick(client)
+    assert not getattr(fake, "trims", [])  # below the target nothing is trimmed
+
+    fake.machine_usage = MachineUsage(volumes=[_volume(84)])
+    _tick(client, utcnow() + timedelta(minutes=5))
+    (spec,) = fake.trims
+    assert spec.need == 7 * GB and spec.large == storage.TRIM_LARGE and spec.keep == storage.TRIM_KEEP  # to a little below the target
+    (told,) = [t for t in _inbox(client, manager["id"]) if "trimmed shared caches" in t]
+    assert f"{sccache} by 8.0 GB" in told and "84 % used" in told
+    assert not [t for t in _inbox(client, theirs["id"]) if "trimmed" in t]  # its project does not use it
+    assert client.get("/api/usage").json()["cleanups"][0]["level"] == "trim"
+    _tick(client, utcnow() + timedelta(minutes=10))
+    assert len(fake.trims) == 1  # not again soon
+
+    assert client.put("/api/settings", json={"values": {"cleanup": False}}).status_code < 300
+    _tick(client, utcnow() + timedelta(hours=4))
+    assert len(fake.trims) == 1  # switched off

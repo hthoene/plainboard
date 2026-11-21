@@ -239,6 +239,7 @@ class CleanedItem(BaseModel):
     path: str
     what: Literal["build", "cache", "folder", "logs", "home"]
     bytes: int
+    users: list[str] = Field(default_factory=list)  # trimmed shared cache: the agent folders whose clones use its tool
 
 
 class CleanupResult(BaseModel):
@@ -259,10 +260,23 @@ class CleanupCandidate(BaseModel):
     safety: CandidateSafety  # safe: can be made again; busy: its agent works now; unsure: may hold work; keep: holds unpushed work or tools
     why: str = ""
     remotes: list[str] = Field(default_factory=list)  # origin URLs of the clones in it: whose a home folder is
+    mentioned: list[str] = Field(default_factory=list)  # home and cache: agent folders whose clones' files name its path
+    tool: str = ""  # a shared tool cache (sccache, cargo, npm, pip, ...): nobody's, PlainBoard trims it itself
+    modified: float = 0  # unix time of the newest change anywhere in it
+    entries: dict[str, int] = Field(default_factory=dict)  # home and cache: its biggest top-level entries, bytes
 
 
 class CandidatesSpec(BaseModel):
     folders: list[CleanupFolder] = Field(default_factory=list)  # every agent folder of the projects without a folder of their own
+
+
+class TrimSpec(BaseModel):
+    """Shrink the big shared tool caches, oldest files first (runner ``cleanup.trim``)."""
+
+    need: int  # bytes to free at most
+    large: int  # caches below this stay as they are
+    keep: int  # no cache is trimmed below this, nor below half its size
+    folders: list[CleanupFolder] = Field(default_factory=list)  # whose clones are looked at: who uses a cache
 
 
 class DeleteSpec(BaseModel):

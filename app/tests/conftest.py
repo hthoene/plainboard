@@ -367,6 +367,10 @@ class FakeRunner:
         self.candidate_specs = [*getattr(self, "candidate_specs", []), spec]
         return [c.model_copy() for c in getattr(self, "candidates", [])]
 
+    async def trim_caches(self, spec):
+        self.trims = [*getattr(self, "trims", []), spec]
+        return getattr(self, "trim_result", None) or CleanupResult()
+
     async def cleanup_delete(self, spec):
         """Like the runner: busy and unsure only with force, kept never."""
         self.deletes = [*getattr(self, "deletes", []), spec]

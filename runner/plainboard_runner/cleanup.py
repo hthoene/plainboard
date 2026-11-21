@@ -34,7 +34,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from plainboard_protocol import CandidatesSpec, CleanedItem, CleanupCandidate, CleanupFolder, CleanupResult, CleanupSpec, DeleteSpec
+from plainboard_protocol import CandidatesSpec, CleanedItem, CleanupCandidate, CleanupFolder, CleanupResult, CleanupSpec, DeleteSpec, TrimSpec
 
 from . import config, jobs
 from .usage import folder_of
@@ -280,19 +280,93 @@ def run(spec: CleanupSpec, now: float | None = None) -> CleanupResult:
 
 NEEDED_CACHES = {"ms-playwright": "holds the installed browsers", "puppeteer": "holds the installed browsers"}
 OTHER_CACHES = (".cargo/registry/cache", ".npm/_cacache")
+# Shared tool caches (below the home): nobody's, trimmed by PlainBoard itself. A project uses one when a
+# clone of it has one of these files at its top.
+TOOL_CACHES = {
+    ".cache/sccache": ("sccache", ("Cargo.toml",)),
+    ".cargo/registry/cache": ("cargo", ("Cargo.toml",)),
+    ".npm/_cacache": ("npm", ("package.json",)),
+    ".cache/yarn": ("yarn", ("package.json",)),
+    ".cache/pnpm": ("pnpm", ("package.json",)),
+    ".cache/pip": ("pip", ("pyproject.toml", "requirements.txt", "setup.py")),
+    ".cache/uv": ("uv", ("pyproject.toml", "requirements.txt", "setup.py")),
+    ".cache/go-build": ("go", ("go.mod",)),
+}
 SIZES_TTL = 900  # sizes of candidates are measured again after this, or after a deletion
-_sizes: dict[str, int] = {}
+_sizes: dict[str, tuple[int, float]] = {}  # path → bytes, newest change in it
+_mentions: dict[tuple[str, ...], dict[str, list[str]]] = {}
 _sized_at = 0.0
+
+
+def _survey(paths: list[Path]) -> dict[Path, tuple[int, float]]:
+    """Bytes on disk and the newest change of each path and of each entry right in it, in one walk at the lowest priority."""
+    if not paths:
+        return {}
+    cmd = ["du", "-akx", "-d1", "--time", "--time-style=+%s", "--", *map(str, paths)]
+    if shutil.which("ionice"):
+        cmd = ["ionice", "-c3", *cmd]
+    if shutil.which("nice"):
+        cmd = ["nice", "-n19", *cmd]
+    out = subprocess.run(cmd, capture_output=True, timeout=3600).stdout.decode(errors="replace")
+    found: dict[Path, tuple[int, float]] = {}
+    for line in out.splitlines():
+        kb, _, rest = line.partition("\t")
+        at, _, path = rest.partition("\t")
+        if kb.isdigit():
+            found[Path(path)] = (int(kb) * 1024, float(at) if at.isdigit() else 0.0)
+    return found
 _RANK = {"safe": 0, "busy": 1, "unsure": 2, "keep": 3}
 
 
-def _measure(paths: list[Path]) -> dict[str, int]:
-    global _sizes, _sized_at
+def _measure(paths: list[Path]) -> dict[str, tuple[int, float]]:
+    global _sizes, _mentions, _sized_at
     if time.time() - _sized_at > SIZES_TTL:
-        _sizes, _sized_at = {}, time.time()
+        _sizes, _mentions, _sized_at = {}, {}, time.time()
     missing = [p for p in paths if str(p) not in _sizes]
-    _sizes.update({str(p): n for p, n in _size(missing).items()})
+    _sizes.update({str(p): n for p, n in _survey(missing).items()})
     return _sizes
+
+
+def mention_pattern(rel: str, home: str) -> str:
+    """How a script names a folder of the home: ~/rel, $HOME/rel, ${HOME}/rel or the full path, not as part of a longer name."""
+    prefix = "|".join(re.escape(p) for p in ("~", "$HOME", "${HOME}", home.rstrip("/")))
+    return rf"(?:{prefix})/{re.escape(rel)}(?![\w.-])"
+
+
+def mentions(folders: list[Path], targets: list[Path], home: Path) -> dict[str, list[str]]:
+    """Path of each target → the agent folders whose clones' files (tracked or untracked, never ignored) name it."""
+    if not targets or not folders:
+        return {}
+    key = tuple(sorted(map(str, folders + targets)))
+    if key in _mentions:
+        return _mentions[key]
+    rels = {t.relative_to(home).as_posix(): str(t) for t in targets}
+    pattern = re.compile("|".join(f"(?P<t{i}>{mention_pattern(rel, str(home))})" for i, rel in enumerate(rels)))
+    names = list(rels.values())
+    fixed = [a for rel in rels for a in ("-e", f"/{rel}")]  # a cheap first sieve; the pattern decides
+    found: dict[str, list[str]] = {}
+    for folder in folders:
+        for repo in repos(folder):
+            try:
+                out = subprocess.run(
+                    ["git", "-C", str(repo), "grep", "-I", "-h", "--untracked", "-F", *fixed],
+                    capture_output=True,
+                    timeout=GIT_TIMEOUT,
+                    env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0"},
+                ).stdout.decode(errors="replace")
+            except (subprocess.SubprocessError, OSError):
+                continue
+            for m in pattern.finditer(out):
+                path = names[int(next(k for k, v in m.groupdict().items() if v)[1:])]
+                if str(folder) not in found.setdefault(path, []):
+                    found[path].append(str(folder))
+    _mentions[key] = found
+    return found
+
+
+def users(folders: list[Path], markers: tuple[str, ...]) -> list[str]:
+    """The agent folders with a clone that has one of these files at its top: they use that tool."""
+    return [str(f) for f in folders if any((r / m).is_file() for r in repos(f) for m in markers)]
 
 
 def forget_sizes() -> None:
@@ -416,12 +490,13 @@ def candidates(spec: CandidatesSpec, only: set[str] | None = None, sizes: bool =
             found.append(CleanupCandidate(path=str(path), what="build", safety="busy" if busy else "safe"))
 
     home = Path.home()
+    tools = {str(home / rel): tool for rel, (tool, _) in TOOL_CACHES.items()}
     for path, what in home_folders(home):
         if not wanted(path):
             continue
         if what == "cache":
             why = NEEDED_CACHES.get(path.name, "")
-            found.append(CleanupCandidate(path=str(path), what="cache", safety="unsure" if why else "safe", why=why))
+            found.append(CleanupCandidate(path=str(path), what="cache", safety="unsure" if why else "safe", why=why, tool=tools.get(str(path), "")))
             continue
         if _on_path(path, home):
             safety, why = "keep", "holds tools on PATH"
@@ -434,8 +509,70 @@ def candidates(spec: CandidatesSpec, only: set[str] | None = None, sizes: bool =
     if sizes:
         measured = _measure([Path(c.path) for c in found])
         for c in found:
-            c.bytes = measured.get(c.path, 0)
+            c.bytes, c.modified = measured.get(c.path, (0, 0.0))
+            if c.what in ("home", "cache"):
+                inside = sorted(((Path(p).name, n) for p, (n, _) in measured.items() if os.path.dirname(p) == c.path), key=lambda e: -e[1])
+                c.entries = dict(inside[:6])
+        agent_folders = [f for e in spec.folders if (f := _valid(e)) is not None]
+        named = mentions(agent_folders, [Path(c.path) for c in found if c.what in ("home", "cache") and not c.tool], home)
+        for c in found:
+            c.mentioned = named.get(c.path, [])
     return found
+
+
+def _file_bytes(st: os.stat_result) -> int:
+    return st.st_blocks * 512 or st.st_size  # on disk, as du counts
+
+
+def trim_oldest(root: Path, amount: int) -> int:
+    """Delete the files of a cache used longest ago until ``amount`` bytes are gone; the tool fetches or builds them again."""
+    files = []
+    for dirpath, _, names in os.walk(root):
+        for name in names:
+            path = os.path.join(dirpath, name)
+            try:
+                st = os.lstat(path)
+            except OSError:
+                continue
+            files.append((max(st.st_atime, st.st_mtime), path, _file_bytes(st)))
+    freed = 0
+    for _, path, n in sorted(files):
+        if freed >= amount:
+            break
+        try:
+            os.unlink(path)
+            freed += n
+        except OSError:
+            pass
+    for dirpath, _, _ in sorted(os.walk(root), key=lambda w: -len(w[0])):
+        if dirpath != str(root):
+            try:
+                os.rmdir(dirpath)  # only if empty now
+            except OSError:
+                pass
+    return freed
+
+
+def trim(spec: TrimSpec) -> CleanupResult:
+    """Shrink the big shared tool caches, the biggest first and in each the oldest files first, never below
+    ``keep`` nor below half, until ``need`` bytes are gone. Each item says which agent folders use that tool."""
+    home = Path.home()
+    roots = [(home / rel, tool, markers) for rel, (tool, markers) in TOOL_CACHES.items() if (home / rel).is_dir() and not (home / rel).is_symlink()]
+    sizes = _size([r for r, _, _ in roots])
+    folders = [f for e in spec.folders if (f := _valid(e)) is not None]
+    result = CleanupResult()
+    for root, tool, markers in sorted(roots, key=lambda r: -sizes.get(r[0], 0)):
+        size = sizes.get(root, 0)
+        if result.freed >= spec.need or size < spec.large:
+            continue
+        amount = min(size - max(spec.keep, size // 2), spec.need - result.freed)
+        freed = trim_oldest(root, amount) if amount > 0 else 0
+        if freed:
+            result.items.append(CleanedItem(path=str(root), what="cache", bytes=freed, users=users(folders, markers)))
+            result.freed += freed
+            log.info("Trimmed the %s cache %s by %d bytes", tool, root, freed)
+    forget_sizes()
+    return result
 
 
 def delete(spec: DeleteSpec) -> CleanupResult:

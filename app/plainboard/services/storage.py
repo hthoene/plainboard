@@ -4,20 +4,28 @@ The watcher (``orchestration/cleanup.py``) reads how full the agents' volume is 
 runner, cheap): every few minutes when it is high or grows fast, else hourly. From the recent samples,
 kept in memory, it forecasts when the target (``storage_notify_percent``) is crossed. The manager of
 the project that causes it hears it at the target, or earlier when the forecast crosses it within
-``SOON_HOURS``; again only when it gets clearly worse, or as a reminder while above. Nothing is deleted
-without him (``tools/storage.py``: candidates with sizes and safety, delete chosen ones), except near
-full (``storage_emergency_percent``): then what can be made again goes by itself, and he hears exactly what.
+``SOON_HOURS``; again only when it gets clearly worse, or as a reminder while above. Nothing of a
+project is deleted without its manager (``tools/storage.py``: candidates with sizes and safety, delete
+chosen ones), except near full (``storage_emergency_percent``): then what can be made again goes by
+itself, and he hears exactly what. Shared tool caches (sccache, cargo, npm, pip, ...) are nobody's:
+above the target PlainBoard trims the big ones itself, oldest entries first, and the managers of the
+projects that use them hear what went.
+
+A folder of the shared home (or of ``~/.cache``) is a project's when its name names the project or one
+of its repositories, when the project's commands, setup script or the files in its clones name its
+path, or when its clones are all of the project's repositories; and of no other project. Else shared.
 """
 
 from __future__ import annotations
 
 import re
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
-from plainboard_protocol import CandidatesSpec, CleanupCandidate, CleanupResult, DeleteSpec, MachineUsage, VolumeUsage
+from plainboard_protocol import CandidatesSpec, CleanedItem, CleanupCandidate, CleanupResult, DeleteSpec, MachineUsage, VolumeUsage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,6 +53,9 @@ KEPT = 10
 SMALL = 100 * 2**20  # candidates below this are left out of lists
 SHOWN = 8
 OTHERS_FROM = 5 * 2**30  # another project's manager hears it if that much of theirs could go
+TRIM_LARGE = 4 * 2**30  # shared tool caches from this size are trimmed above the target ...
+TRIM_KEEP = 2 * 2**30  # ... never below this, nor below half their size
+TRIM_AGAIN = timedelta(hours=3)
 
 
 @dataclass
@@ -186,6 +197,7 @@ class Item:
     candidate: CleanupCandidate
     project_id: int | None  # None: shared, nobody's (no manager may delete it)
     agent: Agent | None = None  # whose folder it is in
+    reason: str = ""  # home and cache: why it is the project's, or why it is shared
 
 
 @dataclass
@@ -202,7 +214,7 @@ class Listing:
         return [i for i in self.items if i.project_id == project_id]
 
     def shared(self) -> list[Item]:
-        """What belongs to no project (caches, home folders of unknown owner): shown, deleted only by an admin or the emergency cleanup."""
+        """What belongs to no single project: shared tool caches (trimmed by PlainBoard itself) and folders of unclear owner (only shown)."""
         return [i for i in self.items if i.project_id is None]
 
     def attribution(self) -> dict[str, int]:
@@ -214,7 +226,7 @@ class Listing:
         for f in self.machine.folders:
             if f.kind == "train" and (pid := _train_project(f.path, root)) is not None:
                 out[f.path] = pid
-        out.update({i.candidate.path: i.project_id for i in self.items if i.candidate.what == "home" and i.project_id is not None})
+        out.update({i.candidate.path: i.project_id for i in self.items if i.candidate.what in ("home", "cache") and i.project_id is not None})
         return out
 
 
@@ -225,10 +237,75 @@ def _repo_key(url: str) -> str:
     return url.removesuffix("/").removesuffix(".git")
 
 
-def _owner(c: CleanupCandidate, repos: dict[str, int | None]) -> int | None:
-    """A home folder is a project's only if every clone in it is of that project's repositories (and of no other's)."""
-    found = {repos.get(_repo_key(r)) for r in c.remotes}
-    return found.pop() if len(found) == 1 and None not in found else None
+def mention_pattern(rel: str, home: str) -> str:
+    """How a command or script names a folder of the home (as the runner's ``cleanup.mention_pattern``)."""
+    prefix = "|".join(re.escape(p) for p in ("~", "$HOME", "${HOME}", home.rstrip("/")))
+    return rf"(?:{prefix})/{re.escape(rel)}(?![\w.-])"
+
+
+def _home_rel(path: str) -> tuple[str, str]:
+    """(home, path below it) of a home folder or a part of ``~/.cache``."""
+    parent, _, name = path.rstrip("/").rpartition("/")
+    if parent.endswith("/.cache"):
+        return parent.removesuffix("/.cache"), f".cache/{name}"
+    return parent, name
+
+
+def _names(name: str, token: str) -> bool:
+    """The folder's name holds the token as a whole word (``paperpaw-quick-check``, ``paperpaw_x``)."""
+    token = token.lower()
+    return len(token) >= 4 and re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", name.lower()) is not None
+
+
+@dataclass
+class Owners:
+    """What tells whose a folder of the shared home is."""
+
+    projects: list[Project]
+    repos: list[Repository]
+    keys: dict[str, int | None]  # repository → its project (None: in two projects)
+    root: str
+
+
+def owner(c: CleanupCandidate, o: Owners) -> tuple[int | None, str]:
+    """Whose a home or cache folder is, and why: by its name, by commands, setup scripts or files that
+    name its path, by its clones. Only one project may have a claim, else it is shared; clones alone
+    count only if all of them are of that project's repositories."""
+    if c.tool:
+        return None, f"{c.tool}'s shared cache, PlainBoard trims it itself"
+    strong: dict[int, list[str]] = defaultdict(list)
+    weak: dict[int, list[str]] = defaultdict(list)
+    name = c.path.rstrip("/").rpartition("/")[2]
+    for p in o.projects:
+        if any(_names(name, t) for t in (p.slug, *(r.name for r in o.repos if r.project_id == p.id))):
+            strong[p.id].append("its name")
+    home, rel = _home_rel(c.path)
+    named = re.compile(mention_pattern(rel, home))
+    for r in o.repos:
+        for label, text in (("check", r.check_command), ("quick check", r.quick_check_command)):
+            if text and named.search(text):
+                strong[r.project_id].append(f"used by the {label} of {r.name}")
+    for p in o.projects:
+        if p.setup_script and named.search(p.setup_script):
+            strong[p.id].append("used by the setup script")
+    for folder in c.mentioned:
+        if (p := cleanup_service.project_of(folder, o.root, o.projects)) is not None:
+            strong[p.id].append("named in files in your workspaces")
+    remote = {o.keys.get(_repo_key(r)) for r in c.remotes}
+    if len(remote) == 1 and None not in remote:
+        strong[remote.pop()].append("its clones are of your repositories")  # type: ignore[index]
+    else:
+        for pid in remote - {None}:
+            weak[pid].append("holds clones of your repositories")  # type: ignore[index]
+    claims = set(strong) | set(weak)
+    if len(claims) == 1 and strong:
+        pid = claims.pop()
+        return pid, ", ".join(dict.fromkeys(strong[pid] + weak[pid]))
+    if len(claims) > 1:
+        return None, "unclear whose: it matches " + " and ".join(p.name for p in o.projects if p.id in claims)
+    if weak:
+        return None, "unclear whose: it holds clones of other repositories too"
+    return None, ""
 
 
 async def listing(session: AsyncSession, runner, machine: MachineUsage | None = None) -> Listing:
@@ -236,10 +313,12 @@ async def listing(session: AsyncSession, runner, machine: MachineUsage | None = 
     root = get_config().workspaces_root.rstrip("/")
     projects = list(await session.scalars(select(Project).order_by(Project.id)))
     agents = list(await session.scalars(select(Agent)))
+    all_repos = list(await session.scalars(select(Repository)))
     repos: dict[str, int | None] = {}
-    for r in await session.scalars(select(Repository)):
+    for r in all_repos:
         key = _repo_key(r.url)
         repos[key] = r.project_id if repos.get(key, r.project_id) == r.project_id else None  # in two projects: nobody's
+    owners = Owners(projects, all_repos, repos, root)
     busy = await cleanup_service.busy_agents(session)
     turns = await cleanup_service.last_turns(session)
     await session.commit()  # no transaction stays open while the runner works
@@ -254,7 +333,8 @@ async def listing(session: AsyncSession, runner, machine: MachineUsage | None = 
             agent = next((a for path, a in by_folder.items() if c.path == path or c.path.startswith(path + "/")), None)
             items.append(Item(c, project.id if project else None, agent))
         else:
-            items.append(Item(c, _owner(c, repos) if c.what == "home" else None))
+            pid, reason = owner(c, owners)
+            items.append(Item(c, pid, reason=reason))
     items.sort(key=lambda i: -i.candidate.bytes)
     return Listing(items, projects, agents, busy, machine, folders)
 
@@ -264,14 +344,20 @@ def item_line(item: Item, project_id: int, busy: set[int]) -> str:
     what = {"build": "build output", "folder": "folder of a removed agent", "cache": "cache", "home": "home folder"}[c.what]
     if item.agent is not None and c.what == "build":
         what += f" of {item.agent.name}"
+    details = []
     if c.what in ("home", "cache"):
-        what += ", yours (its clones are of your repositories)" if item.project_id == project_id else ", shared"
+        whose = "yours" if item.project_id == project_id else "shared"
+        what += f", {whose}: {item.reason}" if item.reason else f", {whose}"
+        if c.modified:
+            details.append(f"last changed {_hours(max(0.0, time.time() - c.modified) / 3600)} ago")
+        if c.entries:
+            details.append("holds " + ", ".join(f"{n} {format_bytes(b)}" for n, b in c.entries.items()))
     safety = c.safety
     if safety == "busy" and item.agent is not None and item.agent.id in busy:
         safety = f"busy: {item.agent.name} works now"
     elif c.why:
         safety += f": {c.why}"
-    return f"- {format_bytes(c.bytes)} {c.path}: {what}; {safety}"
+    return f"- {format_bytes(c.bytes)} {c.path}: {what}; {safety}" + (f" ({'; '.join(details)})" if details else "")
 
 
 def busy_names(listing: Listing, project_id: int) -> list[str]:
@@ -286,7 +372,7 @@ def tool_listing(listing: Listing, project: Project, f: Forecast | None, setting
     groups = {
         "safe": "Safe (made again when needed):",
         "busy": "Busy (a member works there: deleting with force=true makes its next build slower; or ask the member to clean up):",
-        "unsure": "Unsure (may hold someone's work: ask who made it, or delete with force=true):",
+        "unsure": "Unsure (may hold someone's work: judge by what it holds and when it last changed; if it is only made again, delete with force=true):",
         "keep": "Kept (unpushed work or tools; delete_cleanup won't):",
     }
     items = listing.visible(project.id)
@@ -311,7 +397,7 @@ def shared_lines(listing: Listing, project_id: int, count: int) -> list[str]:
     if not found:
         return []
     return [
-        f"Shared, not yours ({format_bytes(sum(i.candidate.bytes for i in found))}; no manager may delete these, tell the user if they matter: an admin cleans them up):",
+        f"Shared, not yours ({format_bytes(sum(i.candidate.bytes for i in found))}; PlainBoard trims the shared tool caches itself above the target, the rest belongs to no single project and stays):",
         *[item_line(i, project_id, listing.busy) for i in found[:count]],
     ]
 
@@ -340,14 +426,14 @@ def cause(listing: Listing, measures: list[tuple[float, dict[str, int]]]) -> tup
     uses the most room. If the shared home grows most, that manager hears it as shared, to tell the user."""
     size, growth, hours = project_sizes(listing, measures)
     own = [p for p in listing.projects if not p.workspace_path] or listing.projects
-    user = max(own, key=lambda p: (size.get(p.id, 0) + sum(i.candidate.bytes for i in listing.items if i.project_id == p.id and i.candidate.what == "home"), -p.id), default=None)
+    user = max(own, key=lambda p: (size.get(p.id, 0) + sum(i.candidate.bytes for i in listing.items if i.project_id == p.id and i.candidate.what in ("home", "cache")), -p.id), default=None)
     if user is None:
         return None, ""
     grower = max(own, key=lambda p: (growth.get(p.id, 0), -p.id))
     if hours is not None and growth.get(None, 0) >= 2**30 and growth.get(None, 0) > growth.get(grower.id, 0):
         return user, (
             f"Most of the growth is shared, in no project's folders: +{format_bytes(growth[None])} in the {_hours(hours)} between the last two measurements "
-            "(see Shared below). Tell the user now: only an admin can clean that up."
+            "(see Shared below). PlainBoard trims the shared tool caches itself; delete what of your project can go."
         )
     if hours is not None and growth.get(grower.id, 0) >= 2**30:
         return grower, f"{grower.name} grows most: +{format_bytes(growth[grower.id])} in the {_hours(hours)} between the last two measurements."
@@ -373,7 +459,7 @@ def notice_text(reason: str, f: Forecast, settings: dict[str, Any], listing: Lis
         lines.append("Busy now: " + ", ".join(names) + ".")
     lines.append(
         "Delete what is safe with delete_cleanup. Busy members' build outputs: delete anyway with force=true (their next build is slower) "
-        "or tell the member to clean up. You can delete only your project's data. If that is not enough, or shared folders are big, tell the user."
+        "or tell the member to clean up. You can delete only your project's data; shared tool caches are trimmed by PlainBoard itself."
     )
     return "\n".join(lines)
 
@@ -473,8 +559,17 @@ def delete_text(result: CleanupResult, refused: list[str]) -> str:
     if result.skipped:
         lines.append("Not deleted: " + "; ".join(result.skipped[:20]) + ".")
     if refused:
-        lines.append("Refused, not your project's (only its own data can be deleted; shared folders only by an admin): " + ", ".join(refused[:20]) + ".")
+        lines.append("Refused, not your project's (only its own data can be deleted): " + ", ".join(refused[:20]) + ".")
     return "\n".join(lines) or "Nothing deleted."
+
+
+def trim_text(items: list[CleanedItem], percent: float, settings: dict[str, Any]) -> str:
+    what = ", ".join(f"{i.path} by {format_bytes(i.bytes)}" for i in items)
+    return (
+        f"PlainBoard trimmed shared caches your project uses, because the disk was {percent:.0f} % used "
+        f"(target: at most {limit(settings, 'storage_notify_percent'):g} %): {what}. Only the entries used longest ago went; "
+        "the next builds may take a little longer. Nothing to do."
+    )
 
 
 def emergency_text(result: CleanupResult, percent: float, settings: dict[str, Any], after: float) -> str:

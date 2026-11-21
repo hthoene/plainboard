@@ -4,8 +4,9 @@ Disk: it reads how full the agents' volume is (statvfs in the runner, no folder 
 every few minutes when it is high or grows fast, else once an hour, and keeps the samples in memory
 for the trend. At the target, or when the forecast crosses it soon, the manager of the project that
 causes it gets a notice with the biggest items and what is safe to delete; he deletes with his tools.
-Nothing goes by itself, except at the emergency level: then what is made again when needed, and the
-manager hears exactly what. Memory: servers nobody opened for long are stopped.
+Nothing of a project goes by itself, except at the emergency level: then what is made again when
+needed, and the manager hears exactly what. Above the target the big shared tool caches are trimmed,
+oldest entries first, and the managers of the projects that use them hear it. Memory: servers nobody opened for long are stopped.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import logging
 from collections import defaultdict
 from datetime import datetime
 
-from plainboard_protocol import CleanupResult, CleanupSpec, MachineUsage
+from plainboard_protocol import CleanedItem, CleanupResult, CleanupSpec, MachineUsage, TrimSpec
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -45,6 +46,7 @@ class CleanupWatcher:
         self._task: asyncio.Task[None] | None = None
         self._measures: list[tuple[float, dict[str, int]]] = []  # the last two folder measurements: who grows
         self._emergency_at: datetime | None = None
+        self._trim_at: datetime | None = None
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._loop(), name="cleanup")
@@ -95,6 +97,10 @@ class CleanupWatcher:
             self._emergency_at = now
             await self._emergency(f, machine, settings, now)
             return
+        if settings["cleanup"] and f.percent >= target and (self._trim_at is None or now - self._trim_at >= storage.TRIM_AGAIN):
+            self._trim_at = now
+            if freed := await self._trim(f, machine, settings, now):
+                f = storage.Forecast(f.total, max(0, f.used - freed), f.rate)
         notices = settings["storage_notices"] or []
         last = notices[0] if notices else None
         if storage.closes(f, settings, last):
@@ -168,6 +174,39 @@ class CleanupWatcher:
             async with self._sm() as s:
                 await self._tell(s, main, text)
                 await storage.remember(s, "storage_notices", storage.notice_record("emergency", after, now, [main.name], settings))
+
+    async def _trim(self, f: storage.Forecast, machine: MachineUsage, settings: dict, now: datetime) -> int:
+        """Above the target: shrink the big shared tool caches (oldest entries first) to a little below it; the managers of
+        the projects whose clones use those tools hear what went. The bytes freed."""
+        root = get_config().workspaces_root
+        target = storage.limit(settings, "storage_notify_percent")
+        async with self._sm() as s:
+            projects = list(await s.scalars(select(Project).order_by(Project.id)))
+            agents = list(await s.scalars(select(Agent)))
+            folders = cleanup_service.folders(projects, agents, await cleanup_service.busy_agents(s), await cleanup_service.last_turns(s), machine.folders, root)
+        free = f.total - f.used
+        spec = TrimSpec(need=cleanup_service.need(f.total, free, target - storage.CLOSE_BELOW), large=storage.TRIM_LARGE, keep=storage.TRIM_KEEP, folders=folders)
+        try:
+            result = await self._runs.runner.trim_caches(spec)
+        except RunnerError as exc:
+            log.warning("Shared caches not trimmed: %s", exc)
+            return 0
+        if not result.items:
+            return 0
+        by_project: dict[int, list[CleanedItem]] = defaultdict(list)
+        for item in result.items:
+            for pid in {p.id for u in item.users if (p := cleanup_service.project_of(u, root, projects)) is not None}:
+                by_project[pid].append(item)
+        async with self._sm() as s:
+            await storage.remember(s, "storage_cleanups", cleanup_service.record("trim", now, f.total, free, result))
+            for project in projects:
+                if found := by_project.get(project.id):
+                    await flow_log.record(s, project.id, "storage.cleaned", level="trim", freed=sum(i.bytes for i in found), items=[i.model_dump() for i in found])
+                    manager = await s.scalar(select(Agent).where(Agent.project_id == project.id, Agent.is_manager))
+                    if manager is not None:
+                        await inbox.push(s, manager.id, storage.trim_text(found, f.percent, settings))
+        log.info("Trimmed shared caches at %.0f %%: %d bytes", f.percent, result.freed)
+        return result.freed
 
     async def _log(self, s: AsyncSession, result: CleanupResult, projects: list[Project], main: Project | None, f: storage.Forecast, root: str) -> None:
         """One work-log event per project whose folders were cleaned; caches and logs with the biggest project."""

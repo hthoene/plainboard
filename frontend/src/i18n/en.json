@@ -1133,7 +1133,7 @@
     "notify": "Tell the manager from (% used)",
     "notifyHint": "The disk should stay below this. From here on, or earlier when the trend crosses it within two hours, the manager of the project causing it hears it and cleans up with his tools. Nothing is deleted without him.",
     "emergency": "Emergency cleanup from (% used)",
-    "emergencyHint": "Only this near full PlainBoard deletes by itself: old job logs, cache files unused for a month, folders of removed agents without unpushed work, build outputs of members idle for a day. The manager hears exactly what.",
+    "emergencyHint": "Only this near full PlainBoard deletes by itself: old job logs, cache files unused for a month, folders of removed agents without unpushed work, build outputs of members idle for a day. Above the target it only trims big shared tool caches (sccache, cargo, npm, pip), oldest entries first. The managers hear exactly what.",
     "auto": "Emergency cleanup and stopping idle servers",
     "hint": "Never touched by itself: folders of members who work or have an open assignment, unpushed work, uploads, the database, secrets.",
     "memory": "Stop idle servers below (% memory free)",
@@ -1154,7 +1154,8 @@
     "cleanups": "Cleanups",
     "summary": {
       "manager": "{{when}}: {{by}} ({{project}}) deleted {{freed}}.",
-      "emergency": "{{when}}: near full, PlainBoard deleted {{freed}} by itself ({{free}} were free)."
+      "emergency": "{{when}}: near full, PlainBoard deleted {{freed}} by itself ({{free}} were free).",
+      "trim": "{{when}}: above the target, PlainBoard trimmed shared tool caches by {{freed}} ({{free}} were free)."
     },
     "lastServers": "Servers stopped last",
     "stoppedSummary_one": "{{when}}: {{count}} server stopped, memory was short.",

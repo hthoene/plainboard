@@ -1095,8 +1095,19 @@
     }
   },
   "usage": {
-    "title": "Storage",
-    "description": "How much disk and memory PlainBoard uses: per volume, per project and agent, and what all agents share. Folder sizes are measured in the background every few hours.",
+    "title": "Usage",
+    "description": "How much disk, memory and CPU PlainBoard uses: per volume, per project and agent, and what all agents share. Folder sizes are measured in the background every few hours, the CPU every half minute.",
+    "cpu": "CPU load",
+    "cpuNow": "Now",
+    "cpuWindow": "{{hours}} h",
+    "cpuLoadFigures": "Load {{load}} of {{cores}} cores",
+    "cpuPeak": "Peak {{percent}} % of the machine",
+    "cpuAxis": "24 h ago",
+    "cpuAxisNow": "now",
+    "cpuSlot": "{{time}}: {{percent}} %",
+    "cpuRest": "Runner, browsers, system",
+    "cpuNone": "No CPU measured yet. It appears after a minute.",
+    "cpuHint": "Percent of the whole machine ({{cores}} cores); 100 % is every core busy. Per project the CPU of its agents' turns, jobs and preview servers and of landing checks; the chart stacks its agents over the last 24 hours, all on the same scale. The line is the host's load average.",
     "runnerDown": "The runner cannot be reached: only the app's own volumes are shown.",
     "volumes": "Volumes",
     "kind": {

@@ -161,6 +161,9 @@ class AgentUsageOut(BaseModel):
     disk: int | None = None  # its workspace; None: not measured yet, or a folder its project shares
     memory: int = 0  # of the processes working in its workspace: its turn, jobs, servers
     processes: int = 0
+    cpu: float = 0  # cores in use now
+    cpu_avg: list[float] = Field(default_factory=list)  # cores used on average over the last 1, 6 and 24 hours
+    cpu_history: list[float] = Field(default_factory=list)  # cores per slot, aligned with UsageOut.cpu_start
 
 
 class ProjectUsageOut(BaseModel):
@@ -170,6 +173,9 @@ class ProjectUsageOut(BaseModel):
     uploads: int  # its attachments
     other_disk: int  # a folder all its agents share, folders of former agents, the clones its branches land in
     other_memory: int
+    other_cpu: float = 0  # the same for what runs in no agent's folder of it: shared folder, former agents, landing checks
+    other_cpu_avg: list[float] = Field(default_factory=list)
+    other_cpu_history: list[float] = Field(default_factory=list)
 
 
 class FolderOut(BaseModel):
@@ -235,6 +241,14 @@ class UsageOut(BaseModel):
     memory_total: int = 0
     memory_used: int = 0
     memory_other: int = 0  # processes of the runner that work in no agent's folder: the runner itself, browsers
+    cpu_cores: int = 0
+    cpu_step: int = 300  # seconds per slot of the histories
+    cpu_start: UTCDateTime | None = None  # the first slot of the histories (24 hours, oldest first)
+    cpu_load: list[float] = Field(default_factory=list)  # host load average over 1, 5, 15 minutes
+    cpu_load_history: list[float] = Field(default_factory=list)  # mean 1-minute load per slot
+    cpu_other: float = 0  # cores used by what works in no project's folder: the runner itself, browsers, the system
+    cpu_other_avg: list[float] = Field(default_factory=list)
+    cpu_other_history: list[float] = Field(default_factory=list)
     storage: StorageOut | None = None
     cleanups: list[CleanupOut] = Field(default_factory=list)  # newest first
     servers_stopped: CleanupOut | None = None  # by the memory cleanup, the last time

@@ -86,6 +86,37 @@ def _train_project(path: str, root: str) -> int | None:
     return int(match[1]) if match else None
 
 
+CPU_WINDOWS_HOURS = (1, 6, 24)
+
+
+class _Cpu:
+    """The runner's CPU history by owner: what is asked is a series per owner (cores per slot) and its averages."""
+
+    def __init__(self, machine: MachineUsage) -> None:
+        self.step = machine.cpu_step or 300
+        buckets = {int(b.start // self.step): b for b in machine.cpu_history}
+        self.slots = 24 * 3600 // self.step
+        last = max(buckets, default=None)
+        self.first = None if last is None else last - self.slots + 1
+        self.buckets = [] if self.first is None else [buckets.get(self.first + i) for i in range(self.slots)]
+        self.now = machine.cpu_now
+
+    def series(self, owner) -> tuple[list[float], list[float]]:
+        """Cores per slot, and the averages over the windows. ``owner``: folder -> bool."""
+        seconds = [sum(v for f, v in b.seconds.items() if owner(f)) if b else 0.0 for b in self.buckets]
+        spans = [b.span if b else 0.0 for b in self.buckets]
+        per_slot = [round(sec / span, 3) if span else 0.0 for sec, span in zip(seconds, spans)]
+        avg = []
+        for hours in CPU_WINDOWS_HOURS:
+            n = hours * 3600 // self.step
+            span = sum(spans[-n:])
+            avg.append(round(sum(seconds[-n:]) / span, 3) if span else 0.0)
+        return per_slot, avg
+
+    def cores(self, owner) -> float:
+        return round(sum(v for f, v in self.now.items() if owner(f)), 3)
+
+
 def summarize(projects: list[Project], agents: list[Agent], uploads: dict[int, int], machine: MachineUsage | None, own: Machine) -> UsageOut:
     """``machine``: what the runner measured; None if it could not be asked."""
     cfg = get_config()
@@ -105,6 +136,8 @@ def summarize(projects: list[Project], agents: list[Agent], uploads: dict[int, i
     workspaces = [f for f in runner.folders if f.kind == "workspace"]
     used: set[str] = set()  # folders counted for an agent or a project
     out_projects = []
+    agent_cpu: list[tuple[AgentUsageOut, str]] = []
+    project_cpu: list[tuple[ProjectUsageOut, Project, str, set[str]]] = []
     for project in projects:
         own_folder = f"{root}/{project.workspace_path.strip('/')}" if project.workspace_path else None
         rows = []
@@ -115,6 +148,7 @@ def summarize(projects: list[Project], agents: list[Agent], uploads: dict[int, i
                 found = [f for f in workspaces if f.path == folder]
                 row.disk = found[0].bytes if found else None
                 used.update(f.path for f in found)
+                agent_cpu.append((row, folder))
                 for m in runner.memory:
                     if m.folder == folder:
                         row.memory, row.processes = m.bytes, m.processes
@@ -125,7 +159,7 @@ def summarize(projects: list[Project], agents: list[Agent], uploads: dict[int, i
         used.update(f.path for f in other)
         agent_folders = {f"{root}/{project.slug}/{a.slug}" for a in agents if a.project_id == project.id} if own_folder is None else set()
         other_memory = sum(m.bytes for m in runner.memory if m.folder and m.folder not in agent_folders and (_within(m.folder, mine) or _train_project(m.folder, root) == project.id))
-        out_projects.append(
+        out = (
             ProjectUsageOut(
                 id=project.id,
                 name=project.name,
@@ -135,6 +169,26 @@ def summarize(projects: list[Project], agents: list[Agent], uploads: dict[int, i
                 other_memory=other_memory,
             )
         )
+        out_projects.append(out)
+        project_cpu.append((out, project, mine, agent_folders))
+
+    cpu = _Cpu(runner)
+    for row, folder in agent_cpu:
+        row.cpu_history, row.cpu_avg = cpu.series(lambda f, folder=folder: f == folder)
+        row.cpu = cpu.cores(lambda f, folder=folder: f == folder)
+    for out, project, mine, agent_folders in project_cpu:
+
+        def other(folder: str, project=project, mine=mine, agent_folders=agent_folders) -> bool:
+            return bool(folder) and folder not in agent_folders and (_within(folder, mine) or _train_project(folder, root) == project.id)
+
+        out.other_cpu_history, out.other_cpu_avg = cpu.series(other)
+        out.other_cpu = cpu.cores(other)
+
+    def belongs(folder: str) -> bool:
+        return bool(folder) and any(_within(folder, mine) or _train_project(folder, root) == project.id for _, project, mine, _ in project_cpu)
+
+    cpu_other_history, cpu_other_avg = cpu.series(lambda f: not belongs(f))
+    load_history = [round(b.load, 2) if b else 0.0 for b in cpu.buckets]
 
     attributed = sum(a.memory for p in out_projects for a in p.agents) + sum(p.other_memory for p in out_projects)
     shared = sorted((FolderOut(name=Path(f.path).name, bytes=f.bytes) for f in runner.folders if f.kind == "shared"), key=lambda f: -f.bytes)
@@ -150,6 +204,14 @@ def summarize(projects: list[Project], agents: list[Agent], uploads: dict[int, i
         memory_total=runner.memory_total,
         memory_used=runner.memory_used,
         memory_other=max(0, sum(m.bytes for m in runner.memory) - attributed),
+        cpu_cores=runner.cpu_cores,
+        cpu_step=cpu.step,
+        cpu_start=None if cpu.first is None else _naive_utc(cpu.first * cpu.step),
+        cpu_load=runner.load_average,
+        cpu_load_history=load_history,
+        cpu_other=cpu.cores(lambda f: not belongs(f)),
+        cpu_other_avg=cpu_other_avg,
+        cpu_other_history=cpu_other_history,
     )
 
 

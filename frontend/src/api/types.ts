@@ -574,6 +574,9 @@ export interface AgentUsage {
   disk: number | null;
   memory: number;
   processes: number;
+  cpu: number;
+  cpu_avg: number[];
+  cpu_history: number[];
 }
 
 export interface ProjectUsage {
@@ -583,6 +586,9 @@ export interface ProjectUsage {
   uploads: number;
   other_disk: number;
   other_memory: number;
+  other_cpu: number;
+  other_cpu_avg: number[];
+  other_cpu_history: number[];
 }
 
 export interface Usage {
@@ -597,6 +603,15 @@ export interface Usage {
   memory_total: number;
   memory_used: number;
   memory_other: number;
+  /** CPU in cores: now, averaged over the last 1, 6 and 24 hours (cpu_avg), and per slot of cpu_step seconds from cpu_start (…_history). */
+  cpu_cores: number;
+  cpu_step: number;
+  cpu_start: string | null;
+  cpu_load: number[];
+  cpu_load_history: number[];
+  cpu_other: number;
+  cpu_other_avg: number[];
+  cpu_other_history: number[];
   storage: UsageStorage | null;
   cleanups: UsageCleanup[];
   servers_stopped: UsageCleanup | null;

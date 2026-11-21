@@ -203,6 +203,15 @@ class ProcessMemory(BaseModel):
     processes: int
 
 
+class CpuBucket(BaseModel):
+    """CPU time used in one time slot of the history, by folder ("" for what works in no agent's folder)."""
+
+    start: float  # unix time the slot begins
+    span: float = 0  # seconds of the slot that were sampled
+    seconds: dict[str, float] = Field(default_factory=dict)  # folder -> CPU seconds
+    load: float = 0  # mean 1-minute load average of the host
+
+
 class MachineUsage(BaseModel):
     """Disk and memory of the runner's machine. Folders are measured in the background, rarely."""
 
@@ -213,6 +222,11 @@ class MachineUsage(BaseModel):
     memory_total: int = 0
     memory_used: int = 0  # of the machine: total minus what is available
     memory: list[ProcessMemory] = Field(default_factory=list)
+    cpu_cores: int = 0
+    load_average: list[float] = Field(default_factory=list)  # 1, 5, 15 minutes
+    cpu_now: dict[str, float] = Field(default_factory=dict)  # folder -> cores in use over the last sample ("" : in no folder)
+    cpu_step: int = 300  # seconds per slot of the history
+    cpu_history: list[CpuBucket] = Field(default_factory=list)  # oldest first, 24 hours
 
 
 CleanupLevel = Literal["soft", "hard"]

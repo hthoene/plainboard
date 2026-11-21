@@ -58,6 +58,7 @@ _background: set[asyncio.Task[None]] = set()
 @app.on_event("startup")
 async def measure_usage() -> None:
     _background.add(asyncio.create_task(usage.keep_measured()))
+    _background.add(asyncio.create_task(usage.keep_sampling()))
 
 
 @app.get("/usage", response_model=MachineUsage)

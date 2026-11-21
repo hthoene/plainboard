@@ -16,6 +16,7 @@ import contextlib
 import logging
 from collections import defaultdict
 from datetime import datetime
+from typing import Any
 
 from plainboard_protocol import CleanedItem, CleanupResult, CleanupSpec, MachineUsage, TrimSpec
 from sqlalchemy import select
@@ -35,6 +36,12 @@ from .runner_client import RunnerError
 
 log = logging.getLogger(__name__)
 
+
+
+def _on(runner_id: int | None):
+    return Project.runner_id.is_(None) if runner_id is None else Project.runner_id == runner_id
+
+
 MEASURE_EVERY = 3600  # folder sizes are measured again this often while the disk is high (else every 6 h)
 
 
@@ -44,9 +51,10 @@ class CleanupWatcher:
         self._runs = runs
         self._interval = interval
         self._task: asyncio.Task[None] | None = None
-        self._measures: list[tuple[float, dict[str, int]]] = []  # the last two folder measurements: who grows
-        self._emergency_at: datetime | None = None
-        self._trim_at: datetime | None = None
+        # Per runner (None: the built-in one), each watched for itself: its disk, its growth, its cleanups.
+        self._measures: dict[int | None, list[tuple[float, dict[str, int]]]] = {}  # the last two folder measurements: who grows
+        self._emergency_at: dict[int | None, datetime] = {}
+        self._trim_at: dict[int | None, datetime] = {}
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._loop(), name="cleanup")
@@ -65,61 +73,71 @@ class CleanupWatcher:
             await asyncio.sleep(wait)
 
     async def tick(self, now: datetime | None = None) -> float:
-        """One look; the seconds until the next."""
+        """One look at every connected runner a project uses; the seconds until the next."""
         now = now or utcnow()
         async with self._sm() as s:
             settings = await settings_service.get_all(s)
+        hub = self._runs.runners
+        waits = [self._interval]
+        for runner_id in hub.in_use():
+            if hub.connected(runner_id):
+                waits.append(await self._look(runner_id, hub.client(runner_id), settings, now))
+        return min(waits)
+
+    async def _look(self, runner_id: int | None, client: Any, settings: dict, now: datetime) -> float:
         try:
-            machine = await self._runs.runner.usage()
+            machine = await client.usage()
         except RunnerError:
             return self._interval
         volume = cleanup_service.workspace_volume(machine, get_config().workspaces_root)
         forecast = None
         if volume is not None and volume.total > 0:
-            forecast = storage.TREND.add(now, volume.total, volume.free)
-            await self._disk(forecast, machine, settings, now)
+            forecast = storage.trend(runner_id).add(now, volume.total, volume.free)
+            await self._disk(runner_id, client, forecast, machine, settings, now)
         if settings["cleanup"] and cleanup_service.memory_short(machine, settings):
-            await self._memory(now)
+            await self._memory(runner_id, client, now)
         return storage.next_check(forecast, settings, self._interval)
 
-    def _keep_measure(self, machine: MachineUsage) -> None:
-        if machine.measured_at is not None and (not self._measures or self._measures[-1][0] != machine.measured_at):
-            self._measures = [*self._measures, (machine.measured_at, {f.path: f.bytes for f in machine.folders})][-2:]
+    def _keep_measure(self, runner_id: int | None, machine: MachineUsage) -> None:
+        kept = self._measures.get(runner_id, [])
+        if machine.measured_at is not None and (not kept or kept[-1][0] != machine.measured_at):
+            self._measures[runner_id] = [*kept, (machine.measured_at, {f.path: f.bytes for f in machine.folders})][-2:]
 
-    async def _disk(self, f: storage.Forecast, machine: MachineUsage, settings: dict, now: datetime) -> None:
-        self._keep_measure(machine)
+    async def _disk(self, runner_id: int | None, client: Any, f: storage.Forecast, machine: MachineUsage, settings: dict, now: datetime) -> None:
+        self._keep_measure(runner_id, machine)
         target = storage.limit(settings, "storage_notify_percent")
         if f.percent >= target - storage.WATCH_BELOW and machine.measured_at is not None and now.timestamp() - machine.measured_at > MEASURE_EVERY:
             with contextlib.suppress(RunnerError):
-                await self._runs.runner.usage(measure=True)  # fresh folder sizes for the next notice: who grows
+                await client.usage(measure=True)  # fresh folder sizes for the next notice: who grows
         emergency = storage.limit(settings, "storage_emergency_percent")
-        if settings["cleanup"] and f.percent >= emergency and (self._emergency_at is None or now - self._emergency_at >= storage.EMERGENCY_AGAIN):
-            self._emergency_at = now
-            await self._emergency(f, machine, settings, now)
+        at = self._emergency_at.get(runner_id)
+        if settings["cleanup"] and f.percent >= emergency and (at is None or now - at >= storage.EMERGENCY_AGAIN):
+            self._emergency_at[runner_id] = now
+            await self._emergency(runner_id, client, f, machine, settings, now)
             return
-        if settings["cleanup"] and f.percent >= target and (self._trim_at is None or now - self._trim_at >= storage.TRIM_AGAIN):
-            self._trim_at = now
-            if freed := await self._trim(f, machine, settings, now):
+        at = self._trim_at.get(runner_id)
+        if settings["cleanup"] and f.percent >= target and (at is None or now - at >= storage.TRIM_AGAIN):
+            self._trim_at[runner_id] = now
+            if freed := await self._trim(runner_id, client, f, machine, settings, now):
                 f = storage.Forecast(f.total, max(0, f.used - freed), f.rate)
-        notices = settings["storage_notices"] or []
-        last = notices[0] if notices else None
+        last = storage.last_notice(settings["storage_notices"], runner_id)
         if storage.closes(f, settings, last):
             async with self._sm() as s:
-                await storage.close_last(s)
+                await storage.close_last(s, runner_id)
             return
         reason = storage.notice_due(f, settings, last, now)
         if reason is not None:
             first = not last or bool(last.get("closed"))
-            await self._notify(reason, f, machine, settings, now, others=first)
+            await self._notify(runner_id, client, reason, f, machine, settings, now, others=first)
 
-    async def _notify(self, reason: str, f: storage.Forecast, machine: MachineUsage, settings: dict, now: datetime, others: bool, before: str = "") -> None:
+    async def _notify(self, runner_id: int | None, client: Any, reason: str, f: storage.Forecast, machine: MachineUsage, settings: dict, now: datetime, others: bool, before: str = "") -> None:
         async with self._sm() as s:
             try:
-                found = await storage.listing(s, self._runs.runner, machine)
+                found = await storage.listing(s, client, machine, runner_id=runner_id)
             except RunnerError as exc:
                 log.warning("Cleanup candidates not listed: %s", exc)
                 return
-            main, why = storage.cause(found, self._measures)
+            main, why = storage.cause(found, self._measures.get(runner_id, []))
             if main is None:
                 return
             told = [main.name]
@@ -131,7 +149,7 @@ class CleanupWatcher:
                     if project.id != main.id and size >= storage.OTHERS_FROM:
                         await self._tell(s, project, storage.others_text(f, settings, main, size))
                         told.append(project.name)
-            await storage.remember(s, "storage_notices", storage.notice_record(reason if not before else "emergency", f, now, told, settings))
+            await storage.remember(s, "storage_notices", storage.notice_record(reason if not before else "emergency", f, now, told, settings, runner_id))
 
     async def _tell(self, s: AsyncSession, project: Project, text: str) -> None:
         """Disk space can't wait: the manager gets a turn even where he is not woken for updates."""
@@ -140,18 +158,18 @@ class CleanupWatcher:
             await inbox.push(s, manager.id, text)
             await self._runs.request_wake(s, manager.id)
 
-    async def _emergency(self, f: storage.Forecast, machine: MachineUsage, settings: dict, now: datetime) -> None:
+    async def _emergency(self, runner_id: int | None, client: Any, f: storage.Forecast, machine: MachineUsage, settings: dict, now: datetime) -> None:
         """Nearly full: delete what is made again when needed (idle agents' folders only), and say exactly what."""
         root = get_config().workspaces_root
         target = storage.limit(settings, "storage_notify_percent")
         async with self._sm() as s:
-            projects = list(await s.scalars(select(Project).where(Project.runner_id.is_(None)).order_by(Project.id)))  # on this runner
+            projects = list(await s.scalars(select(Project).where(_on(runner_id)).order_by(Project.id)))  # on this runner
             agents = list(await s.scalars(select(Agent)))
             folders = cleanup_service.folders(projects, agents, await cleanup_service.busy_agents(s), await cleanup_service.last_turns(s), machine.folders, root)
         free = f.total - f.used
         spec = CleanupSpec(level="soft", need=cleanup_service.need(f.total, free, target), folders=[x for x in folders if not x.busy])
         try:
-            result = await self._runs.runner.clean_up(spec)
+            result = await client.clean_up(spec)
         except RunnerError as exc:
             log.warning("Emergency cleanup failed: %s", exc)
             return
@@ -169,25 +187,25 @@ class CleanupWatcher:
             await storage.remember(s, "storage_cleanups", cleanup_service.record("emergency", now, f.total, free, result, project=main.name if main else ""))
         text = storage.emergency_text(result, f.percent, settings, after.percent)
         if after.percent >= target:
-            await self._notify("over", after, machine, settings, now, others=True, before=text)
+            await self._notify(runner_id, client, "over", after, machine, settings, now, others=True, before=text)
         elif main is not None:
             async with self._sm() as s:
                 await self._tell(s, main, text)
-                await storage.remember(s, "storage_notices", storage.notice_record("emergency", after, now, [main.name], settings))
+                await storage.remember(s, "storage_notices", storage.notice_record("emergency", after, now, [main.name], settings, runner_id))
 
-    async def _trim(self, f: storage.Forecast, machine: MachineUsage, settings: dict, now: datetime) -> int:
+    async def _trim(self, runner_id: int | None, client: Any, f: storage.Forecast, machine: MachineUsage, settings: dict, now: datetime) -> int:
         """Above the target: shrink the big shared tool caches (oldest entries first) to a little below it; the managers of
         the projects whose clones use those tools hear what went. The bytes freed."""
         root = get_config().workspaces_root
         target = storage.limit(settings, "storage_notify_percent")
         async with self._sm() as s:
-            projects = list(await s.scalars(select(Project).where(Project.runner_id.is_(None)).order_by(Project.id)))  # on this runner
+            projects = list(await s.scalars(select(Project).where(_on(runner_id)).order_by(Project.id)))  # on this runner
             agents = list(await s.scalars(select(Agent)))
             folders = cleanup_service.folders(projects, agents, await cleanup_service.busy_agents(s), await cleanup_service.last_turns(s), machine.folders, root)
         free = f.total - f.used
         spec = TrimSpec(need=cleanup_service.need(f.total, free, target - storage.CLOSE_BELOW), large=storage.TRIM_LARGE, keep=storage.TRIM_KEEP, folders=folders)
         try:
-            result = await self._runs.runner.trim_caches(spec)
+            result = await client.trim_caches(spec)
         except RunnerError as exc:
             log.warning("Shared caches not trimmed: %s", exc)
             return 0
@@ -228,17 +246,17 @@ class CleanupWatcher:
                 items=[i.model_dump() for i in sorted(found, key=lambda i: -i.bytes)[:40]],
             )
 
-    async def _memory(self, now: datetime) -> None:
+    async def _memory(self, runner_id: int | None, client: Any, now: datetime) -> None:
         """Stop servers whose agent is idle and that nobody opened for ``SERVER_IDLE``. Only servers that
         answer on a port: a long job without one may be work someone waits for."""
         async with self._sm() as s:
             busy = await cleanup_service.busy_agents(s, jobs=False)
-            elsewhere = set(await s.scalars(select(Project.id).where(Project.runner_id.is_not(None))))  # their memory is another machine's
-            running = [j for j in await s.scalars(select(Job).where(Job.status == JobStatus.RUNNING, Job.assignment_id.is_(None))) if j.agent_id not in busy and j.project_id not in elsewhere]
+            here = set(await s.scalars(select(Project.id).where(_on(runner_id))))  # the other runners' memory is other machines'
+            running = [j for j in await s.scalars(select(Job).where(Job.status == JobStatus.RUNNING, Job.assignment_id.is_(None))) if j.agent_id not in busy and j.project_id in here]
             if not running:
                 return
             try:
-                ports = await self._runs.runner.job_ports([j.runner_id for j in running])
+                ports = await client.job_ports([j.runner_id for j in running])
             except RunnerError:
                 return
             by_agent: dict[int, list[int]] = defaultdict(list)  # a backend behind a gateway is in use when the gateway is

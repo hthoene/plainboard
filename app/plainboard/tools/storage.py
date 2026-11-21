@@ -22,8 +22,7 @@ async def list_cleanup(ctx: ToolContext, _args) -> str:
         found = await storage.listing(ctx.session, ctx.runs.runners.of(ctx.project.id), runner_id=ctx.project.runner_id)
     except RunnerError as exc:
         raise ToolError(str(exc)) from exc
-    # The disk's trend is watched on the built-in runner only.
-    return storage.tool_listing(found, ctx.project, storage.TREND.forecast() if ctx.project.runner_id is None else None, settings)
+    return storage.tool_listing(found, ctx.project, storage.trend(ctx.project.runner_id).forecast(), settings)
 
 
 @tool("delete_cleanup", "Delete your project's cleanup candidates from list_cleanup.", DeleteArgs, roles=(MANAGER,))

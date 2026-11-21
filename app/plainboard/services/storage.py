@@ -107,7 +107,17 @@ class Trend:
         return sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=True)) / sum((x - mx) ** 2 for x in xs)
 
 
-TREND = Trend()
+TREND = Trend()  # the built-in runner's
+_TRENDS: dict[int, Trend] = {}  # each external runner's
+
+
+def trend(runner_id: int | None) -> Trend:
+    return TREND if runner_id is None else _TRENDS.setdefault(runner_id, Trend())
+
+
+def last_notice(notices: list[dict[str, Any]] | None, runner_id: int | None) -> dict[str, Any] | None:
+    """The newest notice about that runner's disk (notices without a runner are the built-in one's)."""
+    return next((n for n in notices or [] if n.get("runner") == runner_id), None)
 
 
 def limit(settings: dict[str, Any], key: str) -> float:
@@ -481,8 +491,9 @@ def freeable(listing: Listing, project_id: int) -> int:
 # --- what was told and cleaned, for the storage view ----------------------------------------------
 
 
-def notice_record(reason: str, f: Forecast, now: datetime, projects: list[str], settings: dict[str, Any]) -> dict[str, Any]:
+def notice_record(reason: str, f: Forecast, now: datetime, projects: list[str], settings: dict[str, Any], runner_id: int | None = None) -> dict[str, Any]:
     return {
+        "runner": runner_id,
         "at": now.isoformat(),
         "reason": reason,
         "percent": round(f.percent, 1),
@@ -499,11 +510,13 @@ async def remember(session: AsyncSession, key: str, record: dict[str, Any]) -> N
     await settings_service.update(session, {key: [record, *kept][:KEPT]}, managed=True)
 
 
-async def close_last(session: AsyncSession) -> None:
+async def close_last(session: AsyncSession, runner_id: int | None = None) -> None:
     kept = (await settings_service.get(session, "storage_notices")) or []
-    if kept:
-        kept[0] = {**kept[0], "closed": True}
-        await settings_service.update(session, {"storage_notices": kept}, managed=True)
+    for i, n in enumerate(kept):
+        if n.get("runner") == runner_id:
+            kept[i] = {**n, "closed": True}
+            await settings_service.update(session, {"storage_notices": kept}, managed=True)
+            return
 
 
 def overview(settings: dict[str, Any], volume: VolumeUsage | None) -> StorageOut:

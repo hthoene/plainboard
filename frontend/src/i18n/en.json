@@ -1161,6 +1161,10 @@
     "cpuNone": "No CPU measured yet. It appears after a minute.",
     "cpuHint": "Percent of the whole machine ({{cores}} cores); 100 % is every core busy. Per project the CPU of its agents' turns, jobs and preview servers and of landing checks; the chart stacks its agents over the last 24 hours, all on the same scale. The line is the host's load average.",
     "runnerDown": "The runner cannot be reached: only the app's own volumes are shown.",
+    "runnerAway": "Not connected since {{when}}.",
+    "runnerNeverConnected": "Not connected.",
+    "runnerLastKnown": "Last known values, from {{when}}.",
+    "runnerNothingKnown": "Nothing is known of it yet.",
     "volumes": "Volumes",
     "kind": {
       "data": "Database",

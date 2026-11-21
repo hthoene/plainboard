@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import { useTranslation } from "react-i18next";
-import type { Usage } from "../../api/types";
+import type { MachineUsage } from "../../api/types";
 
 const WINDOWS = [1, 6, 24];
 const SHADES = [0.85, 0.55, 0.35, 0.7, 0.45, 0.25];
@@ -61,7 +61,7 @@ function LoadLine({ load, cores, label }: { load: number[]; cores: number; label
 const sum = (series: number[][], i: number) => series.reduce((a, s) => a + (s[i] ?? 0), 0);
 
 /** CPU per project and agent: now and averaged over 1, 6 and 24 hours, a stacked chart per project, and the host's load. */
-export function CpuUsage({ data }: { data: Usage }) {
+export function CpuUsage({ data }: { data: MachineUsage }) {
   const { t } = useTranslation();
   const cores = data.cpu_cores;
   if (!cores) return null;

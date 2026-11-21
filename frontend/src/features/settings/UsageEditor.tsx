@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../../api/client";
 import { qk, useUsage } from "../../api/queries";
-import type { Usage, UsageCleanup, UsageStorage } from "../../api/types";
+import type { MachineUsage, RunnerUsage, Usage, UsageCleanup, UsageStorage } from "../../api/types";
 import { Button, ErrorText, Spinner } from "../../components/ui";
 import { formatBytes, timeAgo } from "../../lib/format";
 import { CpuUsage } from "./CpuUsage";
@@ -88,23 +88,9 @@ function Cleanup({ cleanup }: { cleanup: UsageCleanup }) {
   );
 }
 
-/** Disk and memory of the installation: per volume, per project and agent, and what all agents share. */
-export function UsageEditor() {
+/** One runner's machine: volumes and memory, CPU, projects with their agents, and what the agents share. */
+function Machine({ data, appData }: { data: MachineUsage; appData?: number | null }) {
   const { t } = useTranslation();
-  const qc = useQueryClient();
-  const usage = useUsage();
-  const [error, setError] = useState<unknown>(null);
-  const data = usage.data;
-  if (!data) return usage.error ? <ErrorText error={usage.error} /> : <Spinner />;
-
-  const measure = async () => {
-    setError(null);
-    try {
-      qc.setQueryData(qk.usage, await api.post<Usage>("/usage/measure"));
-    } catch (err) {
-      setError(err);
-    }
-  };
   const disk = (n: number | null | undefined) => (n == null ? (data.measured_at ? "–" : "") : formatBytes(n));
   const memory = (n: number) => (n ? formatBytes(n) : "");
   const shared = data.shared.slice(0, SHARED_SHOWN);
@@ -113,8 +99,6 @@ export function UsageEditor() {
 
   return (
     <div className="space-y-6">
-      {!data.runner_ok && <p className="text-you-fg">{t("usage.runnerDown")}</p>}
-
       <section>
         <h3 className="caps rule-b pb-1.5">{t("usage.volumes")}</h3>
         {data.volumes.map((v) => (
@@ -138,7 +122,7 @@ export function UsageEditor() {
             <Meter used={data.memory_used} total={data.memory_total} low={false} />
           </div>
         )}
-        {data.data != null && <Row name={t("usage.data")} disk={formatBytes(data.data)} muted />}
+        {appData != null && <Row name={t("usage.data")} disk={formatBytes(appData)} muted />}
       </section>
 
       <CpuUsage data={data} />
@@ -176,6 +160,56 @@ export function UsageEditor() {
         {data.memory_other > 0 && <Row name={t("usage.otherMemory")} memory={formatBytes(data.memory_other)} muted />}
         <p className="mt-2 text-fg-3">{t("usage.sharedHint")}</p>
       </section>
+    </div>
+  );
+}
+
+/** An external runner: its machine, or while it is away the last known numbers. */
+function RunnerMachine({ runner }: { runner: RunnerUsage }) {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-6">
+      <h3 className="caps rule-b pb-1.5 text-fg">{runner.name}</h3>
+      {!runner.connected && (
+        <p className="text-you-fg">
+          {runner.last_seen_at ? t("usage.runnerAway", { when: timeAgo(runner.last_seen_at) }) : t("usage.runnerNeverConnected")}
+          {" "}
+          {runner.known_at ? t("usage.runnerLastKnown", { when: timeAgo(runner.known_at) }) : t("usage.runnerNothingKnown")}
+        </p>
+      )}
+      {(runner.connected || runner.known_at) && <Machine data={runner} />}
+    </div>
+  );
+}
+
+/** Disk and memory of the installation: per volume, per project and agent, and what all agents share. */
+export function UsageEditor() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const usage = useUsage();
+  const [error, setError] = useState<unknown>(null);
+  const data = usage.data;
+  if (!data) return usage.error ? <ErrorText error={usage.error} /> : <Spinner />;
+
+  const measure = async () => {
+    setError(null);
+    try {
+      qc.setQueryData(qk.usage, await api.post<Usage>("/usage/measure"));
+    } catch (err) {
+      setError(err);
+    }
+  };
+  const external = data.runners.length > 0;
+  const connected = [data, ...data.runners].some((m) => m.runner_ok);
+
+  return (
+    <div className="space-y-6">
+      {!data.runner_ok && <p className="text-you-fg">{t("usage.runnerDown")}</p>}
+      {external && <h3 className="caps rule-b pb-1.5 text-fg">{t("runners.builtin")}</h3>}
+      <Machine data={data} appData={data.data} />
+      {data.runners.map((r) => (
+        <RunnerMachine key={r.id} runner={r} />
+      ))}
 
       {data.storage && <StorageTarget storage={data.storage} />}
       {data.cleanups.length > 0 && (
@@ -194,7 +228,7 @@ export function UsageEditor() {
       )}
 
       <div className="flex flex-wrap items-center gap-3">
-        <Button size="sm" onClick={measure} disabled={data.measuring || !data.runner_ok}>
+        <Button size="sm" onClick={measure} disabled={data.measuring || !connected}>
           {t("usage.measure")}
         </Button>
         <span className="text-fg-3">

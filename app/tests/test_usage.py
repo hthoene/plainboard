@@ -105,3 +105,40 @@ def test_cpu_per_agent_project_and_the_rest_with_history_and_windows():
     # 1 h: (30 + 75) s over 450 s sampled; 6 h adds the slot two hours back
     assert dev.cpu_avg == [round(105 / 450, 3), round(255 / 750, 3), round(255 / 750, 3)]
     assert out.cpu_start is not None
+
+
+def test_every_runner_a_project_uses_shows_with_its_projects_and_the_last_known_numbers_while_away(client):
+    import json
+    import time
+
+    from conftest import FakeRunner
+
+    usage._LAST.clear()
+    external = FakeRunner("tunnel")
+    hub = client.app_ref.state.runs.runners
+    hub.make_client = lambda _rid: external
+    rid = client.post("/api/runners", json={"name": "build-server"}).json()["runner"]["id"]
+    token = client.post(f"/api/runners/{rid}/token").json()["token"]
+    other = client.post("/api/projects", json={"name": "Elsewhere"}).json()
+    assert client.put(f"/api/projects/{other['id']}/runner", json={"runner_id": rid}).status_code == 200
+    external.machine_usage = MachineUsage(memory_total=8 * GB, memory_used=2 * GB, folders=[folder(f"/workspaces/{other['slug']}/x", 4096)], measured_at=1_800_000_000)
+
+    away = client.get("/api/usage").json()
+    assert [p["name"] for p in away["projects"]].count("Elsewhere") == 0
+    (r,) = away["runners"]
+    assert (r["name"], r["connected"], r["runner_ok"], r["known_at"]) == ("build-server", False, False, None)
+    assert [p["name"] for p in r["projects"]] == ["Elsewhere"]
+
+    with client.websocket_connect("/api/runners/connect", headers={"authorization": f"Bearer {token}"}) as ws:
+        ws.send_text(json.dumps({"t": "hello", "version": "", "protocol": 1}))
+        for _ in range(100):
+            if hub.connected(rid):
+                break
+            time.sleep(0.05)
+        (r,) = client.get("/api/usage").json()["runners"]
+        assert r["connected"] and r["runner_ok"] and r["memory_total"] == 8 * GB
+        hub.tunnels.pop(rid)  # the connection ends
+
+    external.reachable = False
+    (r,) = client.get("/api/usage").json()["runners"]
+    assert not r["connected"] and not r["runner_ok"] and r["memory_total"] == 8 * GB and r["known_at"]

@@ -308,12 +308,16 @@ A project's agents can work on a server of their own instead of next to PlainBoa
 power, or projects kept apart (files, installed tools, memory). That server only needs Docker; it
 connects out to PlainBoard, so it needs no open port, no TLS and no domain.
 
-1. In **Settings > Runners**, enter a name and click **Add runner**. PlainBoard shows a command (and the
-   same as a `docker-compose.yml`) with the address you opened PlainBoard at and a token. The token is
-   shown only this once.
-2. Run the command on the other server. A few seconds later the runner shows as connected, with its
-   version, disk and memory.
+1. In **Settings > Runners**, enter a name and click **Add runner**. PlainBoard shows a
+   `docker-compose.yml` with the address you opened PlainBoard at and a token (the token is shown only
+   this once; the template is `deploy/runner-compose.yml`). On the other server, make an empty folder and
+   save the file in it.
+2. In that folder run `docker compose up -d`. A few seconds later the runner shows as connected, with its
+   version, disk and memory. (Instead of compose, the page also shows the same as one `docker run`
+   command, behind "Use docker run instead".)
 3. In the project's settings, under **Runner**, choose it.
+
+To update a runner: `docker compose pull && docker compose up -d` in its folder.
 
 Everything of the project then runs there: its agents' turns, background jobs, check runs of its
 branches, previews and the browser window (both reach PlainBoard through the runner's connection).
@@ -325,10 +329,10 @@ to the project's own runner. Ticket attachments are copied to it when an agent s
 If the runner goes away (the server restarts, the line breaks), what ran there ends as after a
 restart, new turns wait until it is back, and it connects again by itself. After 10 minutes away the
 project's manager hears it once. A runner that runs another version than PlainBoard is marked in the
-list: update it with `docker pull thoenehannes/plainboard-runner:latest` and start it again. A new token
+list: update it with `docker compose pull && docker compose up -d`. A new token
 (key icon) ends the old one at once; removing a runner is possible once no project uses it.
 
-The address in the command is the one you opened PlainBoard at. It has to be reachable from the
+The address in the file is the one you opened PlainBoard at. It has to be reachable from the
 other server: behind a reverse proxy that is its public address (the proxy must pass WebSockets on,
 as for the UI). Plan limits, sign-ins of subscriptions and the Storage page stay with the built-in runner.
 

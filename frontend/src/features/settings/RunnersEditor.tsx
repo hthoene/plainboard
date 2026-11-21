@@ -10,6 +10,17 @@ import { CodeBlock } from "../../components/Markdown";
 import { formatBytes, timeAgo } from "../../lib/format";
 
 const KEY = ["runners"];
+const UPDATE = "docker compose pull && docker compose up -d";
+
+function Code({ text }: { text: string }) {
+  return (
+    <div className="prose-chat">
+      <CodeBlock alwaysCopy text={text}>
+        <code>{text}</code>
+      </CodeBlock>
+    </div>
+  );
+}
 
 /** One numbered step of the guide; `dim` while an earlier step is still to do. */
 function Step({ n, title, dim, done, children }: { n: number; title: string; dim?: boolean; done?: boolean; children?: ReactNode }) {
@@ -44,7 +55,7 @@ export function RunnersEditor() {
     refetchInterval: (query) => (created && !query.state.data?.find((r) => r.id === created.runner.id)?.connected ? 2_000 : 15_000),
   });
   const [name, setName] = useState("");
-  const [compose, setCompose] = useState(false);
+  const [run, setRun] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
   const change = async (action: () => Promise<void>) => {
@@ -58,7 +69,7 @@ export function RunnersEditor() {
   };
   const show = (c: RunnerCreated) => {
     setCreated(c);
-    setCompose(false);
+    setRun(false);
   };
   const add = () =>
     name.trim() &&
@@ -113,7 +124,7 @@ export function RunnersEditor() {
                 ) : (
                   r.id !== created?.runner.id && (
                     <div className="text-fg-3">
-                      {t("runners.offlineHint")} <code>docker logs plainboard-runner</code>
+                      {t("runners.offlineHint")} <code>docker compose logs</code>
                     </div>
                   )
                 )}
@@ -136,79 +147,99 @@ export function RunnersEditor() {
 
       <section className="space-y-3">
         <h3 className="caps border-b-2 border-fg pb-1">{t("runners.guideTitle")}</h3>
+        {created ? (
+          <p className="text-fg-2">{t("runners.step1Done", { name: created.runner.name })}</p>
+        ) : (
+          <div className="space-y-1">
+            <label className="text-fg-2" htmlFor="runner-name">
+              {t("runners.nameLabel")}
+            </label>
+            <div className="flex gap-2">
+              <Input
+                id="runner-name"
+                value={name}
+                maxLength={100}
+                placeholder={t("runners.namePlaceholder")}
+                onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    add();
+                  }
+                }}
+              />
+              <Button size="md" variant="primary" className="shrink-0" onClick={add} disabled={!name.trim()}>
+                <Plus className="size-4" />
+                {t("runners.add")}
+              </Button>
+            </div>
+          </div>
+        )}
         <ol className="space-y-4">
-          <Step n={1} title={t("runners.step1")} done={!!created}>
-            {created ? (
-              <p className="text-fg-2">{t("runners.step1Done", { name: created.runner.name })}</p>
-            ) : (
-              <div className="flex gap-2">
-                <Input
-                  value={name}
-                  maxLength={100}
-                  aria-label={t("runners.nameLabel")}
-                  placeholder={t("runners.namePlaceholder")}
-                  onChange={(e) => setName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      add();
-                    }
-                  }}
-                />
-                <Button size="md" variant="primary" className="shrink-0" onClick={add} disabled={!name.trim()}>
-                  <Plus className="size-4" />
-                  {t("runners.add")}
-                </Button>
-              </div>
-            )}
-          </Step>
-          <Step n={2} title={t("runners.step2")} dim={!created} done={connected}>
-            {created && (
-              <div className="space-y-2">
-                <div className="prose-chat">
-                  <CodeBlock alwaysCopy text={compose ? created.compose : created.command}>
-                    <code>{compose ? created.compose : created.command}</code>
-                  </CodeBlock>
-                </div>
-                <p className="text-you-fg">{t("runners.onceNote")}</p>
-                <button type="button" onClick={() => setCompose(!compose)} className="inline-flex items-center gap-1 text-fg-2 underline-offset-2 hover:text-fg hover:underline">
-                  <ChevronRight className={clsx("size-4", compose && "rotate-90")} />
-                  {compose ? t("runners.useCommand") : t("runners.useCompose")}
-                </button>
-                {compose && <p className="text-fg-3">{t("runners.composeHint")}</p>}
-              </div>
-            )}
-          </Step>
-          <Step n={3} title={t("runners.step3")} dim={!created} done={connected}>
-            {created &&
-              (connected ? (
-                <p className="flex items-center gap-1.5 text-ok">
-                  <Check className="size-4" />
-                  {t("runners.nowConnected", { name: created.runner.name })}
-                </p>
-              ) : (
-                <div className="space-y-1">
-                  <p className="flex items-center gap-2 text-fg-2" role="status">
-                    <Spinner />
-                    {t("runners.waiting")}
+          {(run
+            ? [
+                <Step key="run" n={1} title={t("runners.stepRun")} dim={!created} done={connected}>
+                  {created && (
+                    <div className="space-y-2">
+                      <Code text={created.command} />
+                      <p className="text-you-fg">{t("runners.onceNote")}</p>
+                    </div>
+                  )}
+                </Step>,
+              ]
+            : [
+                <Step key="file" n={1} title={t("runners.stepFile")} dim={!created} done={connected}>
+                  {created && (
+                    <div className="space-y-2">
+                      <Code text={created.compose} />
+                      <p className="text-you-fg">{t("runners.onceNote")}</p>
+                    </div>
+                  )}
+                </Step>,
+                <Step key="up" n={2} title={t("runners.stepUp")} dim={!created} done={connected}>
+                  {created && <Code text="docker compose up -d" />}
+                </Step>,
+              ]
+          ).concat(
+            <Step key="wait" n={run ? 2 : 3} title={t("runners.stepWait")} dim={!created} done={connected}>
+              {created &&
+                (connected ? (
+                  <p className="flex items-center gap-1.5 text-ok">
+                    <Check className="size-4" />
+                    {t("runners.nowConnected", { name: created.runner.name })}
                   </p>
-                  <p className="text-fg-3">
-                    {t("runners.offlineHint")} <code>docker logs plainboard-runner</code>
-                  </p>
+                ) : (
+                  <div className="space-y-1">
+                    <p className="flex items-center gap-2 text-fg-2" role="status">
+                      <Spinner />
+                      {t("runners.waiting")}
+                    </p>
+                    <p className="text-fg-3">
+                      {t("runners.offlineHint")} <code>docker compose logs</code>
+                    </p>
+                  </div>
+                ))}
+            </Step>,
+            <Step key="choose" n={run ? 3 : 4} title={t("runners.stepChoose")} dim={!connected}>
+              {connected && (
+                <div className="space-y-2">
+                  <p className="text-fg-2">{t("runners.stepChooseHint")}</p>
+                  <p className="text-fg-3">{t("runners.updateHint")}</p>
+                  <Code text={UPDATE} />
+                  <Button size="md" onClick={() => setCreated(null)}>
+                    {t("runners.addAnother")}
+                  </Button>
                 </div>
-              ))}
-          </Step>
-          <Step n={4} title={t("runners.step4")} dim={!connected}>
-            {connected && (
-              <div className="space-y-2">
-                <p className="text-fg-2">{t("runners.step4Hint")}</p>
-                <Button size="md" onClick={() => setCreated(null)}>
-                  {t("runners.addAnother")}
-                </Button>
-              </div>
-            )}
-          </Step>
+              )}
+            </Step>,
+          )}
         </ol>
+        {created && (
+          <button type="button" onClick={() => setRun(!run)} className="inline-flex items-center gap-1 text-fg-2 underline-offset-2 hover:text-fg hover:underline">
+            <ChevronRight className={clsx("size-4", run && "rotate-90")} />
+            {run ? t("runners.useCompose") : t("runners.useRun")}
+          </button>
+        )}
       </section>
       <ErrorText error={error} />
     </div>

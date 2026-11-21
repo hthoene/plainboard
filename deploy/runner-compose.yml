@@ -1,0 +1,18 @@
+# An external PlainBoard runner: lets a project's agents work on this server.
+# Settings > Runners in PlainBoard shows this file with your URL and token filled in.
+# Save it as docker-compose.yml in an empty folder, then: docker compose up -d
+# Update later: docker compose pull && docker compose up -d
+services:
+  runner:
+    image: thoenehannes/plainboard-runner:latest
+    container_name: plainboard-runner
+    restart: unless-stopped
+    environment:
+      PLAINBOARD_URL: https://plainboard.example.com   # the address you open PlainBoard at
+      PLAINBOARD_RUNNER_TOKEN: pbr_replace-me          # shown once when you add the runner
+    volumes:
+      - workspaces:/workspaces
+      - agent-home:/home/agent
+volumes:
+  workspaces:
+  agent-home:

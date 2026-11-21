@@ -205,7 +205,8 @@ async def current(session: AsyncSession) -> LimitsOut:
         entry = AccountLimits(account_id=account.id, provider=account.provider, label=account.label, available=account.auth_mode != "api_key")
         data = stored.get(account.key, {})
         if entry.available:
-            entry.plan, entry.plan_size = (plans.get(account.key) or {}).get("name"), (plans.get(account.key) or {}).get("size")
+            # The size the user gave counts before the provider's (as accounts.plan_sizes).
+            entry.plan, entry.plan_size = (plans.get(account.key) or {}).get("name"), account.plan_size or (plans.get(account.key) or {}).get("size")
         if entry.available and (windows := _windows(data, now)):
             growth = data.get("growth", {})
             forecasts = [forecast(w, growth.get(w.name, {}).get("days", {}), now) for w in windows if WEEKLY_MARK in w.name]

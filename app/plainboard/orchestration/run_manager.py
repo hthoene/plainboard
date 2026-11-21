@@ -93,6 +93,7 @@ MAX_RESTART_RESUMES = 3  # an assignment cut off this often by restarts goes to 
 # ... if those turns were cut off right after they began: restarts that leave no time to work. A turn
 # that had worked for a while when an update came is no sign of that, however many updates there are.
 CUT_SHORT_SECONDS = 300
+EMPTY_TURN = "The turn ended without a single step (no answer, no tool call), also when tried once more"
 SWITCH_TRIES = 3  # a turn turned away by a used-up plan limit runs again on another account, this often at most
 RUNNER_TRIES, RUNNER_RETRY_SECONDS = 12, 5.0  # how long a turn waits for a runner that is not up yet (about a minute, plus connect timeouts)
 LOST = "The turn broke off: the runner no longer had it"
@@ -128,6 +129,24 @@ class Outcome:
     resumed: bool = False
     limited: bool = False  # the provider reported a used-up plan limit of the account during the turn
 
+    @property
+    def empty(self) -> bool:
+        """The turn ended as done without a single step: no model call, no text, no tool call. Seen
+        when Claude Code took a session up with something left over from before and ended at once."""
+        res = self.result
+        return bool(res and not res.is_error and not self.error and not self.cancelled and not self.limited and not res.num_turns and not res.text and not self.last_text and not self.tool_messages)
+
+
+async def _limit_since_answer(s: AsyncSession, conversation_id: int) -> bool:
+    """A turn of this conversation was turned away by a used-up limit after the agent last answered."""
+    error = await s.scalar(
+        select(Message).where(Message.conversation_id == conversation_id, Message.role == "system", Message.kind == "error").order_by(Message.id.desc()).limit(1)
+    )
+    if error is None or not (error.meta or {}).get("limit"):
+        return False
+    answered = await s.scalar(select(func.max(Message.id)).where(Message.conversation_id == conversation_id, Message.role == "assistant"))
+    return answered is None or answered < error.id
+
 
 class RunManager:
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession], runner: RunnerClient):
@@ -156,6 +175,7 @@ class RunManager:
         self._state_tried: dict[int, float] = {}  # closed tickets whose last rewrite was started then (see refresh_closed_tickets)
         self._unread: dict[int, set[int]] = {}  # running turn -> waiting chat messages (runs) it was told about and has not read yet
         self._wake = asyncio.Event()
+        self._limit_timer: asyncio.TimerHandle | None = None  # wakes the dispatcher when a used-up subscription is free again
         self._dispatcher: asyncio.Task[None] | None = None
         self.paused = False  # everything is paused (services/pause.py): nothing new starts
 
@@ -924,6 +944,9 @@ class RunManager:
                 # Everything is paused: only what wraps up still starts, and the answer a turn that wraps up waits for.
                 and not ((self.paused or r.project_id in resting) and not r.stop_requested_at and r.parent_run_id is None)
             ]
+            if candidates:
+                held = await self._held_by_limits(s, [r for r in queued if r.id in {c[0] for c in candidates}])
+                candidates = [c for c in candidates if c[0] not in held]
         in_use: dict[int, int] = {}  # project -> its members at work
         for run_id in self._running.keys() - self._unlimited - self.waiting_for_job():
             if (project_id := project_of.get(run_id)) is not None:
@@ -942,6 +965,33 @@ class RunManager:
             else:
                 in_use[project_id] = in_use.get(project_id, 0) + 1
             self._running[run_id] = asyncio.create_task(self._execute(run_id, agent_id), name=f"run-{run_id}")
+
+    async def _held_by_limits(self, s: AsyncSession, runs: list[Run]) -> set[int]:
+        """Turns that wait because every subscription their agent may run on is used up: started now,
+        they would only fail with the provider's limit message, and a failed report or wake-up queues
+        the next turn that fails. Whoever waits for an answer (a chat, a question) is not held: they
+        get that message. The rest starts when the first subscription is free again."""
+        held: set[int] = set()
+        until_of: dict[int, int | None] = {}
+        for run in runs:
+            if run.trigger == RunTrigger.CHAT or run.parent_run_id is not None or run.stop_requested_at:
+                continue
+            if run.agent_id not in until_of:
+                agent = await s.get(Agent, run.agent_id)
+                until_of[run.agent_id] = await account_service.used_up_until(s, agent) if agent else None
+            if until := until_of[run.agent_id]:
+                held.add(run.id)
+                self._wake_at(until)
+        return held
+
+    def _wake_at(self, when: float) -> None:
+        loop = asyncio.get_running_loop()
+        at = loop.time() + max(1.0, when - time.time() + 5)
+        if self._limit_timer and not self._limit_timer.cancelled() and loop.time() < self._limit_timer.when() <= at:
+            return
+        if self._limit_timer:
+            self._limit_timer.cancel()
+        self._limit_timer = loop.call_at(at, self._wake.set)
 
     # ------------------------------------------------------------------ execution
 
@@ -968,6 +1018,11 @@ class RunManager:
                     break
                 spec = switched
                 outcome = await self._stream(spec, ctx)
+            if outcome.empty and run_id not in self._cancel_requested:
+                log.warning("Run %s ended without a single step, it runs once more", run_id)
+                outcome = await self._stream(spec, ctx)
+                if outcome.empty:
+                    outcome.error = EMPTY_TURN
             await self._finish(run_id, outcome)
         except asyncio.CancelledError:
             ended = Outcome(error=LOST) if run_id in self._lost else Outcome(error="Run cancelled", cancelled=True)
@@ -1103,7 +1158,10 @@ class RunManager:
                     earlier = list(await s.scalars(done.order_by(Assignment.id.desc()).limit(3)))
                 facts = timing_service.facts_text(await timing_service.cached_overview(s, project.id, timing_service.FACTS_DAYS * 24))
                 board = prompts.assignment_opening(facts, earlier, fresh)
-            full_text = prompts.with_preface(prompts.with_attachments(text, meta.get("attachments")), now=prompts.now_line(values["timezone"]), inbox=updates, board=board)
+            subscriptions = prompts.subscriptions_line(values["timezone"], await account_service.used_up_until(s, agent), await _limit_since_answer(s, conv.id))
+            full_text = prompts.with_preface(
+                prompts.with_attachments(text, meta.get("attachments")), now=prompts.now_line(values["timezone"]), inbox=updates, board=board, subscriptions=subscriptions
+            )
             turn = await self.context.build_turn(s, project=project, agent=agent, conv=conv, text=full_text, message_id=message.id)
             if turn.briefing_changes:
                 message.meta = {**message.meta, "briefing_update": turn.briefing_changes}
@@ -1270,7 +1328,13 @@ class RunManager:
             await s.commit()
             if run.status != RunStatus.SUCCEEDED and conv:
                 await self._add_message(
-                    s, RunContext(run.id, run.project_id, run.agent_id, ""), conv.id, role="system", kind="error", content=run.error or "Failed"
+                    s,
+                    RunContext(run.id, run.project_id, run.agent_id, ""),
+                    conv.id,
+                    role="system",
+                    kind="error",
+                    content=run.error or "Failed",
+                    meta={"limit": True} if outcome.limited else {},
                 )
             bus.publish(run.project_id, "run.upserted", RunOut.model_validate(run))
             try:

@@ -67,8 +67,23 @@ MCP_SERVER_NAME = "plainboard"
 BOARD_TOOLSET_BUILTINS = ["Read", "Glob", "Grep", "Bash", "Edit", "Write"]
 # Interactive tools make no sense for headless agents; they talk back via chat or the board. Plan mode
 # waits for an approval nobody gives. The CLI's own todo list would compete with the PlainBoard task
-# list, which is the one the user and the manager see.
-DISALLOWED_TOOLS = ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"]
+# list, which is the one the user and the manager see. Monitor waits for a process of its own: a turn
+# that ends meanwhile ends the assignment, and nothing takes it up again (start_job does).
+DISALLOWED_TOOLS = ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "Monitor"]
+BACKGROUND_REFUSED = (
+    "[PlainBoard] Not in the background: when your turn ends, your assignment ends with it, and nothing "
+    "brings you back when the command is done. Run it with start_job (wait_minutes for a short one)."
+)
+# Background work of Claude Code that does not report back to PlainBoard: a turn may not end on it.
+UNAWAITED_TASKS = ("shell", "monitor")
+STILL_RUNNING = (
+    "[PlainBoard] Still running in the background: {what}. A turn that ends now ends your assignment, and "
+    "this is stopped with it. Wait for it with start_job/wait_job (run it again there), or stop it and say what is missing."
+)
+# The message Claude Code writes into the session in place of an answer when a request fails
+# (a used-up limit, say). It is not the agent's: it is shown as an error, and a resumed session leaves it out.
+SYNTHETIC_MODEL = "<synthetic>"
+SESSION_TAIL_BYTES = 256 * 1024
 # One CLI message holds a whole tool result; a screenshot the agent reads easily exceeds the SDK's 1 MB default.
 MAX_MESSAGE_BYTES = 64 * 1024 * 1024
 NOTICE_GRACE_SECONDS = 60
@@ -197,6 +212,8 @@ class ToolTimer:
         self.started: dict[str, float] = {}
 
     async def start(self, hook_input: Any, tool_use_id: str | None, _context: Any) -> dict[str, Any]:
+        if hook_input.get("tool_name") == "Bash" and (hook_input.get("tool_input") or {}).get("run_in_background"):
+            return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": BACKGROUND_REFUSED}}
         if tool_use_id and not hook_input.get("agent_id"):
             self.started[tool_use_id] = time.monotonic()
         return {}
@@ -229,6 +246,41 @@ def notice_hook(run_id: str, timer: ToolTimer | None = None):
         return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "\n\n".join(pending)}}
 
     return hook
+
+
+def resume_point(session_file: Path) -> str | None:
+    """Where a session is to be taken up when its last turn ended in Claude Code's error message
+    (a used-up limit): the entry before it, so that the agent does not read it as its own answer
+    from then on. None: take it up at its end."""
+    try:
+        with session_file.open("rb") as handle:
+            handle.seek(max(0, handle.seek(0, 2) - SESSION_TAIL_BYTES))
+            lines = handle.read().splitlines()
+    except OSError:
+        return None
+    entries: dict[str, dict] = {}
+    leaf = None
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue  # cut off by the tail
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("type") in ("user", "assistant") and entry.get("uuid") and not entry.get("isSidechain"):
+            entries[entry["uuid"]] = entry
+            leaf = entry["uuid"]
+        elif entry.get("type") == "last-prompt" and entry.get("leafUuid"):
+            leaf = entry["leafUuid"]
+    point, moved = leaf, False
+    while point and (entry := entries.get(point)) and entry.get("type") == "assistant" and (entry.get("isApiErrorMessage") or (entry.get("message") or {}).get("model") == SYNTHETIC_MODEL):
+        point, moved = entry.get("parentUuid"), True
+    return point if moved else None
+
+
+def session_file(cwd: str | Path, session_id: str) -> Path:
+    """Claude Code's transcript of a session started in ``cwd``."""
+    return Path.home() / ".claude" / "projects" / re.sub(r"[^a-zA-Z0-9]", "-", str(cwd)) / f"{session_id}.jsonl"
 
 
 def limit_windows(info: RateLimitInfo) -> list[LimitWindow]:
@@ -341,7 +393,12 @@ class BackgroundWork:
         self.heard = time.monotonic()
 
     async def stop_hook(self, hook_input: Any, _tool_use_id: str | None, _context: Any) -> dict[str, Any]:
-        self.open = [str(task.get("description") or task.get("id")) for task in hook_input.get("background_tasks") or [] if task.get("type") in AWAITED_TASKS]
+        tasks = hook_input.get("background_tasks") or []
+        self.open = [str(task.get("description") or task.get("id")) for task in tasks if task.get("type") in AWAITED_TASKS]
+        # A shell Claude Code moved to the background reports to nobody: refused once, then the turn may end.
+        running = [str(task.get("command") or task.get("description") or task.get("id"))[:200] for task in tasks if task.get("type") in UNAWAITED_TASKS]
+        if running and not self.open and not hook_input.get("stop_hook_active"):
+            return {"decision": "block", "reason": STILL_RUNNING.format(what="; ".join(running))}
         return {}
 
     def see(self, message: Any) -> None:
@@ -406,6 +463,8 @@ class EventMapper:
                 events.append(CompactionEvent(tokens_before=int(metadata.get("pre_tokens") or 0)))
         elif isinstance(message, AssistantMessage):
             if message.parent_tool_use_id:  # sub-agent chatter: keep out of the transcript
+                return events
+            if message.error or message.model == SYNTHETIC_MODEL:  # Claude Code's own error text, see the result
                 return events
             for block in message.content:
                 if isinstance(block, TextBlock) and block.text.strip():
@@ -488,6 +547,7 @@ class ClaudeCodeProvider(Provider):
             env=env,
             permission_mode="bypassPermissions",
             resume=spec.resume_session_id,
+            resume_session_at=resume_point(session_file(bridge.workspace, spec.resume_session_id)) if spec.resume_session_id else None,
             max_turns=spec.max_turns,
             mcp_servers=mcp_servers,
             allowed_tools=allowed,

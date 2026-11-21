@@ -219,18 +219,14 @@ async def _cache_warm(session: AsyncSession, agent: Agent | None) -> bool:
     return last is not None and utcnow() - last < timedelta(seconds=CACHE_SECONDS)
 
 
-async def pick(
-    session: AsyncSession, provider: str, agent: Agent | None = None, conv: Conversation | None = None, model: str | None = None, fresh: bool = False
-) -> Account | None:
-    """The account for an agent's next turn; None if the provider has no (enabled) account.
-    ``model``: what the turn runs on, the agent's own model if not given. ``fresh``: the turn starts
-    a new session (a new piece of work, a compressed context), so there is no cache to keep."""
+async def _candidates(session: AsyncSession, provider: str, agent: Agent | None, model: str | None = None) -> list[Account]:
+    """The accounts the agent's turn may run on: the one it or its project chose, else all it may use."""
     accounts = [a for a in await list_accounts(session, provider) if a.enabled]
     project = await session.get(Project, agent.project_id) if agent else None
     if project is not None and project.account_ids:  # a project limited to some accounts never gets another one
         accounts = [a for a in accounts if a.id in project.account_ids]
     if not accounts:
-        return None
+        return []
     # Endpoints of one provider differ in what they offer (two model servers, say): one that names the model.
     model = model or (agent.model if agent else None)
     accounts = [a for a in accounts if model and model in (a.models or [])] or accounts
@@ -239,7 +235,35 @@ async def pick(
     if wanted is None and project is not None:
         wanted = project.account_id
     if wanted and (pinned := next((a for a in accounts if a.id == wanted), None)):
-        return pinned
+        return [pinned]
+    return accounts
+
+
+async def used_up_until(session: AsyncSession, agent: Agent) -> int | None:
+    """When the first of the subscriptions the agent's turns may run on is free again (unix
+    seconds), if every one of them is used up; None if one has room, or a reset time is unknown."""
+    accounts = await _candidates(session, agent.provider, agent)
+    found = await limits_service.windows(session)
+    ends = []
+    for account in accounts:
+        if not used_up_now(account, found):
+            return None
+        resets = [w.resets_at for w in found.get(account.key, []) if w.status == "rejected" or w.utilization >= 1]
+        if not resets or not all(resets):
+            return None
+        ends.append(max(resets))  # type: ignore[type-var]
+    return min(ends) if ends else None
+
+
+async def pick(
+    session: AsyncSession, provider: str, agent: Agent | None = None, conv: Conversation | None = None, model: str | None = None, fresh: bool = False
+) -> Account | None:
+    """The account for an agent's next turn; None if the provider has no (enabled) account.
+    ``model``: what the turn runs on, the agent's own model if not given. ``fresh``: the turn starts
+    a new session (a new piece of work, a compressed context), so there is no cache to keep."""
+    accounts = await _candidates(session, provider, agent, model)
+    if len(accounts) <= 1:
+        return accounts[0] if accounts else None
     found = await limits_service.windows(session)
     sizes = plan_sizes(accounts, await limits_service.plan_sizes(session))
     now = time.time()

@@ -1094,3 +1094,47 @@ async def test_a_token_that_cannot_read_check_runs_reads_the_runs_of_actions(mon
     # Neither can be read: the error names both, so the user sees what the token lacks.
     with pytest.raises(WorkspaceError, match="the runs of Actions neither"):
         await github.commit_checks(Credentials(github_token="nothing"), "acme/api", "abc")
+
+
+async def test_an_agent_cannot_leave_work_running_in_the_background_when_its_turn_ends():
+    from plainboard_runner.providers.claude_code import DISALLOWED_TOOLS, BackgroundWork, ToolTimer
+
+    assert "Monitor" in DISALLOWED_TOOLS
+    refused = await ToolTimer().start({"tool_name": "Bash", "tool_input": {"command": "scripts/check-fast.sh", "run_in_background": True}}, "t1", None)
+    assert refused["hookSpecificOutput"]["permissionDecision"] == "deny" and "start_job" in refused["hookSpecificOutput"]["permissionDecisionReason"]
+    assert await ToolTimer().start({"tool_name": "Bash", "tool_input": {"command": "ls"}}, "t2", None) == {}
+
+    # A shell Claude Code moved to the background by itself: the stop is refused once.
+    work = BackgroundWork("r30")
+    shell = {"background_tasks": [{"id": "b1", "type": "shell", "description": "check", "command": "scripts/check-fast.sh"}]}
+    refused = await work.stop_hook(shell, None, None)
+    assert refused["decision"] == "block" and "scripts/check-fast.sh" in refused["reason"] and "start_job" in refused["reason"]
+    assert await work.stop_hook({**shell, "stop_hook_active": True}, None, None) == {}
+    assert await work.stop_hook({"background_tasks": []}, None, None) == {}
+
+
+def test_claude_codes_limit_message_is_not_the_agents_answer(tmp_path):
+    from claude_agent_sdk import AssistantMessage, TextBlock
+
+    from pathlib import Path
+
+    from plainboard_runner.providers.claude_code import EventMapper, resume_point, session_file
+
+    limit = AssistantMessage(content=[TextBlock(text="You've hit your 5-hour limit · resets 4:20pm (UTC)")], model="<synthetic>", error="rate_limit")
+    mapper = EventMapper()
+    assert mapper.map(limit) == [] and mapper.last_text is None
+    assert [e.type for e in mapper.map(AssistantMessage(content=[TextBlock(text="Done.")], model="claude-opus-5-5"))] == ["assistant_text"]
+
+    # A session whose last turn ended in that message is taken up before it.
+    assert session_file("/workspaces/megapanel-v5/devops", "s1") == Path.home() / ".claude/projects/-workspaces-megapanel-v5-devops/s1.jsonl"
+    file = tmp_path / "s1.jsonl"
+    entries = [
+        {"type": "user", "uuid": "u1", "parentUuid": None, "message": {"role": "user", "content": "Assignment"}},
+        {"type": "assistant", "uuid": "a1", "parentUuid": "u1", "message": {"model": "claude-opus-5-5", "content": []}},
+        {"type": "assistant", "uuid": "a2", "parentUuid": "a1", "isApiErrorMessage": True, "message": {"model": "<synthetic>", "content": []}},
+        {"type": "last-prompt", "leafUuid": "a2"},
+    ]
+    file.write_text("".join(json.dumps(e) + "\n" for e in entries))
+    assert resume_point(file) == "a1"
+    file.write_text("".join(json.dumps(e) + "\n" for e in entries[:2]))
+    assert resume_point(file) is None and resume_point(tmp_path / "missing.jsonl") is None

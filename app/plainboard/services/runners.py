@@ -51,6 +51,7 @@ def compose(url: str, token: str) -> str:
         "services:\n"
         "  runner:\n"
         f"    image: {IMAGE}\n"
+        "    container_name: plainboard-runner\n"
         "    restart: unless-stopped\n"
         "    environment:\n"
         f"      PLAINBOARD_URL: {url}\n"

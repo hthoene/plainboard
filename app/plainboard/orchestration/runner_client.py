@@ -7,7 +7,7 @@ import time
 from collections.abc import AsyncIterator
 
 import httpx
-from plainboard_protocol import ProjectFiles, TidyResult, TidySpec, CandidatesSpec, CheckResult, CleanupCandidate, CleanupResult, CleanupSpec, CompletionResult, CompletionSpec, Credentials, DeleteSpec, JobPort, JobSpec, JobState, LimitsEvent, MachineUsage, ProviderAccount, ProviderInfo, PullRequestCheck, PullRequestState, RepoSpec, RunEvent, RunSpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, UpstreamState, parse_event
+from plainboard_protocol import ProjectFiles, TidyResult, TidySpec, CandidatesSpec, CheckResult, CleanupCandidate, CleanupResult, CleanupSpec, CompletionResult, CompletionSpec, Credentials, DeleteSpec, JobPort, JobSpec, JobState, LimitsEvent, MachineUsage, ProviderAccount, ProviderInfo, PullRequestCheck, PullRequestState, RepoSpec, RunEvent, RunSpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, TrimSpec, UpstreamState, parse_event
 
 log = logging.getLogger(__name__)
 
@@ -207,6 +207,15 @@ class RunnerClient:
             resp = await self._client.post("/cleanup/candidates", json=spec.model_dump(mode="json"), timeout=1800)
             resp.raise_for_status()
             return [CleanupCandidate.model_validate(c) for c in resp.json()]
+        except (httpx.HTTPError, ValueError) as exc:
+            raise RunnerError(f"Runner unreachable: {exc}") from exc
+
+    async def trim_caches(self, spec: TrimSpec) -> CleanupResult:
+        """Shrink the big shared tool caches, oldest files first."""
+        try:
+            resp = await self._client.post("/cleanup/trim", json=spec.model_dump(mode="json"), timeout=3 * 3600)
+            resp.raise_for_status()
+            return CleanupResult.model_validate(resp.json())
         except (httpx.HTTPError, ValueError) as exc:
             raise RunnerError(f"Runner unreachable: {exc}") from exc
 

@@ -44,8 +44,14 @@ def ws(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, "JOBS_ROOT", home / ".plainboard" / "jobs")
     monkeypatch.setenv("HOME", str(home))
     # du sees new files only seconds later on some file systems: count what was written
-    monkeypatch.setattr(cleanup, "_size", lambda paths: {p: sum(f.stat().st_size for f in p.rglob("*") if f.is_file()) for p in paths if p.exists()})
+    monkeypatch.setattr(cleanup, "_size", lambda paths: {p: _bytes(p) for p in paths if p.exists()})
+    monkeypatch.setattr(cleanup, "_file_bytes", lambda st: st.st_size)
+    monkeypatch.setattr(cleanup, "_survey", lambda paths: {q: (_bytes(q), q.stat().st_mtime) for p in paths if p.exists() for q in [p, *(p.iterdir() if p.is_dir() else [])]})
     return root
+
+
+def _bytes(p):
+    return p.stat().st_size if p.is_file() else sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
 
 
 def agent(ws, name):
@@ -210,3 +216,52 @@ def test_candidates_say_how_safe_each_is_and_delete_keeps_to_it(ws, tmp_path, mo
     result = cleanup.delete(DeleteSpec(paths=asked, folders=folders, force=True))
     assert not busy_target.exists() and not scratch.exists()
     assert work.exists() and gone.exists() and (home / "tools").exists() and (work / "x" / "src.rs").exists()  # never with unpushed work or tools
+
+
+def test_candidates_say_which_agent_folders_name_them_and_what_they_hold(ws, tmp_path, monkeypatch):
+    from plainboard_protocol import CandidatesSpec
+
+    home = tmp_path / "home"
+    dev, other = agent(ws, "dev"), agent(ws, "other")
+    repo = clone(tmp_path, dev)
+    (repo / "check.sh").write_text("CARGO_TARGET_DIR=$HOME/.cache/pp-check cargo check\n")  # untracked script counts too
+    (clone(tmp_path, other) / "notes.md").write_text("see ~/.cache/pp-check-old\n")  # a longer name is another folder
+    for name in ("pp-check", "pp-check-old", "sccache"):
+        (home / ".cache" / name / "set1").mkdir(parents=True)
+    (home / ".cache" / "pp-check" / "set1" / "blob").write_bytes(os.urandom(5000))
+    monkeypatch.setattr(cleanup, "_sizes", {})
+    monkeypatch.setattr(cleanup, "_mentions", {})
+
+    folders = [CleanupFolder(path=str(dev)), CleanupFolder(path=str(other))]
+    found = {os.path.relpath(c.path, home): c for c in cleanup.candidates(CandidatesSpec(folders=folders)) if c.path.startswith(str(home))}
+    assert found[".cache/pp-check"].mentioned == [str(dev)] and found[".cache/pp-check-old"].mentioned == [str(other)]
+    assert found[".cache/pp-check"].entries == {"set1": 5000} and found[".cache/pp-check"].modified > 0
+    assert found[".cache/sccache"].tool == "sccache" and not found[".cache/sccache"].mentioned
+
+
+def test_big_shared_tool_caches_lose_their_oldest_files_down_to_half(ws, tmp_path):
+    from plainboard_protocol import TrimSpec
+
+    home = tmp_path / "home"
+    rust, web = agent(ws, "rust"), agent(ws, "web")
+    (clone(tmp_path, rust) / "Cargo.toml").write_text("[package]\n")
+    clone(tmp_path, web)
+    sccache, pip = home / ".cache" / "sccache", home / ".cache" / "pip"
+    for n in range(10):
+        (sccache / str(n)).mkdir(parents=True)
+        (sccache / str(n) / "obj").write_bytes(os.urandom(10_000))
+        at = time.time() - (10 - n) * DAY  # 0 is the oldest
+        os.utime(sccache / str(n) / "obj", (at, at))
+    pip.mkdir(parents=True)
+    (pip / "wheel").write_bytes(os.urandom(10_000))  # small: stays
+
+    folders = [CleanupFolder(path=str(rust)), CleanupFolder(path=str(web))]
+    result = cleanup.trim(TrimSpec(need=10**9, large=50_000, keep=20_000, folders=folders))
+    left = sorted(int(p.parent.name) for p in sccache.rglob("obj"))
+    assert left == [5, 6, 7, 8, 9] and not (sccache / "0").exists()  # the oldest half went, never more
+    assert (pip / "wheel").exists()
+    (item,) = result.items
+    assert item.path == str(sccache) and item.users == [str(rust)]
+
+    result = cleanup.trim(TrimSpec(need=15_000, large=10_000, keep=10_000, folders=folders))
+    assert sorted(int(p.parent.name) for p in sccache.rglob("obj")) == [7, 8, 9]  # only what is needed

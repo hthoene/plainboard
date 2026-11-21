@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket
 from fastapi.responses import StreamingResponse
-from plainboard_protocol import ACCOUNT_KEY_PATTERN, DEFAULT_ACCOUNT, BranchRef, CandidatesSpec, CheckResult, CleanupCandidate, CleanupResult, CleanupSpec, CommitRef, CompletionResult, CompletionSpec, Credentials, DeleteSpec, ErrorEvent, JobPort, JobSpec, JobState, LimitsEvent, MachineUsage, ProjectFiles, ProviderAccount, ProviderInfo, PullRequestCheck, PullRequestRef, PullRequestState, RepoSpec, RerunRef, RunSpec, TidyResult, TidySpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, UpstreamRef, UpstreamState
+from plainboard_protocol import ACCOUNT_KEY_PATTERN, DEFAULT_ACCOUNT, BranchRef, CandidatesSpec, CheckResult, CleanupCandidate, CleanupResult, CleanupSpec, CommitRef, CompletionResult, CompletionSpec, Credentials, DeleteSpec, ErrorEvent, JobPort, JobSpec, JobState, LimitsEvent, MachineUsage, ProjectFiles, ProviderAccount, ProviderInfo, PullRequestCheck, PullRequestRef, PullRequestState, RepoSpec, RerunRef, RunSpec, TidyResult, TidySpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, TrimSpec, UpstreamRef, UpstreamState
 from pydantic import BaseModel, Field
 
 from . import cleanup
@@ -91,6 +91,18 @@ async def clean_up(body: CleanupSpec) -> CleanupResult:
 async def cleanup_candidates(body: CandidatesSpec) -> list[CleanupCandidate]:
     """What the manager may delete, with sizes and how safe that is (see cleanup.py)."""
     return await asyncio.to_thread(cleanup.candidates, body)
+
+
+@app.post("/cleanup/trim", response_model=CleanupResult)
+async def cleanup_trim(body: TrimSpec) -> CleanupResult:
+    """Shrink the big shared tool caches, oldest files first (see cleanup.py)."""
+    if _cleaning.locked():
+        return CleanupResult(skipped=["a cleanup runs already"])
+    async with _cleaning:
+        result = await asyncio.to_thread(cleanup.trim, body)
+    if result.freed:
+        usage.measure_soon(force=True)
+    return result
 
 
 @app.post("/cleanup/delete", response_model=CleanupResult)

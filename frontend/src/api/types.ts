@@ -625,10 +625,10 @@ export interface UsageStorage {
   notices: StorageNotice[];
 }
 
-/** What a cleanup removed (by the manager, in an emergency by itself), or which servers it stopped (level "memory"). */
+/** What a cleanup removed (by the manager, in an emergency by itself, shared caches trimmed above the target), or which servers it stopped (level "memory"). */
 export interface UsageCleanup {
   at: string;
-  level: "manager" | "emergency" | "memory";
+  level: "manager" | "emergency" | "trim" | "memory";
   freed: number;
   free_before: number;
   total: number;

@@ -121,3 +121,12 @@ async def test_nothing_listening_is_told_as_such():
 def test_the_socket_address_follows_plainboards():
     assert connect.socket_url("https://board.example.com") == "wss://board.example.com/api/runners/connect"
     assert connect.socket_url("http://10.0.0.2:8080") == "ws://10.0.0.2:8080/api/runners/connect"
+
+
+def test_the_built_in_runner_connects_nowhere(monkeypatch):
+    """Without PLAINBOARD_URL and a token (the compose setup) the runner is called by the app, as always."""
+    monkeypatch.setattr(connect, "APP_URL", "")
+    monkeypatch.setattr(connect, "TOKEN", "")
+    assert connect.enabled() is False
+    monkeypatch.setattr(connect, "APP_URL", "https://board.example.com")
+    assert connect.enabled() is False  # a token is needed too

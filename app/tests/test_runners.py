@@ -355,3 +355,86 @@ def test_the_manager_hears_once_when_its_runner_stays_away(client, project, monk
         ws.send_text(json.dumps({"t": "hello", "version": "", "protocol": 1}))
         wait_for(lambda: len(client.portal.call(inbox)) == 2)
     assert "connected again" in client.portal.call(inbox)[1]
+
+
+@pytest.mark.skipif(bool(__import__("os").environ.get("PLAINBOARD_DATABASE")), reason="the path from 0056 exists on SQLite only: PostgreSQL starts at today's tables")
+def test_after_the_update_every_existing_project_stays_on_the_built_in_runner_as_it_was(tmp_path, monkeypatch):
+    """An installation of before (migration 0056) with a project, its manager and a running server
+    job: after the upgrade nothing has moved. No runner, the project on the built-in one, its turns and
+    jobs go there, in the same workspace; nothing connects anywhere."""
+    from datetime import datetime
+
+    from alembic import command
+    from fastapi.testclient import TestClient
+    from sqlalchemy import create_engine, text
+
+    from conftest import ADMIN_PASSWORD
+    from plainboard import config, main, migrate
+    from plainboard_protocol import JobState
+
+    for name, value in (("DATA_DIR", tmp_path / "data"), ("UPLOADS_DIR", tmp_path / "uploads"), ("STATIC_DIR", tmp_path / "static")):
+        monkeypatch.setenv(f"PLAINBOARD_{name}", str(value))
+    for name in ("SCHEDULER", "JOB_WATCH", "LANDING"):
+        monkeypatch.setenv(f"PLAINBOARD_{name}_INTERVAL_SECONDS", "3600")
+    config.get_config.cache_clear()
+    (tmp_path / "data").mkdir()
+    command.upgrade(migrate.alembic_config(), "0056")
+    engine = create_engine(config.get_config().sync_database_url)
+    now = datetime(2026, 11, 1)
+    with engine.begin() as conn:
+        conn.execute(
+            text("INSERT INTO projects (id, name, slug, description, auto_wake_manager, task_counter, created_at, updated_at) VALUES (1, 'Shop', 'shop', '', true, 0, :now, :now)"),
+            {"now": now},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO agents (id, project_id, name, slug, role, is_manager, description, instructions, provider, model, toolset, context_limit_tokens, "
+                "keep_recent_messages, summary_model, enabled, color, created_at, updated_at) VALUES (1, 1, 'Manager', 'manager', 'Manager', true, '', '', "
+                "'claude_code', 'claude-sonnet-4-5', 'board', 150000, 10, 'claude-haiku-4-5', true, 'indigo', :now, :now)"
+            ),
+            {"now": now},
+        )
+        conn.execute(
+            text("INSERT INTO jobs (id, project_id, agent_id, runner_id, command, status, log_path, created_at) VALUES (1, 1, 1, 'job0', 'npm run dev', 'running', '/jobs/job0.log', :now)"),
+            {"now": now},
+        )
+    migrate.upgrade()  # what the app does at its start
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT runner_id, workspace_path, slug FROM projects")).all() == [(None, None, "shop")]
+        assert conn.execute(text("SELECT count(*) FROM runners")).scalar() == 0
+        assert conn.execute(text("SELECT status, runner_id FROM jobs")).all() == [("running", "job0")]
+    engine.dispose()
+
+    monkeypatch.setattr(main, "upgrade", lambda: None)
+    class StillRunning(FakeRunner):
+        """The built-in runner, which kept running through the app's update: it still has the server job."""
+
+        def __init__(self, base_url: str):
+            super().__init__(base_url)
+            self.jobs["job0"] = JobState(running=True)
+
+    monkeypatch.setattr(main, "RunnerClient", StillRunning)
+    app = main.create_app()
+    FakeRunner.app, FakeRunner.held = app, []
+    with TestClient(app) as client:
+        assert client.post("/api/auth/setup", json={"username": "admin", "name": "Admin", "password": ADMIN_PASSWORD}).status_code == 201
+        runs, builtin = app.state.runs, app.state.runner
+        assert runs.runners.in_use() == [None] and runs.runners.runner_id(1) is None and runs.runners.ready(1)
+        assert client.get("/api/projects/1").json()["runner_id"] is None
+        assert client.get("/api/projects/1/runner").json()["runner_id"] is None
+        assert client.get("/api/runners").json() == []
+
+        client.portal.call(app.state.job_watcher.tick)  # the server job is asked of the built-in runner, and runs on
+
+        async def job_status() -> str:
+            from plainboard.db import sessionmaker
+            from plainboard.models import Job
+
+            async with sessionmaker()() as session:
+                return (await session.get(Job, 1)).status
+
+        assert client.portal.call(job_status) == "running"
+        assert client.post("/api/agents/1/messages", json={"text": "SAY still here"}).status_code == 202
+        wait_for(lambda: idle(client, 1))
+        assert builtin.specs and builtin.specs[-1].workspace.path == f"{config.get_config().workspaces_root}/shop/manager"
+    config.get_config.cache_clear()

@@ -41,6 +41,7 @@ _background: set[asyncio.Task[None]] = set()
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     _background.add(asyncio.create_task(usage.keep_measured()))
+    _background.add(asyncio.create_task(usage.keep_sampling()))
     # An external runner connects out to PlainBoard (connect.py); the built-in one is called by the app.
     task = asyncio.create_task(connect.serve(), name="connect") if connect.enabled() else None
     try:

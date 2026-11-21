@@ -1,6 +1,6 @@
 """Disk and memory, per volume, project and agent (services/usage.py)."""
 
-from plainboard_protocol import FolderUsage, MachineUsage, ProcessMemory, VolumeUsage
+from plainboard_protocol import CpuBucket, FolderUsage, MachineUsage, ProcessMemory, VolumeUsage
 
 from plainboard.models import Agent, Project
 from plainboard.services import usage
@@ -82,3 +82,26 @@ def test_the_overview_through_the_api(client, project):
     assert client.post("/api/usage/measure").status_code == 200 and runner.usage_measured == 1
     runner.reachable = False
     assert client.get("/api/usage").json()["runner_ok"] is False
+
+
+def test_cpu_per_agent_project_and_the_rest_with_history_and_windows():
+    own = Project(id=1, name="Own", slug="own", workspace_path=None)
+    agents = [Agent(id=11, project_id=1, name="Dev", slug="dev")]
+    start = 1_800_000_000 // 300 * 300
+    buckets = [
+        CpuBucket(start=start - 2 * 3600, span=300, seconds={"/workspaces/own/dev": 150.0}, load=1.0),
+        CpuBucket(start=start - 300, span=300, seconds={"/workspaces/own/dev": 30.0, "/home/agent/.plainboard/trains/p1-r3": 60.0, "": 15.0, "/workspaces/stray/x": 15.0}, load=2.0),
+        CpuBucket(start=start, span=150, seconds={"/workspaces/own/dev": 75.0}, load=3.0),
+    ]
+    machine = MachineUsage(cpu_cores=8, load_average=[1.5, 1.0, 0.5], cpu_now={"/workspaces/own/dev": 0.5, "/home/agent/.plainboard/trains/p1-r3": 1.0, "": 0.25}, cpu_history=buckets)
+    out = usage.summarize([own], agents, {}, machine, usage.Machine())
+    (project,) = out.projects
+    (dev,) = project.agents
+    assert out.cpu_cores == 8 and out.cpu_load == [1.5, 1.0, 0.5] and len(dev.cpu_history) == 288
+    assert dev.cpu == 0.5 and project.other_cpu == 1.0 and out.cpu_other == 0.25  # the landing check counts for its project
+    assert dev.cpu_history[-1] == 0.5 and dev.cpu_history[-2] == 0.1 and dev.cpu_history[-3] == 0
+    assert project.other_cpu_history[-2] == 0.2 and out.cpu_other_history[-2] == 0.1
+    assert out.cpu_load_history[-1] == 3.0
+    # 1 h: (30 + 75) s over 450 s sampled; 6 h adds the slot two hours back
+    assert dev.cpu_avg == [round(105 / 450, 3), round(255 / 750, 3), round(255 / 750, 3)]
+    assert out.cpu_start is not None

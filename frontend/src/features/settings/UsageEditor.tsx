@@ -7,6 +7,7 @@ import { qk, useUsage } from "../../api/queries";
 import type { Usage, UsageCleanup, UsageStorage } from "../../api/types";
 import { Button, ErrorText, Spinner } from "../../components/ui";
 import { formatBytes, timeAgo } from "../../lib/format";
+import { CpuUsage } from "./CpuUsage";
 
 const SHARED_SHOWN = 8;
 
@@ -139,6 +140,8 @@ export function UsageEditor() {
         )}
         {data.data != null && <Row name={t("usage.data")} disk={formatBytes(data.data)} muted />}
       </section>
+
+      <CpuUsage data={data} />
 
       <section>
         <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-x-3 rule-b pb-1.5">

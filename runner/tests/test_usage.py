@@ -108,3 +108,70 @@ def test_volumes_group_paths_on_one_file_system(machine):
     vols = usage.volumes()
     assert [str(ws), str(home)] == vols[0].paths[:2]  # both in tmp_path; the uploads folder does not exist
     assert vols[0].total >= vols[0].used > 0 and vols[0].free > 0
+
+
+def _fake_proc(root, ws, rows):
+    """rows: pid -> (parent, cwd, own ticks, children ticks, start time)"""
+    import shutil
+
+    shutil.rmtree(root, ignore_errors=True)
+    for pid, (ppid, cwd, own, kids, start) in rows.items():
+        d = root / str(pid)
+        d.mkdir(parents=True)
+        fields = ["S", str(ppid)] + ["0"] * 9 + [str(own), "0", str(kids), "0", "0", "0", "0", "0", str(start)]
+        (d / "stat").write_text(f"{pid} (my proc) " + " ".join(fields))
+        if cwd:
+            os.symlink(cwd, d / "cwd")
+    (root / "loadavg").write_text("1.50 1.00 0.50 1/100 123\n")
+
+
+def test_cpu_sampler_counts_deltas_per_folder_and_ended_processes(machine, tmp_path):
+    ws, _ = machine
+    a, b = str(ws / "p" / "a"), str(ws / "p" / "b")
+    proc = tmp_path / "proc"
+    sampler = usage.CpuSampler()
+    tick = sampler.tick
+    _fake_proc(proc, ws, {10: (1, a, 100, 0, 1), 11: (10, "/", 50, 0, 2), 12: (10, "/", 40, 0, 3), 20: (1, b, 10, 0, 4)})
+    assert sampler.sample(proc) == {}  # the first sample only reads
+    # 10 used 30 ticks; its child 11 (works in /, counts for a) 20; 12 ended after 15 more ticks, wait()ed by 10 (its 40 + 15 = 55 land in cutime);
+    # a child 13 that lived only between the samples used 25 (also in 10's cutime); 20 in b used 100
+    _fake_proc(proc, ws, {10: (1, a, 130, 80, 1), 11: (10, "/", 70, 0, 2), 20: (1, b, 110, 0, 4)})
+    got = sampler.sample(proc)
+    assert got[a] == pytest.approx((30 + 20 + 15 + 25) / tick)  # 12's 40 ticks are not counted twice
+    assert got[b] == pytest.approx(100 / tick)
+    # a process that is new since the last sample counts for what it has used so far
+    _fake_proc(proc, ws, {10: (1, a, 130, 80, 1), 11: (10, "/", 70, 0, 2), 20: (1, b, 110, 0, 4), 30: (1, "/", 5, 0, 9)})
+    assert sampler.sample(proc) == {None: pytest.approx(5 / tick)}
+
+
+def test_cpu_history_slots_hold_seconds_load_and_span(machine, monkeypatch):
+    monkeypatch.setattr(usage, "_buckets", {})
+    usage.record({"/w/p/a": 3.0, None: 1.0}, 30, 2.0, 1_000_000.0)
+    usage.record({"/w/p/a": 3.0}, 30, 4.0, 1_000_030.0)
+    (slot,) = usage._buckets.values()
+    assert slot.seconds == {"/w/p/a": 6.0, "": 1.0} and slot.span == 60 and slot.load == pytest.approx(3.0)
+    usage.record({}, 30, 1.0, 1_000_000.0 + 25 * 3600)  # the first slot is older than 24 hours now
+    assert len(usage._buckets) == 1
+
+
+def test_cpu_history_is_kept_in_the_home(machine, monkeypatch):
+    monkeypatch.setattr(usage, "_buckets", {})
+    usage.record({"/w/p/a": 3.0}, 30, 1.0, time.time())
+    usage._save_cpu(force=True)
+    usage._buckets.clear()
+    usage._load_cpu()
+    assert list(usage._buckets.values())[0].seconds == {"/w/p/a": 3.0}
+
+
+def test_cpu_sampler_sees_a_real_busy_process_in_its_folder(machine):
+    ws, _ = machine
+    sampler = usage.CpuSampler()
+    proc = subprocess.Popen(["bash", "-c", "while :; do :; done"], cwd=ws / "p" / "a")
+    try:
+        sampler.sample()
+        time.sleep(1)
+        got = sampler.sample()
+    finally:
+        proc.kill()
+        proc.wait()
+    assert got[str(ws / "p" / "a")] > 0.3

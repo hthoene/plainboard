@@ -44,6 +44,8 @@ class Tunnel:
         self._ids = itertools.count(1)
         self.closed = False
         self.heard = time.monotonic()
+        self.ended = asyncio.Event()  # set by close(): the socket's loop ends it with ``close_code``
+        self.close_code = 1000
 
     async def _send(self, frame: str | bytes) -> None:
         if self.closed:
@@ -71,9 +73,13 @@ class Tunnel:
         if (queue := self._streams.get(message.get("id"))) is not None:  # type: ignore[arg-type]
             queue.put_nowait(("msg", message))
 
-    def close(self) -> None:
-        """The socket ended: everything still waiting for the runner hears it."""
+    def close(self, code: int = 1000) -> None:
+        """The socket ended, or is to end (``code``, see plainboard_protocol.tunnel): everything still
+        waiting for the runner hears it."""
+        if not self.closed:
+            self.close_code = code
         self.closed = True
+        self.ended.set()
         for queue in self._streams.values():
             queue.put_nowait(LOST)
         self._streams.clear()

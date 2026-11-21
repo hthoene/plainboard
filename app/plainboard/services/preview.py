@@ -200,7 +200,8 @@ def port_of_cookie(value: str | None) -> int | None:
 def unreachable(port: int) -> str:
     return (
         f"Nothing answers on port {port} in the agents' environment.\n\n"
-        "The server may not be running (anymore), or it only listens on 127.0.0.1: it has to listen on 0.0.0.0."
+        "The server may not be running (anymore), or it only listens on 127.0.0.1: it has to listen on 0.0.0.0. "
+        "On a project with a runner of its own, that runner may not be connected right now."
     )
 
 

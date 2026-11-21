@@ -31,6 +31,7 @@ router = APIRouter(include_in_schema=False)
 METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 
 
+NOT_CONNECTED = "The runner this project runs on is not connected right now. The preview is back when it is."
 UNLOCK_PREFIX = "/api/public/preview/"  # under the public API: its visitors are not signed in
 
 
@@ -175,6 +176,8 @@ async def _proxy(request: Request, port: int, path: str, base: bool) -> Response
         return PlainTextResponse("This preview is private. Open it from PlainBoard, signed in with a role in its project.", status_code=401)
     preview.note_opened(port)
     runners = request.app.state.runs.runners
+    if not runners.connected(runners.runner_id(project_id)):
+        return PlainTextResponse(NOT_CONNECTED, status_code=503)
     client: httpx.AsyncClient = runners.preview_client(runners.runner_id(project_id), request.app.state.preview_client)
     body = await request.body()
     upstream = client.build_request(

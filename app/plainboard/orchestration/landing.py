@@ -175,8 +175,8 @@ class LandingWatcher:
     async def _repo(self, s: AsyncSession, repository_id: int) -> Repo | None:
         repo = await s.get(Repository, repository_id)
         project = await s.get(Project, repo.project_id) if repo else None
-        if repo is None or project is None:
-            return None
+        if repo is None or project is None or not self._runs.runners.ready(project.id):
+            return None  # an external runner that is away: its trains wait for it, nothing fails
         env = secret_service.env(await secret_service.effective(s, project.id))
         return Repo(
             repo=repo,

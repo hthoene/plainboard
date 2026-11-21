@@ -163,7 +163,7 @@ def test_a_runner_connects_with_its_token_only_and_answers_through_the_socket(cl
     assert not hub.connected(rid)
 
     with _connect(client, token) as ws:
-        ws.send_text(json.dumps({"t": "hello", "version": "abc1234567890", "protocol": 1}))
+        _hello(ws, version="abc1234567890")
         wait_for(lambda: hub.connected(rid))
         # A request of the app, answered by "the runner" at the other end of the real socket.
         pending = client.portal.start_task_soon(hub.client(rid).job_status, ["j1"])
@@ -438,3 +438,249 @@ def test_after_the_update_every_existing_project_stays_on_the_built_in_runner_as
         wait_for(lambda: idle(client, 1))
         assert builtin.specs and builtin.specs[-1].workspace.path == f"{config.get_config().workspaces_root}/shop/manager"
     config.get_config.cache_clear()
+
+
+# --- robust against breaks ------------------------------------------------------------------------
+
+
+class TurnRunner(Remote):
+    """A runner that has a turn going: the start sends two lines; a resume sends what is held after the
+    lines the app has, or 404 when it does not know the turn (started anew)."""
+
+    LINES = [
+        '{"type": "session", "session_id": "s"}',
+        '{"type": "assistant_text", "text": "one"}',
+        '{"type": "assistant_text", "text": "two"}',
+        '{"type": "result", "session_id": "s", "text": "two"}',
+    ]
+
+    def __init__(self, knows: bool = True) -> None:
+        super().__init__()
+        self.knows = knows
+        self.asked: list[str] = []
+
+    async def _answer(self, stream_id: int) -> None:
+        path = self.requests[stream_id]["path"]
+        self.asked.append(path)
+        if path == "/runs":
+            self.feed({"t": "res", "id": stream_id, "status": 200, "headers": []})
+            for line in self.LINES[:2]:
+                self.feed(pack(stream_id, DATA, (line + "\n").encode()))
+            self.feed(pack(stream_id, DATA, b'{"type": "assistant_te'))  # a line cut off by the break
+            await self.release.wait()  # the line breaks while this waits
+            return
+        if not self.knows:
+            self.feed({"t": "res", "id": stream_id, "status": 404, "headers": []})
+            self.feed({"t": "end", "id": stream_id})
+            return
+        after = int(path.rsplit("after=", 1)[1])
+        self.feed({"t": "res", "id": stream_id, "status": 200, "headers": []})
+        self.feed(pack(stream_id, DATA, "".join(line + "\n" for line in self.LINES[after:]).encode()))
+        self.feed({"t": "end", "id": stream_id})
+
+
+async def _break_mid_turn(monkeypatch, then: TurnRunner | None):
+    from plainboard.orchestration import runner_client
+
+    monkeypatch.setattr(runner_client, "RESUME_RETRY_SECONDS", 0.01)
+    first = TurnRunner()
+    first.tunnel = Tunnel(first)
+    current = {"tunnel": first.tunnel}
+    client = RunnerClient("http://runner", transport=TunnelTransport(lambda: current["tunnel"]))
+    events = []
+
+    async def follow():
+        async for event in client.stream_run(_spec()):
+            events.append(event)
+
+    following = asyncio.create_task(follow())
+    while len(events) < 2:
+        await asyncio.sleep(0.01)
+    first.tunnel.close()  # the socket drops mid-turn
+    current["tunnel"] = None  # away for a moment
+    await asyncio.sleep(0.05)
+    if then is not None:
+        then.tunnel = Tunnel(then)
+        current["tunnel"] = then.tunnel  # connected again
+    return following, events
+
+
+async def test_a_turn_stream_that_breaks_is_resumed_without_losing_or_repeating_events(monkeypatch):
+    again = TurnRunner()
+    following, events = await _break_mid_turn(monkeypatch, again)
+    await asyncio.wait_for(following, 5)
+    assert [getattr(e, "text", e.type) for e in events] == ["session", "one", "two", "two"]
+    assert again.asked == ["/runs/1/events?after=2"]  # the two lines read are the acknowledgement
+
+
+async def test_a_turn_the_runner_no_longer_has_ends_like_one_a_restart_cut_off(monkeypatch):
+    from plainboard.orchestration.runner_client import RunnerStreamBroken
+
+    following, events = await _break_mid_turn(monkeypatch, TurnRunner(knows=False))  # a new instance: started anew
+    with pytest.raises(RunnerStreamBroken) as broken:
+        await asyncio.wait_for(following, 5)
+    assert broken.value.events == 2 and len(events) == 2
+
+
+async def test_a_turn_waits_for_its_runner_only_so_long(monkeypatch):
+    from plainboard.orchestration import runner_client
+    from plainboard.orchestration.runner_client import RunnerStreamBroken
+
+    monkeypatch.setattr(runner_client, "RESUME_SECONDS", 0.2)
+    following, _ = await _break_mid_turn(monkeypatch, None)  # it does not come back
+    with pytest.raises(RunnerStreamBroken):
+        await asyncio.wait_for(following, 5)
+
+
+def _hello(ws, instance: str = "i1", protocol: int = 1, version: str = "", answer: bool = True) -> None:
+    """Say hello as a runner, and answer the app's first question: which turns run here (none)."""
+    ws.send_text(json.dumps({"t": "hello", "version": version, "protocol": protocol, "instance": instance}))
+    if answer:
+        request = json.loads(ws.receive_text())
+        assert (request["method"], request["path"]) == ("GET", "/runs")
+        assert json.loads(ws.receive_text())["t"] == "end"
+        ws.send_text(json.dumps({"t": "res", "id": request["id"], "status": 200, "headers": [["content-type", "application/json"]]}))
+        ws.send_bytes(pack(request["id"], DATA, b"[]"))
+        ws.send_text(json.dumps({"t": "end", "id": request["id"]}))
+
+
+def _closed(ws) -> dict:
+    """The close the app sent, past what it asked before."""
+    while (message := ws.receive())["type"] != "websocket.close":
+        pass
+    return message
+
+
+def test_a_second_connection_with_the_same_token_takes_over_and_the_first_is_closed(client):
+    created = _add_runner(client)
+    rid, token = created["runner"]["id"], created["token"]
+    hub = _hub(client)
+    with _connect(client, token) as first:
+        _hello(first)
+        wait_for(lambda: hub.connected(rid))
+        older = hub.tunnels[rid]
+        with _connect(client, token) as second:
+            _hello(second)
+            wait_for(lambda: hub.tunnels.get(rid) is not older and hub.connected(rid))
+            assert _closed(first)["code"] == 4409
+            assert hub.connected(rid)  # the newer one stays
+        wait_for(lambda: not hub.connected(rid))
+
+
+def test_a_revoked_token_closes_the_line_with_a_refusal_and_an_old_protocol_is_turned_away(client):
+    created = _add_runner(client)
+    rid, token = created["runner"]["id"], created["token"]
+    hub = _hub(client)
+    with _connect(client, token) as ws:
+        _hello(ws)
+        wait_for(lambda: hub.connected(rid))
+        client.post(f"/api/runners/{rid}/token")
+        assert _closed(ws)["code"] == 4401
+    new = client.post(f"/api/runners/{rid}/token").json()["token"]
+    with _connect(client, new) as ws:
+        _hello(ws, protocol=99, answer=False)
+        assert _closed(ws)["code"] == 4426
+    assert not hub.connected(rid)
+
+
+def test_a_line_from_which_nothing_comes_is_taken_as_gone(client, monkeypatch):
+    from plainboard.api import runners as runners_api
+
+    monkeypatch.setattr(runners_api, "DEAD_SECONDS", 0.3)
+    created = _add_runner(client)
+    rid = created["runner"]["id"]
+    hub = _hub(client)
+    with _connect(client, created["token"]) as ws:
+        _hello(ws, answer=False)  # then nothing: no ping, no answer (half-open)
+        wait_for(lambda: hub.tunnels.get(rid) is None)
+        assert _closed(ws)["type"] == "websocket.close"
+
+
+def test_a_new_instance_is_a_restart_its_jobs_are_reported_lost_and_turns_nobody_follows_are_cancelled(client, project):
+    pid = project["id"]
+    external = FakeRunner("tunnel")
+    cancelled: list[int] = []
+
+    async def cancel(run_id: int) -> None:
+        cancelled.append(run_id)
+
+    external.cancel = cancel
+    hub = _hub(client)
+    hub.make_client = lambda _rid: external
+    created = _add_runner(client)
+    rid = created["runner"]["id"]
+    assert client.put(f"/api/projects/{pid}/runner", json={"runner_id": rid}).status_code == 200
+    watcher = client.app_ref.state.job_watcher
+
+    async def job_status() -> str:
+        from plainboard.db import sessionmaker
+        from plainboard.models import Job
+
+        async with sessionmaker()() as session:
+            return (await session.get(Job, job_id)).status
+
+    with _connect(client, created["token"]) as ws:
+        _hello(ws, "first", answer=False)
+        wait_for(lambda: hub.connected(rid))
+
+        async def start() -> int:
+            from plainboard.db import sessionmaker
+            from plainboard.models import Agent, Project
+            from sqlalchemy import select
+
+            async with sessionmaker()() as session:
+                agent = await session.scalar(select(Agent).where(Agent.project_id == pid, Agent.is_manager))
+                return (await client.app_ref.state.runs.start_job(session, await session.get(Project, pid), agent, "sleep 600")).id
+
+        job_id = client.portal.call(start)
+    wait_for(lambda: not hub.connected(rid))
+    # Away: the job is not asked for, and not given up.
+    external.reachable = False
+    client.portal.call(watcher.tick)
+    assert client.portal.call(job_status) == "running"
+    # Back as the same instance: the job is still there and goes on.
+    external.reachable = True
+    with _connect(client, created["token"]) as ws:
+        _hello(ws, "first", answer=False)
+        wait_for(lambda: hub.connected(rid))
+        client.portal.call(watcher.tick)
+        assert client.portal.call(job_status) == "running"
+    # Started anew: what ran there is gone. Its jobs are reported lost, a turn nobody here follows is cancelled.
+    external.jobs.clear()
+    external.active = {4242}
+    with _connect(client, created["token"]) as ws:
+        _hello(ws, "second", answer=False)
+        wait_for(lambda: hub.connected(rid) and cancelled == [4242])
+        assert hub.instances[rid] == "second"
+        client.portal.call(watcher.tick)
+        assert client.portal.call(job_status) == "lost"
+
+
+def test_while_its_runner_is_away_a_project_gets_a_clear_answer_at_once(client, project):
+    pid = project["id"]
+    rid = _add_runner(client)["runner"]["id"]
+    assert client.put(f"/api/projects/{pid}/runner", json={"runner_id": rid}).status_code == 200
+
+    async def start() -> str:
+        from plainboard.db import sessionmaker
+        from plainboard.models import Agent, Project
+        from plainboard.services.errors import ServiceError
+        from sqlalchemy import select
+
+        async with sessionmaker()() as session:
+            agent = await session.scalar(select(Agent).where(Agent.project_id == pid, Agent.is_manager))
+            try:
+                await client.app_ref.state.runs.start_job(session, await session.get(Project, pid), agent, "npm test")
+            except ServiceError as exc:
+                return str(exc)
+        return ""
+
+    began = time.monotonic()
+    assert "not connected" in client.portal.call(start)
+    with client.websocket_connect(f"/api/projects/{pid}/browser") as ws:
+        assert "not connected" in ws.receive_json()["message"]
+    # A preview of its server: the server is not known while its runner is away.
+    _job(client, pid, 5173, FakeRunner("x"))
+    resp = client.get("/preview/5173/")
+    assert resp.status_code == 404 and "runner" in resp.text
+    assert time.monotonic() - began < 5  # no waiting for a connect timeout

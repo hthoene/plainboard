@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -29,6 +30,7 @@ from . import trains
 from . import translate
 from . import usage
 from .providers import get_provider, list_providers
+from .runlog import Gone, RunLog
 from .tool_bridge import ToolBridge
 from .workspace import WorkspaceError, config_args, git_env, prepare_workspace, project_folder, remove_folder, run_cmd
 
@@ -43,11 +45,11 @@ async def lifespan(_app: FastAPI):
     _background.add(asyncio.create_task(usage.keep_measured()))
     _background.add(asyncio.create_task(usage.keep_sampling()))
     # An external runner connects out to PlainBoard (connect.py); the built-in one is called by the app.
-    task = asyncio.create_task(connect.serve(), name="connect") if connect.enabled() else None
+    tasks = [asyncio.create_task(connect.serve(), name="connect"), asyncio.create_task(_tend_logs(), name="run-logs")] if connect.enabled() else []
     try:
         yield
     finally:
-        if task:
+        for task in tasks:
             task.cancel()
         await browsers.close_all()
 
@@ -201,6 +203,8 @@ async def start_run(spec: RunSpec) -> StreamingResponse:
         raise HTTPException(409, "Run already active")
     if connect.enabled():  # an external runner: tool calls go straight to PlainBoard's address
         spec.bridge.base_url = connect.APP_URL
+    if connect.enabled():
+        return _start_kept(spec)
     queue: asyncio.Queue[str | None] = asyncio.Queue()
     task = asyncio.create_task(_execute(spec, queue))
     _active[spec.run_id] = task
@@ -219,6 +223,57 @@ async def start_run(spec: RunSpec) -> StreamingResponse:
                 task.cancel()
 
     return StreamingResponse(stream(), media_type="application/x-ndjson")
+
+
+_logs: dict[str, RunLog] = {}  # an external runner's turns, kept through a broken line (runlog.py)
+
+
+def _start_kept(spec: RunSpec) -> StreamingResponse:
+    """An external runner: the turn does not end with its stream, which the app resumes after a broken line."""
+    kept = _logs[spec.run_id] = RunLog()
+    task = asyncio.create_task(_execute(spec, kept))  # type: ignore[arg-type]  # RunLog has the queue's put
+    _active[spec.run_id] = task
+
+    def ended(_task: asyncio.Task) -> None:
+        if _active.get(spec.run_id) is task:
+            del _active[spec.run_id]
+        notices.drain(spec.run_id)
+
+    task.add_done_callback(ended)
+    return StreamingResponse(_lines(kept, 0), media_type="application/x-ndjson")
+
+
+async def _lines(kept: RunLog, after: int) -> AsyncIterator[str]:
+    try:
+        async for line in kept.follow(after):
+            yield line + "\n"
+    except Gone:
+        return  # the app reads too slowly for the buffer: its next resume is told 410
+
+
+@app.get("/runs/{run_id}/events")
+async def run_events(run_id: str, after: int = 0) -> StreamingResponse:
+    """The rest of a turn's stream, from line ``after`` on (the lines the app has read): 404 if this
+    runner does not know the turn (it was started anew), 410 if what was missed is no longer held."""
+    kept = _logs.get(run_id)
+    if kept is None:
+        raise HTTPException(404, "No such turn here")
+    if not kept.holds(after):
+        raise HTTPException(410, "The missed part of the stream is no longer held")
+    return StreamingResponse(_lines(kept, after), media_type="application/x-ndjson")
+
+
+async def _tend_logs() -> None:
+    """Cancel turns nobody followed for long (the app is not coming back for them), drop finished ones."""
+    while True:
+        await asyncio.sleep(30)
+        now = time.monotonic()
+        for run_id, kept in list(_logs.items()):
+            if kept.orphaned(now) and (task := _active.get(run_id)) is not None:
+                log.warning("Run %s: nobody followed it for %.0f s, it is cancelled", run_id, now - kept.since)
+                task.cancel()
+            elif kept.expired(now):
+                del _logs[run_id]
 
 
 _UPLOAD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")

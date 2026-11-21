@@ -34,8 +34,12 @@ async def project_browser(websocket: WebSocket, project_id: int) -> None:
             await websocket.close(code=4404)
             return
     await websocket.accept()
+    runners = websocket.app.state.runs.runners
+    if not runners.ready(project_id):
+        await websocket.send_json({"t": "error", "message": "The runner this project runs on is not connected right now."})
+        await websocket.close()
+        return
     try:
-        runners = websocket.app.state.runs.runners
         key = f"project-{project_id}"
         upstream = await runners.socket(
             runners.runner_id(project_id), None, f"/browser/{key}", url=runners.builtin.browser_url(key), max_size=None, open_timeout=30, ping_interval=None, compression=None

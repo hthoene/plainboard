@@ -45,7 +45,7 @@ from plainboard_protocol import (
     UsageEvent,
 )
 
-from plainboard.orchestration.runner_client import RunnerError, RunnerUnavailable
+from plainboard.orchestration.runner_client import RunnerError, RunnerStreamBroken, RunnerUnavailable
 
 
 # Transactions with a write that is not committed yet, and the task that wrote. Looked at when the
@@ -124,6 +124,7 @@ class FakeRunner:
         self.reruns: list[list[int]] = []  # workflow runs whose failed jobs were run once more
         self.on_base: set[str] = set()  # branches the base branch already contains
         self.train_specs: list = []
+        self.breaks = 0  # how many streams broke (BREAK, BREAK_ONCE)
         self.emptied: set[str] = set()  # runs whose turn ended without a step once
         self.train_results: list[TrainResult] = []
         self.check_specs: list = []
@@ -189,6 +190,11 @@ class FakeRunner:
                     return
             elif line.startswith("COMPACT "):
                 yield CompactionEvent(tokens_before=int(line.split()[1]))
+            elif line == "BREAK" or (line == "BREAK_ONCE" and spec.run_id not in self.emptied):
+                # The connection broke before the first step, without a word from the runner
+                self.emptied.add(spec.run_id)
+                self.breaks += 1
+                raise RunnerStreamBroken("Runner unreachable: ReadError", 1)
             elif line == "EMPTY" or (line == "EMPTY_ONCE" and spec.run_id not in self.emptied):
                 # Claude Code ended the turn at once: no step, no text
                 self.emptied.add(spec.run_id)

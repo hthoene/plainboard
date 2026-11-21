@@ -68,4 +68,4 @@ EXPOSE 8090
 HEALTHCHECK --interval=15s --timeout=5s --retries=5 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8090/health')"
 # No WebSocket compression: its only socket carries pictures of the browser window, compressed already.
-CMD ["uvicorn", "plainboard_runner.main:app", "--host", "0.0.0.0", "--port", "8090", "--ws-per-message-deflate", "false"]
+CMD ["uvicorn", "plainboard_runner.main:app", "--host", "0.0.0.0", "--port", "8090", "--ws-per-message-deflate", "false", "--timeout-keep-alive", "75"]

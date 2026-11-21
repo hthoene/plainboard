@@ -21,13 +21,31 @@ class RunnerUnavailable(RunnerError):
     is up a moment before the runner is.)"""
 
 
+class RunnerStreamBroken(RunnerError):
+    """The connection of a turn's stream broke without the runner saying why. ``events``: how many it
+    had sent until then."""
+
+    def __init__(self, message: str, events: int):
+        super().__init__(message)
+        self.events = events
+
+
+def unreachable(exc: BaseException) -> str:
+    """``Runner unreachable: ExceptionType: text``; some httpx errors (a reset connection) have no text at all."""
+    text = str(exc).strip()
+    return f"Runner unreachable: {type(exc).__name__}: {text}" if text else f"Runner unreachable: {type(exc).__name__}"
+
+
 class RunnerClient:
     def __init__(self, base_url: str):
-        self._client = httpx.AsyncClient(base_url=base_url, timeout=httpx.Timeout(60, connect=10))
+        # No connection is kept for the next request: uvicorn closes an idle one after a few seconds, and a
+        # request that reuses it just then (likely on a loaded host) is reset with no message.
+        self._client = httpx.AsyncClient(base_url=base_url, timeout=httpx.Timeout(60, connect=10), limits=httpx.Limits(max_keepalive_connections=0))
         self._providers: tuple[float, list[ProviderInfo]] | None = None
 
     async def stream_run(self, spec: RunSpec) -> AsyncIterator[RunEvent]:
         timeout = httpx.Timeout(None, connect=10)  # agent turns can take a long time
+        events = 0
         try:
             async with self._client.stream("POST", "/runs", json=spec.model_dump(mode="json"), timeout=timeout) as resp:
                 if resp.status_code >= 400:
@@ -35,11 +53,13 @@ class RunnerClient:
                     raise RunnerError(f"Runner rejected run ({resp.status_code}): {body[:500]}")
                 async for line in resp.aiter_lines():
                     if line.strip():
+                        events += 1
                         yield parse_event(line)
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            raise RunnerUnavailable(f"Runner unreachable: {exc}") from exc
+            raise RunnerUnavailable(unreachable(exc)) from exc
         except httpx.HTTPError as exc:
-            raise RunnerError(f"Runner unreachable: {exc}") from exc
+            log.warning("The stream of run %s broke after %s events: %r", spec.run_id, events, exc)
+            raise RunnerStreamBroken(unreachable(exc), events) from exc
 
     async def cancel(self, run_id: int) -> None:
         try:
@@ -54,13 +74,13 @@ class RunnerClient:
             resp.raise_for_status()
             return {int(run_id) for run_id in resp.json()}
         except (httpx.HTTPError, ValueError) as exc:
-            raise RunnerError(f"Runner unreachable: {exc}") from exc
+            raise RunnerError(unreachable(exc)) from exc
 
     async def _post_job(self, path: str, body: object) -> httpx.Response:
         try:
             resp = await self._client.post(path, json=body)
         except httpx.HTTPError as exc:
-            raise RunnerError(f"Runner unreachable: {exc}") from exc
+            raise RunnerError(unreachable(exc)) from exc
         if resp.status_code >= 400:
             raise RunnerError(resp.text[:500])
         return resp
@@ -104,7 +124,7 @@ class RunnerClient:
         try:
             resp = await self._client.post("/complete", json=spec.model_dump(mode="json"), timeout=600)
         except httpx.HTTPError as exc:
-            raise RunnerError(f"Runner unreachable: {exc}") from exc
+            raise RunnerError(unreachable(exc)) from exc
         if resp.status_code >= 400 and spec.effort:
             # Not every model takes every effort, and a summary must not fail over it: once more without.
             log.warning("Completion with effort %s failed on %s, trying without: %s", spec.effort, spec.model, resp.text[:300])
@@ -120,7 +140,7 @@ class RunnerClient:
             resp = await self._client.get("/providers", timeout=10)
             resp.raise_for_status()
         except httpx.HTTPError as exc:
-            raise RunnerError(f"Runner unreachable: {exc}") from exc
+            raise RunnerError(unreachable(exc)) from exc
         providers = [ProviderInfo.model_validate(p) for p in resp.json()]
         self._providers = (time.monotonic(), providers)
         return providers
@@ -133,7 +153,7 @@ class RunnerClient:
             else:
                 resp = await self._client.get(f"/providers/{provider}/account", params={"key": key}, timeout=60)
         except httpx.HTTPError as exc:
-            raise RunnerError(f"Runner unreachable: {exc}") from exc
+            raise RunnerError(unreachable(exc)) from exc
         if resp.status_code >= 400:
             raise RunnerError(resp.json().get("detail", resp.text)[:1000] if resp.headers.get("content-type", "").startswith("application/json") else resp.text[:1000])
         return ProviderAccount.model_validate(resp.json())
@@ -143,7 +163,7 @@ class RunnerClient:
         try:
             resp = await self._client.post(f"/providers/{provider}/models", json=credentials.model_dump(mode="json"), timeout=40)
         except httpx.HTTPError as exc:
-            raise RunnerError(f"Runner unreachable: {exc}") from exc
+            raise RunnerError(unreachable(exc)) from exc
         if resp.status_code >= 400:
             raise RunnerError(resp.json().get("detail", resp.text)[:1000] if resp.headers.get("content-type", "").startswith("application/json") else resp.text[:1000])
         return [str(m) for m in resp.json()]
@@ -153,7 +173,7 @@ class RunnerClient:
             resp = await self._client.post("/checks/provider", json=spec.model_dump(mode="json"), timeout=180)
             return CheckResult.model_validate(resp.json())
         except httpx.HTTPError as exc:
-            return CheckResult(ok=False, detail=f"Runner unreachable: {exc}")
+            return CheckResult(ok=False, detail=unreachable(exc))
 
     async def check_github(self, credentials: Credentials, repos: list[RepoSpec] | None = None) -> CheckResult:
         try:
@@ -162,14 +182,14 @@ class RunnerClient:
             )
             return CheckResult.model_validate(resp.json())
         except httpx.HTTPError as exc:
-            return CheckResult(ok=False, detail=f"Runner unreachable: {exc}")
+            return CheckResult(ok=False, detail=unreachable(exc))
 
     async def github_create_repo(self, credentials: Credentials, name: str, owner: str = "", private: bool = True) -> dict:
         body = {"credentials": credentials.model_dump(mode="json"), "name": name, "owner": owner, "private": private}
         try:
             resp = await self._client.post("/github/repos/create", json=body, timeout=90)
         except httpx.HTTPError as exc:
-            return {"ok": False, "detail": f"Runner unreachable: {exc}", "repos": []}
+            return {"ok": False, "detail": unreachable(exc), "repos": []}
         if resp.status_code >= 400:
             return {"ok": False, "detail": resp.text[:300], "repos": []}
         return resp.json()
@@ -178,7 +198,7 @@ class RunnerClient:
         try:
             resp = await self._client.post("/git/tidy", json=spec.model_dump(mode="json"), timeout=600)
         except httpx.HTTPError as exc:
-            raise RunnerError(f"Runner unreachable: {exc}") from exc
+            raise RunnerError(unreachable(exc)) from exc
         if resp.status_code >= 400:
             raise RunnerError(resp.text[:600])
         return TidyResult.model_validate(resp.json())
@@ -190,7 +210,7 @@ class RunnerClient:
             resp.raise_for_status()
             return MachineUsage.model_validate(resp.json())
         except (httpx.HTTPError, ValueError) as exc:
-            raise RunnerError(f"Runner unreachable: {exc}") from exc
+            raise RunnerError(unreachable(exc)) from exc
 
     async def clean_up(self, spec: CleanupSpec) -> CleanupResult:
         """Free room on the workspaces' volume; can take long (sizes, deleting big folders)."""
@@ -199,7 +219,7 @@ class RunnerClient:
             resp.raise_for_status()
             return CleanupResult.model_validate(resp.json())
         except (httpx.HTTPError, ValueError) as exc:
-            raise RunnerError(f"Runner unreachable: {exc}") from exc
+            raise RunnerError(unreachable(exc)) from exc
 
     async def cleanup_candidates(self, spec: CandidatesSpec) -> list[CleanupCandidate]:
         """What may be deleted, with sizes (measured with du, kept for some minutes) and safety."""
@@ -208,7 +228,7 @@ class RunnerClient:
             resp.raise_for_status()
             return [CleanupCandidate.model_validate(c) for c in resp.json()]
         except (httpx.HTTPError, ValueError) as exc:
-            raise RunnerError(f"Runner unreachable: {exc}") from exc
+            raise RunnerError(unreachable(exc)) from exc
 
     async def trim_caches(self, spec: TrimSpec) -> CleanupResult:
         """Shrink the big shared tool caches, oldest files first."""
@@ -217,7 +237,7 @@ class RunnerClient:
             resp.raise_for_status()
             return CleanupResult.model_validate(resp.json())
         except (httpx.HTTPError, ValueError) as exc:
-            raise RunnerError(f"Runner unreachable: {exc}") from exc
+            raise RunnerError(unreachable(exc)) from exc
 
     async def cleanup_delete(self, spec: DeleteSpec) -> CleanupResult:
         try:
@@ -225,13 +245,13 @@ class RunnerClient:
             resp.raise_for_status()
             return CleanupResult.model_validate(resp.json())
         except (httpx.HTTPError, ValueError) as exc:
-            raise RunnerError(f"Runner unreachable: {exc}") from exc
+            raise RunnerError(unreachable(exc)) from exc
 
     async def remove_files(self, spec: ProjectFiles) -> CheckResult:
         try:
             resp = await self._client.post("/files/remove", json=spec.model_dump(mode="json"), timeout=300)
         except httpx.HTTPError as exc:
-            return CheckResult(ok=False, detail=f"Runner unreachable: {exc}")
+            return CheckResult(ok=False, detail=unreachable(exc))
         if resp.status_code >= 400:
             return CheckResult(ok=False, detail=resp.text[:300])
         return CheckResult.model_validate(resp.json())
@@ -241,13 +261,13 @@ class RunnerClient:
             resp = await self._client.post("/github/repos", json=credentials.model_dump(mode="json"), timeout=120)
             return resp.json()
         except httpx.HTTPError as exc:
-            return {"ok": False, "detail": f"Runner unreachable: {exc}", "repos": []}
+            return {"ok": False, "detail": unreachable(exc), "repos": []}
 
     async def _github(self, path: str, body: dict, timeout: float) -> httpx.Response:
         try:
             resp = await self._client.post(path, json=body, timeout=timeout)
         except httpx.HTTPError as exc:
-            raise RunnerError(f"Runner unreachable: {exc}") from exc
+            raise RunnerError(unreachable(exc)) from exc
         if resp.status_code >= 400:
             raise RunnerError(resp.text[:600])
         return resp
@@ -283,7 +303,7 @@ class RunnerClient:
             resp = await self._client.post("/github/pull-request/merge", json=body, timeout=300)
             return CheckResult.model_validate(resp.json())
         except (httpx.HTTPError, ValueError) as exc:
-            return CheckResult(ok=False, detail=f"Runner unreachable: {exc}")
+            return CheckResult(ok=False, detail=unreachable(exc))
 
     async def close_pull_request(self, credentials: Credentials, repo: str, number: int) -> None:
         try:
@@ -305,7 +325,7 @@ class RunnerClient:
             resp = await self._client.post("/trains/land", json=spec.model_dump(mode="json"), timeout=400)
             return CheckResult.model_validate(resp.json())
         except (httpx.HTTPError, ValueError) as exc:
-            return CheckResult(ok=False, detail=f"Runner unreachable: {exc}")
+            return CheckResult(ok=False, detail=unreachable(exc))
 
     async def branch_head(self, credentials: Credentials, remote: RepoSpec, branch: str) -> str | None:
         """The commit a branch points to on its remote; None if the branch is not there."""

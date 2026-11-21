@@ -170,7 +170,7 @@ const hastText = (node: { value?: string; children?: unknown[] }): string =>
   node.value ?? (node.children as { value?: string; children?: unknown[] }[] | undefined)?.map(hastText).join("") ?? "";
 
 /** A fenced code block with a copy button in its top-right corner (on hover where there is one, else always). */
-function CodeBlock({ text, children }: { text: string; children: ReactNode }) {
+export function CodeBlock({ text, children, alwaysCopy }: { text: string; children: ReactNode; alwaysCopy?: boolean }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const timer = useRef<number>(undefined);
@@ -192,7 +192,10 @@ function CodeBlock({ text, children }: { text: string; children: ReactNode }) {
           window.clearTimeout(timer.current);
           timer.current = window.setTimeout(() => setCopied(false), 1500);
         }}
-        className="absolute top-1.5 right-1.5 inline-flex size-7 items-center justify-center rounded-sm text-fg-3 hover:bg-line hover:text-fg focus-visible:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/code:opacity-100"
+        className={clsx(
+          "absolute top-1.5 right-1.5 inline-flex size-7 items-center justify-center rounded-sm text-fg-3 hover:bg-line hover:text-fg focus-visible:opacity-100",
+          !alwaysCopy && "[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/code:opacity-100",
+        )}
       >
         {copied ? <Check className="size-4 text-ok" /> : <Copy className="size-4" />}
         <span role="status" className="sr-only">

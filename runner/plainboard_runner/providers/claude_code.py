@@ -59,7 +59,7 @@ from .. import notices
 from ..config import TOOL_RESULT_PREVIEW_CHARS
 from ..tool_bridge import ToolBridge
 from ..workspace import tool_env
-from .base import Provider
+from .base import Provider, ProviderError
 
 log = logging.getLogger(__name__)
 
@@ -609,7 +609,7 @@ class ClaudeCodeProvider(Provider):
                         watcher.cancel()
         except Exception as exc:
             detail = "\n".join(stderr_tail)
-            raise RuntimeError(f"{exc}\n{detail}".strip()) from exc
+            raise ProviderError(f"{type(exc).__name__}: {exc}\n{detail}".strip()) from exc
         if not got_result:
             yield paused or ResultEvent(is_error=True, error="Claude Code ended without a result", context_tokens=mapper.context_tokens)
 

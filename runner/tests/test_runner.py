@@ -1138,3 +1138,30 @@ def test_claude_codes_limit_message_is_not_the_agents_answer(tmp_path):
     assert resume_point(file) == "a1"
     file.write_text("".join(json.dumps(e) + "\n" for e in entries[:2]))
     assert resume_point(file) is None and resume_point(tmp_path / "missing.jsonl") is None
+
+
+def test_a_failing_turn_ends_its_stream_with_the_type_and_text_of_the_error(workspaces, tmp_path, monkeypatch):
+    from plainboard_runner import errors, main
+
+    monkeypatch.setattr(errors, "ERROR_LOG", tmp_path / "runner-errors.log")
+
+    def broken(name):
+        raise KeyError("")  # an exception whose text is empty
+
+    monkeypatch.setattr(main, "get_provider", broken)
+    with TestClient(app).stream("POST", "/runs", json=run_spec(workspaces, "SAY x")) as resp:
+        events = [parse_event(line) for line in resp.iter_lines() if line]
+    assert events[-1].type == "error" and events[-1].message.startswith("KeyError")
+    logged = (tmp_path / "runner-errors.log").read_text()
+    assert "Run r1: KeyError" in logged and "Traceback" in logged
+
+
+def test_the_error_log_keeps_only_the_last_errors(tmp_path, monkeypatch):
+    from plainboard_runner import errors
+
+    monkeypatch.setattr(errors, "ERROR_LOG", tmp_path / "runner-errors.log")
+    monkeypatch.setattr(errors, "ERROR_LOG_MAX_BYTES", 2000)
+    for i in range(40):
+        errors.record(f"Run {i}", ValueError("x" * 50))
+    text = (tmp_path / "runner-errors.log").read_text()
+    assert len(text) < 3500 and text.startswith("=== ") and "Run 39: ValueError" in text

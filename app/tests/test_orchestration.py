@@ -1,4 +1,6 @@
 import json
+
+import pytest
 from datetime import datetime, timedelta
 
 from conftest import FakeRunner, agents_by_slug, idle, runs_of, wait_for
@@ -1506,3 +1508,38 @@ def test_a_message_sent_while_the_runner_is_not_up_yet_waits_for_it(client, proj
     wait_for(lambda: idle(client, pid))
     (run,) = [r for r in runs_of(client, pid) if r["id"] == lost["id"]]
     assert run["status"] == "failed" and "Runner unreachable" in run["error"]
+
+
+def test_a_stream_that_breaks_before_the_first_step_runs_once_more(client, project, monkeypatch):
+    """Production: turns ended after a few seconds with "Runner unreachable: " (a reset connection)."""
+    monkeypatch.setattr("plainboard.orchestration.run_manager.RUNNER_RETRY_SECONDS", 0.02)
+    pid = project["id"]
+    manager = agents_by_slug(client, pid)["manager"]
+    sent = chat(client, manager["id"], "BREAK_ONCE\nSAY here I am")
+    wait_for(lambda: idle(client, pid))
+    (run,) = [r for r in runs_of(client, pid) if r["id"] == sent["id"]]
+    assert run["status"] == "succeeded" and run["result_text"] == "here I am" and runner(client).breaks == 1
+
+    sent = chat(client, manager["id"], "BREAK")  # broken again on the second try: the run fails with the error
+    wait_for(lambda: idle(client, pid))
+    (run,) = [r for r in runs_of(client, pid) if r["id"] == sent["id"]]
+    assert run["status"] == "failed" and run["error"] == "Runner unreachable: ReadError" and runner(client).breaks == 3
+
+
+async def test_the_runner_client_names_a_broken_stream():
+    import httpx
+    from plainboard.orchestration.runner_client import RunnerClient, RunnerStreamBroken
+    from types import SimpleNamespace
+
+    class Reset(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'{"type": "session", "session_id": "s"}\n'
+            raise httpx.ReadError("")  # what a reset connection looks like: no text
+
+    client = RunnerClient("http://runner")
+    client._client = httpx.AsyncClient(base_url="http://runner", transport=httpx.MockTransport(lambda request: httpx.Response(200, stream=Reset())))
+    spec = SimpleNamespace(run_id="7", model_dump=lambda **kw: {})
+    with pytest.raises(RunnerStreamBroken, match=r"^Runner unreachable: ReadError$") as caught:
+        async for _ in client.stream_run(spec):
+            pass
+    assert caught.value.events == 1

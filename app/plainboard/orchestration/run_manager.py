@@ -24,10 +24,10 @@ import json
 import logging
 import secrets
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 
-from plainboard_protocol import CompletionSpec, JobSpec, JobState, ResultEvent, RunSpec, ToolBridgeSpec, ToolCallResult, WorkspaceSpec
+from plainboard_protocol import CompletionSpec, JobSpec, JobState, ResultEvent, RunEvent, RunSpec, ToolBridgeSpec, ToolCallResult, WorkspaceSpec
 from sqlalchemy import delete as sql_delete
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -79,7 +79,7 @@ from ..services.util import truncate
 from ..tools import registry
 from . import inbox, prompts
 from .context import ContextManager, workspace_path
-from .runner_client import RunnerClient, RunnerError, RunnerUnavailable
+from .runner_client import RunnerClient, RunnerError, RunnerStreamBroken, RunnerUnavailable
 from .runners import Runners
 from .tunnel import Tunnel
 
@@ -133,6 +133,12 @@ class Outcome:
     tool_messages: dict[str, int] = field(default_factory=dict)
     resumed: bool = False
     limited: bool = False  # the provider reported a used-up plan limit of the account during the turn
+    broken: bool = False  # the connection to the runner broke during the turn
+
+    @property
+    def broke_early(self) -> bool:
+        """The connection broke before the turn did a single step: nothing is lost by running it again."""
+        return self.broken and self.result is None and not self.last_text and not self.tool_messages
 
     @property
     def empty(self) -> bool:
@@ -1113,8 +1119,10 @@ class RunManager:
                     break
                 spec = switched
                 outcome = await self._stream(spec, ctx)
-            if outcome.empty and run_id not in self._cancel_requested:
-                log.warning("Run %s ended without a single step, it runs once more", run_id)
+            if (outcome.empty or outcome.broke_early) and run_id not in self._cancel_requested:
+                log.warning("Run %s ended without a single step (%s), it runs once more", run_id, outcome.error or "no result")
+                if outcome.broke_early:
+                    await asyncio.sleep(RUNNER_RETRY_SECONDS)  # the runner may still stop the first try
                 outcome = await self._stream(spec, ctx)
                 if outcome.empty:
                     outcome.error = EMPTY_TURN
@@ -1304,13 +1312,21 @@ class RunManager:
             )
             return spec, ctx
 
+    async def _events(self, spec: RunSpec, outcome: Outcome, project_id: int) -> AsyncIterator[RunEvent]:
+        """The runner's events of a turn. A stream that breaks ends the turn with that error (``outcome.broken``)."""
+        try:
+            async for event in self.runners.of(project_id).stream_run(spec):
+                yield event
+        except RunnerStreamBroken as exc:
+            outcome.error, outcome.broken = str(exc), True
+
     async def _stream(self, spec: RunSpec, ctx: RunContext) -> Outcome:
         outcome = Outcome(resumed=spec.resume_session_id is not None)
         fresh_session = spec.resume_session_id is None
         async with self._sm() as s:
             conv = await agent_service.conversation_for(s, ctx.agent_id)
             base = {"agent_id": ctx.agent_id, "conversation_id": conv.id, "run_id": ctx.run_id}
-            async for event in self.runners.of(ctx.project_id).stream_run(spec):
+            async for event in self._events(spec, outcome, ctx.project_id):
                 if event.type == "text_delta":
                     bus.publish(ctx.project_id, "message.delta", {**base, "text": ctx.redact(event.text)})
                 elif event.type == "session":

@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from . import cleanup
 from . import config
 from . import connect
+from . import errors
 from . import github
 from .browser import browsers
 from . import jobs
@@ -182,9 +183,11 @@ async def _execute(spec: RunSpec, queue: asyncio.Queue[str | None]) -> None:
     except asyncio.CancelledError:
         await queue.put(ErrorEvent(message="Run cancelled", cancelled=True).model_dump_json())
         raise
-    except Exception as exc:
-        log.exception("Run %s failed", spec.run_id)
-        await queue.put(ErrorEvent(message=str(exc)[:4000]).model_dump_json())
+    except BaseException as exc:  # whatever it is: the app is told, a stream never just ends
+        errors.record(f"Run {spec.run_id}", exc)
+        await queue.put(ErrorEvent(message=errors.describe(exc)[:4000]).model_dump_json())
+        if not isinstance(exc, Exception):
+            raise
     finally:
         if bridge:
             await bridge.aclose()
@@ -205,6 +208,9 @@ async def start_run(spec: RunSpec) -> StreamingResponse:
         try:
             while (line := await queue.get()) is not None:
                 yield line + "\n"
+        except Exception as exc:  # the stream itself broke: still end it with the error
+            errors.record(f"Stream of run {spec.run_id}", exc)
+            yield ErrorEvent(message=errors.describe(exc)[:4000]).model_dump_json() + "\n"
         finally:
             _active.pop(spec.run_id, None)
             notices.drain(spec.run_id)

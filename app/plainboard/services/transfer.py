@@ -61,7 +61,7 @@ class Table:
 
 AGENT = {"created_by_agent_id": "agents"}
 TABLES: tuple[Table, ...] = (
-    Table("projects", sealed=("github_token_enc",), reset={"workspace_path": None, "account_id": None, "account_ids": []}),
+    Table("projects", sealed=("github_token_enc",), reset={"workspace_path": None, "account_id": None, "account_ids": [], "runner_id": None}),
     Table("agents", reset={"account_id": None, "team_pause": False}),
     Table("repositories", sealed=("token_enc", "ssh_key_enc"), reset={"tidied_at": None, "failing_told_at": None}),
     Table("mcp_servers", sealed=("env_enc", "headers_enc")),

@@ -44,6 +44,7 @@ class JobWatcher:
     async def tick(self) -> None:
         try:
             await self._runs.check_turns()  # turns the runner lost: the same kind of look
+            await self._runs.check_runners()  # external runners that stay away
         except Exception:
             log.exception("Turn check failed")
         async with self._sm() as s:
@@ -51,12 +52,18 @@ class JobWatcher:
             jobs = await job_service.running(s)
             if not jobs:
                 return
-            try:
-                states = await self._runs.runner.job_status([job.runner_id for job in jobs])
-            except RunnerError as exc:  # e.g. rebuilding: decide when it is back
-                log.info("Skipping job check: %s", exc)
-                return
+            runners = self._runs.runners
+            by_runner: dict[int | None, list] = {}
             for job in jobs:
+                by_runner.setdefault(runners.runner_id(job.project_id), []).append(job)
+            states, asked = {}, []
+            for runner_id, group in by_runner.items():
+                try:
+                    states |= await runners.client(runner_id).job_status([job.runner_id for job in group])
+                    asked += group
+                except RunnerError as exc:  # e.g. rebuilding, an external runner away: decide when it is back
+                    log.info("Skipping job check: %s", exc)
+            for job in asked:
                 await s.refresh(job)
                 state = states.get(job.runner_id)
                 if job.status != JobStatus.RUNNING or (state and state.running):

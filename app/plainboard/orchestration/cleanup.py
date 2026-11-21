@@ -145,7 +145,7 @@ class CleanupWatcher:
         root = get_config().workspaces_root
         target = storage.limit(settings, "storage_notify_percent")
         async with self._sm() as s:
-            projects = list(await s.scalars(select(Project).order_by(Project.id)))
+            projects = list(await s.scalars(select(Project).where(Project.runner_id.is_(None)).order_by(Project.id)))  # on this runner
             agents = list(await s.scalars(select(Agent)))
             folders = cleanup_service.folders(projects, agents, await cleanup_service.busy_agents(s), await cleanup_service.last_turns(s), machine.folders, root)
         free = f.total - f.used
@@ -181,7 +181,7 @@ class CleanupWatcher:
         root = get_config().workspaces_root
         target = storage.limit(settings, "storage_notify_percent")
         async with self._sm() as s:
-            projects = list(await s.scalars(select(Project).order_by(Project.id)))
+            projects = list(await s.scalars(select(Project).where(Project.runner_id.is_(None)).order_by(Project.id)))  # on this runner
             agents = list(await s.scalars(select(Agent)))
             folders = cleanup_service.folders(projects, agents, await cleanup_service.busy_agents(s), await cleanup_service.last_turns(s), machine.folders, root)
         free = f.total - f.used
@@ -233,7 +233,8 @@ class CleanupWatcher:
         answer on a port: a long job without one may be work someone waits for."""
         async with self._sm() as s:
             busy = await cleanup_service.busy_agents(s, jobs=False)
-            running = [j for j in await s.scalars(select(Job).where(Job.status == JobStatus.RUNNING, Job.assignment_id.is_(None))) if j.agent_id not in busy]
+            elsewhere = set(await s.scalars(select(Project.id).where(Project.runner_id.is_not(None))))  # their memory is another machine's
+            running = [j for j in await s.scalars(select(Job).where(Job.status == JobStatus.RUNNING, Job.assignment_id.is_(None))) if j.agent_id not in busy and j.project_id not in elsewhere]
             if not running:
                 return
             try:

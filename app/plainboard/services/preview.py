@@ -275,30 +275,36 @@ async def running(session: AsyncSession, project_id: int, jobs: list[Job], ports
 
 
 class Owners:
-    """Which project's server listens on a port: the running server jobs and what the runner finds them
-    listening on. Asked again after ``OWNERS_SECONDS``, sooner for a port not known yet (a server just
-    started), and at once when the job a port was known for no longer runs (the port was given up)."""
+    """Which project's server listens on a port: the running server jobs and what their runners find
+    them listening on. Ports can repeat across runners, so a port may have several (``project_of``
+    gives them all). Asked again after ``OWNERS_SECONDS``, sooner for a port not known yet (a server
+    just started), and at once when a job a port was known for no longer runs (the port was given up)."""
 
     def __init__(self) -> None:
-        self._ports: dict[int, tuple[int, int]] = {}  # port -> (job id, project id)
+        self._ports: dict[int, list[tuple[int, int]]] = {}  # port -> (job id, project id) of each
         self._at = -OWNERS_SECONDS
 
-    async def project_of(self, session: AsyncSession, port: int, listening: Callable[[list[str]], Awaitable[dict[str, list[int]]]]) -> int | None:
+    async def project_of(self, session: AsyncSession, port: int, listening: Callable[[list[Job]], Awaitable[dict[str, list[int]]]]) -> list[int]:
+        """``listening``: for these jobs, the ports each listens on (by the runner's job id)."""
         age = time.monotonic() - self._at
         known = self._ports.get(port)
-        if known is not None and age < OWNERS_SECONDS:
-            job = await session.get(Job, known[0])
-            if job is not None and job.status == JobStatus.RUNNING:
-                return known[1]
-        elif known is None and age < 1.0:
-            return None
+        if known and age < OWNERS_SECONDS:
+            jobs = [await session.get(Job, job_id) for job_id, _ in known]
+            if all(job is not None and job.status == JobStatus.RUNNING for job in jobs):
+                return [project_id for _, project_id in known]
+        elif not known and age < 1.0:
+            return []
         jobs = servers(list(await session.scalars(select(Job).where(Job.status == JobStatus.RUNNING))))
         by_runner = {job.runner_id: job for job in jobs}
-        found = await listening(list(by_runner)) if by_runner else {}
-        self._ports = {p: (by_runner[rid].id, by_runner[rid].project_id) for rid, ports in found.items() if rid in by_runner for p in ports if _previewed(p)}
-        self._at = time.monotonic()
-        known = self._ports.get(port)
-        return known[1] if known else None
+        found = await listening(jobs) if jobs else {}
+        ports: dict[int, list[tuple[int, int]]] = {}
+        for rid, listened in found.items():
+            if (job := by_runner.get(rid)) is not None:
+                for p in listened:
+                    if _previewed(p):
+                        ports.setdefault(p, []).append((job.id, job.project_id))
+        self._ports, self._at = ports, time.monotonic()
+        return [project_id for _, project_id in self._ports.get(port, [])]
 
 
 # --- from PlainBoard to the preview origin -------------------------------------------------------

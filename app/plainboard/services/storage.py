@@ -308,12 +308,15 @@ def owner(c: CleanupCandidate, o: Owners) -> tuple[int | None, str]:
     return None, ""
 
 
-async def listing(session: AsyncSession, runner, machine: MachineUsage | None = None) -> Listing:
-    """Every candidate, with its project and agent. The runner measures sizes (kept for some minutes)."""
+async def listing(session: AsyncSession, runner, machine: MachineUsage | None = None, runner_id: int | None = None) -> Listing:
+    """Every candidate, with its project and agent. The runner measures sizes (kept for some minutes).
+    Only the projects on that runner (``runner_id``; None: the built-in one) count: the others' files are elsewhere."""
     root = get_config().workspaces_root.rstrip("/")
-    projects = list(await session.scalars(select(Project).order_by(Project.id)))
-    agents = list(await session.scalars(select(Agent)))
-    all_repos = list(await session.scalars(select(Repository)))
+    on_runner = Project.runner_id.is_(None) if runner_id is None else Project.runner_id == runner_id
+    projects = list(await session.scalars(select(Project).where(on_runner).order_by(Project.id)))
+    ids = [p.id for p in projects]
+    agents = list(await session.scalars(select(Agent).where(Agent.project_id.in_(ids))))
+    all_repos = list(await session.scalars(select(Repository).where(Repository.project_id.in_(ids))))
     repos: dict[str, int | None] = {}
     for r in all_repos:
         key = _repo_key(r.url)
@@ -529,7 +532,7 @@ def overview(settings: dict[str, Any], volume: VolumeUsage | None) -> StorageOut
 async def delete(session: AsyncSession, runner, project: Project, agent: Agent, paths: list[str], force: bool) -> tuple[CleanupResult, list[str]]:
     """Delete what one project's manager chose, through the runner; logged as a flow event.
     The second value: paths that are no candidate of this project."""
-    found = await listing(session, runner)
+    found = await listing(session, runner, runner_id=project.runner_id)
     allowed = {i.candidate.path for i in found.visible(project.id)}
     wanted = [p.rstrip("/") for p in paths]
     refused = [p for p in wanted if p not in allowed]

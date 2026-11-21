@@ -39,6 +39,7 @@ from ..models import (
     Agent,
     Assignment,
     AssignmentStatus,
+    Attachment,
     Conversation,
     Decision,
     Job,
@@ -49,6 +50,7 @@ from ..models import (
     Run,
     RunStatus,
     RunTrigger,
+    Runner,
     Task,
     TaskStatus,
     Train,
@@ -65,6 +67,7 @@ from ..services import mcp as mcp_service
 from ..services import pause as pause_service
 from ..services import projects as project_service
 from ..services import repositories as repo_service
+from ..services import runners as runner_service
 from ..services import secrets as secret_service
 from ..services import timing as timing_service
 from ..services import todos as todo_service
@@ -77,6 +80,8 @@ from ..tools import registry
 from . import inbox, prompts
 from .context import ContextManager, workspace_path
 from .runner_client import RunnerClient, RunnerError, RunnerUnavailable
+from .runners import Runners
+from .tunnel import Tunnel
 
 log = logging.getLogger(__name__)
 
@@ -151,8 +156,11 @@ async def _limit_since_answer(s: AsyncSession, conversation_id: int) -> bool:
 class RunManager:
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession], runner: RunnerClient):
         self._sm = sessionmaker
-        self.runner = runner
-        self.context = ContextManager(runner)
+        self.runner = runner  # the built-in runner: what is the installation's, not a project's
+        self.runners = Runners(runner)  # each project's runner (orchestration/runners.py)
+        self.runners.on_connect = lambda _runner_id: self._wake.set()
+        self.context = ContextManager(self.runners)
+        self._uploads: dict[int, set[str]] = {}  # external runner -> attachment files it has
         self._running: dict[int, asyncio.Task[None]] = {}
         self._unlimited: set[int] = set()  # running turns outside the parallel limit: nested ones and managers'
         self._busy_agents: set[int] = set()
@@ -181,9 +189,89 @@ class RunManager:
 
     # ------------------------------------------------------------------ lifecycle
 
+    def wake(self) -> None:
+        self._wake.set()
+
+    # ------------------------------------------------------------------ external runners
+
+    async def runner_connected(self, runner_id: int, tunnel: Tunnel, hello: dict) -> None:
+        """An external runner connected (api/runners.py): what waited for it starts."""
+        old = self.runners.attach(runner_id, tunnel, hello)
+        if old is not None:
+            old.close()  # the runner connected again before its old line was noticed as gone
+        self._uploads.pop(runner_id, None)  # it may have been rebuilt
+        async with self._sm() as s:
+            runner = await runner_service.seen(s, runner_id, str(hello.get("version") or ""))
+            if runner is not None and runner.away_told_at is not None:
+                runner.away_told_at = None
+                await s.commit()
+                for manager in await self._managers_on(s, runner_id):
+                    await inbox.push(s, manager.id, f'The runner "{runner.name}" is connected again: the turns and jobs of this project run again.')
+        log.info("Runner %s connected (version %s)", runner_id, hello.get("version") or "?")
+
+    async def runner_gone(self, runner_id: int, tunnel: Tunnel) -> None:
+        if not self.runners.detach(runner_id, tunnel):
+            return
+        async with self._sm() as s:
+            await runner_service.seen(s, runner_id)
+        log.info("Runner %s disconnected", runner_id)
+
+    async def _managers_on(self, s: AsyncSession, runner_id: int) -> list[Agent]:
+        return list(await s.scalars(select(Agent).join(Project, Project.id == Agent.project_id).where(Project.runner_id == runner_id, Agent.is_manager)))
+
+    async def check_runners(self) -> None:
+        """An external runner that stays away: the managers of its projects hear it once (job_watcher's look)."""
+        now = time.monotonic()
+        for runner_id, since in list(self.runners.away_since.items()):
+            if now - since < runner_service.AWAY_TELL_SECONDS or self.runners.connected(runner_id):
+                continue
+            async with self._sm() as s:
+                runner = await s.get(Runner, runner_id)
+                if runner is None or runner.away_told_at is not None:
+                    self.runners.away_since.pop(runner_id, None)
+                    continue
+                runner.away_told_at = utcnow()
+                await s.commit()
+                self.runners.away_since.pop(runner_id, None)
+                for manager in await self._managers_on(s, runner_id):
+                    await inbox.push(
+                        s,
+                        manager.id,
+                        f'The runner "{runner.name}" this project runs on has not been connected for more than {runner_service.AWAY_TELL_SECONDS // 60} minutes. '
+                        "Turns and jobs of this project wait until it is back. Tell the user: the runner's machine or its container (plainboard-runner) has to run and reach PlainBoard.",
+                    )
+                    await self.request_wake(s, manager.id)
+
+    async def _sync_uploads(self, project_id: int) -> None:
+        """An external runner has no uploads volume: the project's attachments are copied to it, each once."""
+        runner_id = self.runners.runner_id(project_id)
+        if runner_id is None:
+            return
+        async with self._sm() as s:
+            names = list(await s.scalars(select(Attachment.storage_name).where(Attachment.project_id == project_id)))
+        have = self._uploads.setdefault(runner_id, set())
+        wanted = [n for n in names if n not in have]
+        if not wanted:
+            return
+        client = self.runners.client(runner_id)
+        try:
+            missing = set(await client.missing_uploads(wanted))
+            for name in wanted:
+                if name in missing:
+                    path = get_config().uploads_dir / name
+                    if not path.is_file():
+                        continue
+                    await client.put_upload(name, await asyncio.to_thread(path.read_bytes))
+                have.add(name)
+        except RunnerError as exc:
+            log.warning("Attachments not copied to runner %s: %s", runner_id, exc)
+
     async def start(self) -> None:
         async with self._sm() as s:
             self.paused = await pause_service.state(s) is not None  # a pause holds across the restart it was made for
+            await self.runners.load(s)
+            for runner_id in self.runners.in_use()[1:]:
+                self.runners.away_since.setdefault(runner_id, time.monotonic())  # until it connects
         await self._recover_interrupted()
         async with self._sm() as s:
             # An assignment that waited for a job when the app stopped must not wait forever.
@@ -353,7 +441,7 @@ class RunManager:
             await s.commit()
             bus.publish(agent.project_id, "run.upserted", RunOut.model_validate(run))
         if busy_run and (text.strip() or attachment_ids):
-            if await self.runner.notify_run(busy_run, prompts.chat_notice(text, len(attachment_ids or []))):
+            if await self.runners.of(agent.project_id).notify_run(busy_run, prompts.chat_notice(text, len(attachment_ids or []))):
                 self._unread.setdefault(busy_run, set()).add(run.id)  # it reads it after the step it is in
             if ended := self._end_waits(busy_run, "the user wrote to you"):  # no wait is worth more than the user
                 await flow_log.record(s, agent.project_id, "wait.ended", agent_id=agent.id, run_id=busy_run, waits=ended, by="user")
@@ -573,7 +661,7 @@ class RunManager:
                 s, target, RunTrigger.ASK, prompts.ask_prompt(caller, question), source_agent_id=caller.id, parent_run_id=ctx.run_id
             )
         if busy_run:
-            await self.runner.notify_run(busy_run, prompts.ask_notice(caller, question))
+            await self.runners.of(target.project_id).notify_run(busy_run, prompts.ask_notice(caller, question))
             if ended := self._end_waits(busy_run, f"{caller.name} is waiting for your answer", asks=False):  # a job's result comes by itself
                 async with self._sm() as s:
                     await flow_log.record(s, target.project_id, "wait.ended", agent_id=target.id, run_id=busy_run, waits=ended, by=caller.name)
@@ -604,6 +692,7 @@ class RunManager:
             run = await s.get(Run, run_id)
             if run is None or run.status not in (RunStatus.QUEUED, RunStatus.RUNNING):
                 return False
+            project_id = run.project_id
             if run.status == RunStatus.QUEUED:
                 run.status, run.finished_at, run.error = RunStatus.CANCELLED, utcnow(), "Cancelled before start"
                 await s.commit()
@@ -612,7 +701,7 @@ class RunManager:
                 await agent_service.publish_by_id(s, run.agent_id)
                 return True
         self._cancel_requested.add(run_id)
-        await self.runner.cancel(run_id)
+        await self.runners.of(project_id).cancel(run_id)
         asyncio.get_running_loop().call_later(CANCEL_GRACE_SECONDS, self._force_cancel, run_id)
         return True
 
@@ -658,7 +747,7 @@ class RunManager:
                     effort=manager.summary_effort or values["default_summary_effort"] or None,
                 )
                 await s.commit()  # no transaction is held while the model writes
-                result = await self.runner.complete(spec)
+                result = await self.runners.of(task.project_id).complete(spec)
                 if not result.text.strip():
                     return
                 until = reports[-1].id if reports else (await ticket_state.get(s, task.id)).until_assignment_id
@@ -707,7 +796,7 @@ class RunManager:
             if status == RunStatus.QUEUED:
                 if agent.enabled or assignment_id is None:
                     await self.cancel_run(run_id)
-            elif await self.runner.notify_run(run_id, prompts.wind_down_notice(reason, jobs_end), urgent=True):
+            elif await self.runners.of(agent.project_id).notify_run(run_id, prompts.wind_down_notice(reason, jobs_end), urgent=True):
                 running = True
                 run = await s.get(Run, run_id)
                 run.stop_requested_at = run.stop_requested_at or utcnow()
@@ -739,7 +828,7 @@ class RunManager:
         # Managers stay switched on, and what waits for them stays in the queue. Their running turn wraps up too.
         turns = select(Run).join(Agent, Agent.id == Run.agent_id).where(Run.status == RunStatus.RUNNING, Run.stop_requested_at.is_(None), Agent.is_manager)
         for run in list(await s.scalars(turns)):
-            if await self.runner.notify_run(run.id, prompts.wind_down_notice(reason, jobs_end=True), urgent=True):
+            if await self.runners.of(run.project_id).notify_run(run.id, prompts.wind_down_notice(reason, jobs_end=True), urgent=True):
                 run.stop_requested_at = utcnow()
                 await s.commit()
                 bus.publish(run.project_id, "run.upserted", RunOut.model_validate(run))
@@ -754,7 +843,7 @@ class RunManager:
         reason = f"{by} paused this project. Your open work goes on by itself when it is resumed."
         turns = select(Run).where(Run.project_id == project.id, Run.status == RunStatus.RUNNING, Run.stop_requested_at.is_(None))
         for run in list(await s.scalars(turns)):
-            if await self.runner.notify_run(run.id, prompts.wind_down_notice(reason, jobs_end=True), urgent=True):
+            if await self.runners.of(run.project_id).notify_run(run.id, prompts.wind_down_notice(reason, jobs_end=True), urgent=True):
                 run.stop_requested_at = utcnow()
                 await s.commit()
                 bus.publish(run.project_id, "run.upserted", RunOut.model_validate(run))
@@ -822,15 +911,18 @@ class RunManager:
         and a pause would wait for them for ever. One the runner has not listed for a minute is ended
         here, like one a restart cut off: its assignment goes on with the agent's next turn."""
         async with self._sm() as s:
-            running = dict((await s.execute(select(Run.id, Run.agent_id).where(Run.status == RunStatus.RUNNING))).all())
+            rows = (await s.execute(select(Run.id, Run.agent_id, Run.project_id).where(Run.status == RunStatus.RUNNING))).all()
+        running = {run_id: agent_id for run_id, agent_id, _ in rows}
         if not running:
             self._missing.clear()
             return
-        try:
-            alive = await self.runner.active_runs()
-        except RunnerError as exc:  # e.g. rebuilding: decide when it is back
-            log.info("Skipping turn check: %s", exc)
-            return
+        alive: set[int] = set()
+        for runner_id in {self.runners.runner_id(project_id) for _, _, project_id in rows}:
+            try:
+                alive |= await self.runners.client(runner_id).active_runs()
+            except RunnerError as exc:  # e.g. rebuilding, or an external runner away: decide when it is back
+                log.info("Skipping turn check: %s", exc)
+                alive |= {run_id for run_id, _, project_id in rows if self.runners.runner_id(project_id) == runner_id}
         now = time.monotonic()
         for run_id in list(self._missing):
             if run_id not in running or run_id in alive:
@@ -943,6 +1035,8 @@ class RunManager:
                 if not (r.trigger == RunTrigger.ASSIGNMENT and r.agent_id in occupied) and not (r.agent_id in paused and r.assignment_id and not r.stop_requested_at)
                 # Everything is paused: only what wraps up still starts, and the answer a turn that wraps up waits for.
                 and not ((self.paused or r.project_id in resting) and not r.stop_requested_at and r.parent_run_id is None)
+                # An external runner that is away: its turns wait for it in the queue.
+                and self.runners.ready(r.project_id)
             ]
             if candidates:
                 held = await self._held_by_limits(s, [r for r in queued if r.id in {c[0] for c in candidates}])
@@ -1002,6 +1096,7 @@ class RunManager:
             if prepared is None:
                 return
             spec, ctx = prepared
+            await self._sync_uploads(ctx.project_id)
             for attempt in range(RUNNER_TRIES):
                 try:
                     self._streams[run_id] = time.monotonic()
@@ -1215,7 +1310,7 @@ class RunManager:
         async with self._sm() as s:
             conv = await agent_service.conversation_for(s, ctx.agent_id)
             base = {"agent_id": ctx.agent_id, "conversation_id": conv.id, "run_id": ctx.run_id}
-            async for event in self.runner.stream_run(spec):
+            async for event in self.runners.of(ctx.project_id).stream_run(spec):
                 if event.type == "text_delta":
                     bus.publish(ctx.project_id, "message.delta", {**base, "text": ctx.redact(event.text)})
                 elif event.type == "session":
@@ -1486,7 +1581,7 @@ class RunManager:
             ),
         )
         try:
-            state = await self.runner.start_job(spec)
+            state = await self.runners.of(project.id).start_job(spec)
         except RunnerError as exc:
             raise ServiceError(f"Could not start the job: {exc}") from exc
         # Only now, so that the watcher never looks for a job the runner has not accepted yet.
@@ -1496,7 +1591,7 @@ class RunManager:
         """``by``: a person stopped it in the UI. Its agent reads that with its next turn, so it does not
         hand out the link of a server that is gone."""
         try:
-            if not await self.runner.stop_job(job.runner_id):
+            if not await self.runners.of(job.project_id).stop_job(job.runner_id):
                 return False  # already over: the watcher reports it
         except RunnerError as exc:
             raise ServiceError(f"Could not stop the job: {exc}") from exc

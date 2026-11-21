@@ -156,6 +156,12 @@ class ProviderAccount(BaseModel):
 class ToolCallResult(BaseModel):
     text: str
     is_error: bool = False
+    # Not done yet: ask again with this id (POST /api/internal/runs/<id>/tools/pending/<call>). Only to a bridge that
+    # sent TOOL_PENDING_HEADER: a long call (a quick check, a question) must not run into a proxy's timeout.
+    pending: str = ""
+
+
+TOOL_PENDING_HEADER = "x-plainboard-tool-pending"
 
 
 class JobSpec(BaseModel):

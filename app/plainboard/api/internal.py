@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import secrets
 from typing import Any
 
-from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
-from plainboard_protocol import ToolCallResult
+from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
+from plainboard_protocol import TOOL_PENDING_HEADER, ToolCallResult
 
 from ..services import agents as agent_service
 from ..services import board as board_service
@@ -23,10 +25,45 @@ def _context(runs: Runs, run_id: int, authorization: str | None):
     return ctx
 
 
+# A tool call that takes longer is answered "pending" and asked for again: a proxy between an external runner
+# and the app (Cloudflare: 100 s) ends a longer request, and the tool's result would reach nobody.
+TOOL_ANSWER_SECONDS = 60.0
+KEEP_UNASKED_SECONDS = 900  # a result its turn never asked for again
+_calls: dict[str, tuple[int, asyncio.Task[ToolCallResult]]] = {}  # call id -> (run, the call at work)
+
+
+async def _answer(call_id: str) -> ToolCallResult:
+    task = _calls[call_id][1]
+    await asyncio.wait({task}, timeout=TOOL_ANSWER_SECONDS)
+    if not task.done():
+        return ToolCallResult(text="", pending=call_id)
+    del _calls[call_id]
+    return task.result()
+
+
+def _drop(call_id: str, task: asyncio.Task) -> None:
+    if call_id in _calls and _calls[call_id][1] is task:
+        del _calls[call_id]
+
+
 @router.post("/runs/{run_id}/tools/{name}", response_model=ToolCallResult)
-async def call_tool(run_id: int, name: str, args: dict[str, Any], runs: Runs, authorization: str | None = Header(default=None)) -> ToolCallResult:
+async def call_tool(run_id: int, name: str, args: dict[str, Any], runs: Runs, request: Request, authorization: str | None = Header(default=None)) -> ToolCallResult:
     ctx = _context(runs, run_id, authorization)
-    return await runs.execute_tool(ctx, name, args)
+    if not request.headers.get(TOOL_PENDING_HEADER):  # a runner older than that: it waits for the whole call
+        return await runs.execute_tool(ctx, name, args)
+    call_id = secrets.token_hex(8)
+    task = asyncio.create_task(runs.execute_tool(ctx, name, args), name=f"tool-{name}-{run_id}")
+    task.add_done_callback(lambda t: asyncio.get_running_loop().call_later(KEEP_UNASKED_SECONDS, _drop, call_id, t))
+    _calls[call_id] = (run_id, task)
+    return await _answer(call_id)
+
+
+@router.post("/runs/{run_id}/tools/pending/{call_id}", response_model=ToolCallResult)
+async def pending_tool_call(run_id: int, call_id: str, runs: Runs, authorization: str | None = Header(default=None)) -> ToolCallResult:
+    _context(runs, run_id, authorization)
+    if _calls.get(call_id, (None,))[0] != run_id:
+        return ToolCallResult(text="This tool call's result is gone.", is_error=True)
+    return await _answer(call_id)
 
 
 @router.post("/runs/{run_id}/attachments", response_model=ToolCallResult)

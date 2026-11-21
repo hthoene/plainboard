@@ -77,6 +77,23 @@ async def test_bridge_proxies_remote_tools(tmp_path):
     assert (await bridge.call("nope", {})).is_error
 
 
+async def test_bridge_asks_again_for_a_tool_call_still_at_work(tmp_path):
+    paths = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        if request.url.path.endswith("/merge_when_green"):
+            assert request.headers["x-plainboard-tool-pending"] == "1"
+            return httpx.Response(200, json={"text": "", "pending": "c1"})
+        return httpx.Response(200, json={"text": "handed over"} if len(paths) == 3 else {"text": "", "pending": "c1"})
+
+    spec = ToolBridgeSpec(base_url="http://app", run_id="7", run_token="secret", tools=[ToolDef(name="merge_when_green", description="", input_schema={})])
+    bridge = ToolBridge(spec, tmp_path)
+    bridge._client = httpx.AsyncClient(base_url="http://app", transport=httpx.MockTransport(handler))
+    assert (await bridge.call("merge_when_green", {})).text == "handed over"
+    assert paths == ["/api/internal/runs/7/tools/merge_when_green"] + ["/api/internal/runs/7/tools/pending/c1"] * 2
+
+
 async def test_attach_file_uploads_from_workspace(tmp_path):
     (tmp_path / "report.txt").write_text("hi")
     seen = {}

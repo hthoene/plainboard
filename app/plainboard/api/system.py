@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Query, Request
@@ -30,14 +31,21 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+RUNNER_DOWN_AFTER_SECONDS = 30  # one slow answer of the runner is not "not reachable"
+_runner_seen: dict[str, Any] = {"providers": [], "failing_since": None}
+
+
 @router.get("/meta")
 async def meta(runner: Runner, session: Session) -> dict[str, Any]:
     try:
         every = await runner.providers()
-        providers = [p.model_dump() for p in await account_service.catalog(session, every)]
+        _runner_seen.update(providers=every, failing_since=None)
         runner_ok = True
     except RunnerError:
-        every, providers, runner_ok = [], [], False
+        since = _runner_seen["failing_since"] = _runner_seen["failing_since"] or time.monotonic()
+        runner_ok = time.monotonic() - since < RUNNER_DOWN_AFTER_SECONDS
+        every = _runner_seen["providers"] if runner_ok else []
+    providers = [p.model_dump() for p in await account_service.catalog(session, every)] if every else []
     return {
         "providers": providers,
         # Providers that are an endpoint, set up or not: what an account can be added for.

@@ -328,13 +328,7 @@ class RunManager:
             for runner_id in self.runners.in_use()[1:]:
                 self.runners.away_since.setdefault(runner_id, time.monotonic())  # until it connects
         await self._recover_interrupted()
-        async with self._sm() as s:
-            # An assignment that waited for a job when the app stopped must not wait forever.
-            for agent_id in set(await s.scalars(select(Assignment.agent_id).where(Assignment.status == AssignmentStatus.RUNNING))):
-                try:
-                    await self._settle(s, agent_id)
-                except Exception:
-                    log.exception("Could not continue the open assignment of agent %s", agent_id)
+        await self.settle_open_assignments()  # an assignment that waited for a job when the app stopped must not wait forever
         self._dispatcher = asyncio.create_task(self._dispatch_loop(), name="run-dispatcher")
         self._wake.set()
 
@@ -990,6 +984,16 @@ class RunManager:
                 del self._missing[run_id]
                 await self._lose(run_id, running[run_id])
 
+    async def settle_open_assignments(self) -> None:
+        """No assignment stays open for good: one without a turn and without a running job gets the turn that
+        finishes it, whatever path left it so."""
+        async with self._sm() as s:
+            for agent_id in set(await s.scalars(select(Assignment.agent_id).where(Assignment.status == AssignmentStatus.RUNNING))) - self._busy_agents:
+                try:
+                    await self._settle(s, agent_id)
+                except Exception:
+                    log.exception("Could not continue the open assignment of agent %s", agent_id)
+
     async def _lose(self, run_id: int, agent_id: int) -> None:
         async with self._sm() as s:
             run = await s.get(Run, run_id)
@@ -1089,7 +1093,9 @@ class RunManager:
             candidates = [
                 (r.id, r.agent_id, r.project_id, r.parent_run_id is not None, r.agent_id in managers)
                 for r in sorted(queued, key=order)
-                if not (r.trigger == RunTrigger.ASSIGNMENT and r.agent_id in occupied) and not (r.agent_id in paused and r.assignment_id and not r.stop_requested_at)
+                # A repair for landing does not wait for the agent's open assignment: that one may wait for
+                # exactly this landing, and the two would wait for each other for good.
+                if not (r.trigger == RunTrigger.ASSIGNMENT and r.agent_id in occupied and r.assignment_id not in fixes) and not (r.agent_id in paused and r.assignment_id and not r.stop_requested_at)
                 # Everything is paused: only what wraps up still starts, and the answer a turn that wraps up waits for.
                 and not ((self.paused or r.project_id in resting) and not r.stop_requested_at and r.parent_run_id is None)
                 # An external runner that is away: its turns wait for it in the queue.

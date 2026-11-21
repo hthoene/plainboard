@@ -530,3 +530,30 @@ def test_messages_to_members_are_off_by_default(client, project):
     assert client.put("/api/settings", json={"values": {"member_chat": None}}).status_code == 200  # as on a new installation
     assert client.get("/api/settings").json()["values"]["member_chat"] is False
     assert client.post(f"/api/agents/{dev['id']}/messages", json={"text": "SAY hi"}).status_code == 403
+
+
+def test_a_long_tool_call_is_answered_pending_and_asked_for_again(client, project, monkeypatch):
+    """Seen in production: merge_when_green waited for the quick check longer than Cloudflare's 100 s, the external
+    runner's request ended with 524, and the result reached nobody."""
+    import asyncio
+
+    from plainboard.api import internal
+    from plainboard.orchestration.run_manager import RunContext
+    from plainboard_protocol import TOOL_PENDING_HEADER, ToolCallResult
+
+    runs = client.app_ref.state.runs
+    runs._tokens["tok"] = RunContext(run_id=1, project_id=project["id"], agent_id=1, token="tok")
+
+    async def slow(ctx, name, args):
+        await asyncio.sleep(0.3)
+        return ToolCallResult(text=f"{name} done")
+
+    monkeypatch.setattr(runs, "execute_tool", slow)
+    monkeypatch.setattr(internal, "TOOL_ANSWER_SECONDS", 0.05)
+    auth = {"Authorization": "Bearer tok"}
+    first = client.post("/api/internal/runs/1/tools/merge_when_green", headers={**auth, TOOL_PENDING_HEADER: "1"}, json={}).json()
+    assert first["pending"] and not first["text"]
+    monkeypatch.setattr(internal, "TOOL_ANSWER_SECONDS", 5.0)
+    assert client.post(f"/api/internal/runs/1/tools/pending/{first['pending']}", headers=auth).json()["text"] == "merge_when_green done"
+    assert client.post(f"/api/internal/runs/1/tools/pending/{first['pending']}", headers=auth).json()["is_error"]  # given once
+    assert client.post("/api/internal/runs/1/tools/x", headers=auth, json={}).json() == {"text": "x done", "is_error": False, "pending": ""}  # an older runner waits

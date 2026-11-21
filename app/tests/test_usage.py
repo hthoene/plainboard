@@ -142,3 +142,24 @@ def test_every_runner_a_project_uses_shows_with_its_projects_and_the_last_known_
     external.reachable = False
     (r,) = client.get("/api/usage").json()["runners"]
     assert not r["connected"] and not r["runner_ok"] and r["memory_total"] == 8 * GB and r["known_at"]
+
+
+def test_one_failed_look_at_the_runner_does_not_say_it_is_down(client, monkeypatch):
+    """Seen in production: one slow answer of a busy runner put "Runner not reachable" on every page."""
+    from plainboard.api import system
+    from plainboard.orchestration.runner_client import RunnerError
+
+    runner = client.app_ref.state.runner
+    assert client.get("/api/meta").json()["runner_ok"]
+    answer = runner.providers
+
+    async def unreachable():
+        raise RunnerError("Runner unreachable: ReadTimeout")
+
+    monkeypatch.setattr(runner, "providers", unreachable)
+    failed = client.get("/api/meta").json()
+    assert failed["runner_ok"] and failed["providers"]  # the last answer holds for a while
+    monkeypatch.setattr(system, "RUNNER_DOWN_AFTER_SECONDS", 0)
+    assert client.get("/api/meta").json()["runner_ok"] is False
+    monkeypatch.setattr(runner, "providers", answer)
+    assert client.get("/api/meta").json()["runner_ok"]

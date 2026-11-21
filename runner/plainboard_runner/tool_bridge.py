@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from plainboard_protocol import ToolBridgeSpec, ToolCallResult, ToolDef
+from plainboard_protocol import TOOL_PENDING_HEADER, ToolBridgeSpec, ToolCallResult, ToolDef
 
 log = logging.getLogger(__name__)
 
@@ -56,10 +56,17 @@ class ToolBridge:
                 if handler is None:
                     return ToolCallResult(text=f"Local tool not available: {name}", is_error=True)
                 return await handler(self, args)
-            resp = await self._client.post(f"/api/internal/runs/{self.spec.run_id}/tools/{name}", json=args)
-            if resp.status_code >= 400:
-                return ToolCallResult(text=f"Tool failed ({resp.status_code}): {resp.text[:500]}", is_error=True)
-            return ToolCallResult.model_validate(resp.json())
+            base = f"/api/internal/runs/{self.spec.run_id}/tools"
+            resp = await self._client.post(f"{base}/{name}", json=args, headers={TOOL_PENDING_HEADER: "1"})
+            while True:
+                if resp.status_code >= 400:
+                    return ToolCallResult(text=f"Tool failed ({resp.status_code}): {resp.text[:500]}", is_error=True)
+                result = ToolCallResult.model_validate(resp.json())
+                if not result.pending:
+                    return result
+                # Still at work (a quick check, a question to another agent): each request stays short, so
+                # a proxy between here and the app (Cloudflare ends one after 100 s) never cuts it off.
+                resp = await self._client.post(f"{base}/pending/{result.pending}")
         except Exception as exc:  # report to the model instead of crashing the run
             log.exception("Tool %s failed", name)
             return ToolCallResult(text=f"Tool error: {exc}", is_error=True)

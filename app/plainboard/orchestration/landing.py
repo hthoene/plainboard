@@ -72,7 +72,9 @@ log = logging.getLogger(__name__)
 
 # Checks appear a moment after a push. A pull request without any after this time has none.
 NO_CHECKS_GRACE_SECONDS = 120
-MERGE_METHODS = ["merge", "rebase", "squash"]  # a merge commit keeps each branch's commits as they were checked
+# How a train's pull request is merged when its checked commit cannot be pushed to the base branch as it is (see
+# the runner's github_merge): a merge commit keeps each branch's commits, a rebase replays them, a squash is the last resort.
+MERGE_METHODS = ["merge", "rebase", "squash"]
 # How often the head of a base branch is read (git ls-remote, no API quota): while branches land, and otherwise.
 GUARD_BUSY_SECONDS = 3 * 60
 GUARD_QUIET_SECONDS = 20 * 60
@@ -284,9 +286,16 @@ class LandingWatcher:
             evidence = f"Failed checks ({train.url}):\n{listed}\nRead the failed logs once: the links, or gh run view <run id> --log-failed."
             await self._failed(s, r, train, members, "failed checks: " + ", ".join(c.name for c in failed[:8]), evidence, [c.name for c in failed])
             return True
+        # Branches handed over that are not on this train may build on one of its branches: after a squash they are moved onto it.
+        others = select(Landing.branch).where(Landing.repository_id == r.repo.id, Landing.status.in_([LandingStatus.WAITING, LandingStatus.BACK]), Landing.branch != "")
+        restack = list(await s.scalars(others))
+        await s.commit()  # nothing of the database is held while the runner merges (see _depart)
         merged = await self._runs.runners.of(r.repo.project_id).merge_pull_request(
-            r.credentials, r.slug, train.number, methods=MERGE_METHODS, key=r.key, remote=r.remote, delete_branches={m.branch: m.head_sha for m in members}
-        )
+            r.credentials, r.slug, train.number, methods=MERGE_METHODS, key=r.key, remote=r.remote, delete_branches={m.branch: m.head_sha for m in members},
+            base=train.base, head_sha=state.head_sha or train.head_sha, branch=train.branch, restack=restack,
+        )  # fmt: skip
+        if merged.ok:
+            await flow_log.record(s, r.project.id, "train.merged", train_id=train.id, how=truncate(merged.detail, 300))
         if merged.ok:
             await self._landed(s, r, train, members, now)
             return True

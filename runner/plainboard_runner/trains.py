@@ -153,14 +153,58 @@ async def land(spec: TrainLandSpec) -> CheckResult:
     """Push the checked train to the base branch. Not forced: if the base branch moved meanwhile the
     push is refused, and the train has to be assembled and checked again."""
     where = folder(spec.key)
+    if not (where / ".git").exists():
+        return CheckResult(ok=False, detail="The train has not been assembled on this runner")
     async with _lock(spec.key):
         git = Git(spec.credentials, spec.remote, where)
+        if not await git.ok("cat-file", "-e", f"{spec.head_sha}^{{commit}}"):
+            await git.ok("fetch", "-q", "--no-tags", "origin", spec.head_sha)  # built elsewhere: the push names what is missing
         try:
             await git("push", "-q", "origin", f"{spec.head_sha}:refs/heads/{spec.base}", timeout=300)
         except WorkspaceError as exc:
             return CheckResult(ok=False, detail=str(exc)[-600:])
         await _remove(git, spec.delete_branches)
         return CheckResult(ok=True, detail="pushed")
+
+
+async def restack(credentials: Credentials, remote: RepoSpec, key: str, base: str, squashed: str, branches: list[str]) -> list[str]:
+    """After a train was squashed onto the base branch: move the branches that build on its commits
+    onto the squash commit, so they do not conflict with their own history. Only their own commits
+    are replayed (those after ``squashed``, the train's head); the push is leased on what was read,
+    so commits pushed to a branch meanwhile are not lost. One that does not replay cleanly stays as
+    it is. The branches that moved."""
+    where = folder(key)
+    if not (where / ".git").exists() or not branches:
+        return []
+    moved = []
+    async with _lock(key):
+        git = Git(credentials, remote, where)
+        await git("fetch", "-q", "--no-tags", "origin", f"+refs/heads/{base}:refs/remotes/origin/{base}")
+        if not await git.ok("cat-file", "-e", f"{squashed}^{{commit}}") and not await git.ok("fetch", "-q", "--no-tags", "origin", squashed):
+            return []
+        tip = f"refs/remotes/origin/{base}"
+        for branch in dict.fromkeys(branches):
+            ref = f"refs/remotes/origin/{branch}"
+            if not await git.ok("fetch", "-q", "--no-tags", "origin", f"+refs/heads/{branch}:{ref}"):
+                continue  # not on the remote
+            head = await git("rev-parse", ref)
+            if await git.ok("merge-base", "--is-ancestor", head, squashed):
+                continue  # nothing of its own after the train
+            try:
+                shared = await git("merge-base", head, squashed)
+            except WorkspaceError:
+                continue  # no common history
+            if await git.ok("merge-base", "--is-ancestor", shared, tip):
+                continue  # it does not build on the train's commits
+            await git.ok("rebase", "--abort")
+            await git("checkout", "-q", "-f", "--detach", head)
+            if not await git.ok("rebase", "-q", "--onto", tip, squashed):
+                await git.ok("rebase", "--abort")
+                continue
+            if await git.ok("push", "-q", f"--force-with-lease=refs/heads/{branch}:{head}", "origin", f"HEAD:refs/heads/{branch}"):
+                moved.append(branch)
+        await git.ok("checkout", "-q", "-f", "--detach", tip)
+    return moved
 
 
 async def _remove(git: Git, branches: dict[str, str]) -> None:

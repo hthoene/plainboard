@@ -22,6 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from websockets.asyncio.client import connect
 
 from ..models import Project
+from plainboard_protocol.tunnel import CLOSE_REFUSED, CLOSE_REPLACED
+
 from .runner_client import RunnerClient
 from .tunnel import Tunnel, TunnelTransport
 
@@ -37,6 +39,7 @@ class Runners:
         self.tunnels: dict[int, Tunnel] = {}
         self.hello: dict[int, dict] = {}  # what each connected runner said when it connected
         self.away_since: dict[int, float] = {}  # runners that were connected and are not (monotonic)
+        self.instances: dict[int, str] = {}  # the instance each runner last said it is: a new one is a restart
         self.on_connect: Callable[[int], None] | None = None  # the dispatcher starts what waited
         self.make_client: Callable[[int], Any] = self._tunnel_client
 
@@ -81,15 +84,22 @@ class Runners:
         """Turns of the project can start: its runner is there. Else they wait in the queue."""
         return self.connected(self.runner_id(project_id))
 
-    def attach(self, runner_id: int, tunnel: Tunnel, hello: dict) -> Tunnel | None:
-        """A runner connected; returns the connection it replaces (an older one of the same runner)."""
+    def attach(self, runner_id: int, tunnel: Tunnel, hello: dict) -> tuple[Tunnel | None, bool]:
+        """A runner connected. Returns the connection it replaces (an older one with the same token, which
+        is closed: the newest wins), and whether the runner was started anew since it was last seen
+        (another instance: what ran on the old one is gone)."""
         old = self.tunnels.get(runner_id)
+        if old is not None:
+            old.close(CLOSE_REPLACED)
         self.tunnels[runner_id] = tunnel
         self.hello[runner_id] = hello
+        instance = str(hello.get("instance") or "")
+        restarted = bool(instance) and self.instances.get(runner_id, instance) != instance
+        self.instances[runner_id] = instance
         self.away_since.pop(runner_id, None)
         if self.on_connect:
             self.on_connect(runner_id)
-        return old
+        return old, restarted
 
     def detach(self, runner_id: int, tunnel: Tunnel) -> bool:
         """A connection ended. False if a newer one of the runner had replaced it already."""
@@ -102,10 +112,11 @@ class Runners:
     def forget(self, runner_id: int) -> None:
         """A runner was removed."""
         if (tunnel := self.tunnels.pop(runner_id, None)) is not None:
-            tunnel.close()
+            tunnel.close(CLOSE_REFUSED)  # its token is no longer valid
         self._clients.pop(runner_id, None)
         self.hello.pop(runner_id, None)
         self.away_since.pop(runner_id, None)
+        self.instances.pop(runner_id, None)
         self._previews.pop(runner_id, None)
 
     # --- what is not a RunnerClient call: previews and sockets ------------------------------------

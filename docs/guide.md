@@ -322,8 +322,11 @@ workspaces don't move: the new runner clones the repositories again, and each ru
 (installed tools). The setup script, secrets and credentials go with every turn, as before, and only
 to the project's own runner. Ticket attachments are copied to it when an agent starts a turn.
 
-If the runner goes away (the server restarts, the line breaks), what ran there ends as after a
-restart, new turns wait until it is back, and it connects again by itself. After 10 minutes away the
+If the line breaks for a moment (network, a proxy, a restart of PlainBoard's server), the runner
+connects again by itself and the work goes on: turns keep running there and pick up their stream where
+it stopped, jobs and previews keep running. If the runner itself restarts, what ran on it ends as after
+a restart of the built-in runner and goes on with the next turn. While it is away, new turns, check runs
+and branch tidying wait until it is back. After 10 minutes away the
 project's manager hears it once. A runner that runs another version than PlainBoard is marked in the
 list: update it with `docker pull thoenehannes/plainboard-runner:latest` and start it again. A new token
 (key icon) ends the old one at once; removing a runner is possible once no project uses it.

@@ -167,6 +167,7 @@ class RunManager:
         self.runners.on_connect = lambda _runner_id: self._wake.set()
         self.context = ContextManager(self.runners)
         self._uploads: dict[int, set[str]] = {}  # external runner -> attachment files it has
+        self._orphan_checks: set[asyncio.Task[None]] = set()  # looks at turns of an external runner nobody follows
         self._running: dict[int, asyncio.Task[None]] = {}
         self._unlimited: set[int] = set()  # running turns outside the parallel limit: nested ones and managers'
         self._busy_agents: set[int] = set()
@@ -201,11 +202,18 @@ class RunManager:
     # ------------------------------------------------------------------ external runners
 
     async def runner_connected(self, runner_id: int, tunnel: Tunnel, hello: dict) -> None:
-        """An external runner connected (api/runners.py): what waited for it starts."""
-        old = self.runners.attach(runner_id, tunnel, hello)
+        """An external runner connected (api/runners.py): what waited for it starts. A runner that was
+        started anew (another instance) has lost what ran on it: the turns' streams find their turn
+        gone and end as after a restart, the job watcher reports its jobs as lost."""
+        old, restarted = self.runners.attach(runner_id, tunnel, hello)
         if old is not None:
-            old.close()  # the runner connected again before its old line was noticed as gone
+            log.info("Runner %s connected again: its older connection is closed", runner_id)
+        if restarted:
+            log.warning("Runner %s was started anew: what ran on it is lost", runner_id)
         self._uploads.pop(runner_id, None)  # it may have been rebuilt
+        check = asyncio.create_task(self._drop_orphans(runner_id), name=f"orphans-{runner_id}")  # one per connection
+        self._orphan_checks.add(check)
+        check.add_done_callback(self._orphan_checks.discard)
         async with self._sm() as s:
             runner = await runner_service.seen(s, runner_id, str(hello.get("version") or ""))
             if runner is not None and runner.away_told_at is not None:
@@ -214,6 +222,17 @@ class RunManager:
                 for manager in await self._managers_on(s, runner_id):
                     await inbox.push(s, manager.id, f'The runner "{runner.name}" is connected again: the turns and jobs of this project run again.')
         log.info("Runner %s connected (version %s)", runner_id, hello.get("version") or "?")
+
+    async def _drop_orphans(self, runner_id: int) -> None:
+        """Turns the runner still runs that no task here follows any more (the app restarted, or the
+        stream could not be resumed): nobody would read their events, so they are cancelled."""
+        try:
+            client = self.runners.client(runner_id)
+            for run_id in await client.active_runs() - set(self._running):
+                log.info("Cancelling run %s on runner %s: nobody here follows it any more", run_id, runner_id)
+                await client.cancel(run_id)
+        except RunnerError as exc:
+            log.info("Orphaned turns of runner %s not looked at: %s", runner_id, exc)
 
     async def runner_gone(self, runner_id: int, tunnel: Tunnel) -> None:
         if not self.runners.detach(runner_id, tunnel):
@@ -1596,6 +1615,8 @@ class RunManager:
                 values, project_service.github_token(project), secret_service.env(await secret_service.effective(s, project.id))
             ),
         )
+        if not self.runners.ready(project.id):  # at once, not after the connect timeout
+            raise ServiceError("Could not start the job: the runner this project runs on is not connected")
         try:
             state = await self.runners.of(project.id).start_job(spec)
         except RunnerError as exc:

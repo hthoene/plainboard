@@ -74,8 +74,8 @@ class BranchTidy:
 
     async def _tidy(self, s: AsyncSession, repo: Repository, now: datetime) -> None:
         project = await s.get(Project, repo.project_id)
-        if project is None or project.paused_at is not None:
-            return
+        if project is None or project.paused_at is not None or not self._runs.runners.ready(project.id):
+            return  # an external runner that is away: tried again when it is back
         env = secret_service.env(await secret_service.effective(s, project.id))
         credentials = settings_service.credentials(await settings_service.get_all(s), project_service.github_token(project), env)
         keep = set(await s.scalars(select(Landing.branch).where(Landing.repository_id == repo.id, Landing.status.in_(KEPT))))

@@ -9,12 +9,12 @@ import json
 import logging
 
 from fastapi import APIRouter, Request, WebSocket
-from plainboard_protocol.tunnel import DEAD_SECONDS
+from plainboard_protocol.tunnel import CLOSE_PROTOCOL, CLOSE_REFUSED, DEAD_SECONDS, PING_SECONDS, PROTOCOL
 from starlette.websockets import WebSocketDisconnect
 
 from ..db import sessionmaker
 from ..events import bus
-from ..orchestration.tunnel import Tunnel
+from ..orchestration.tunnel import Tunnel, TunnelClosed
 from ..schemas import ProjectRunnerIn, ProjectRunnerOut, RunnerCreated, RunnerIn, RunnerOut
 from ..services import projects as project_service
 from ..services import runners as runner_service
@@ -80,12 +80,14 @@ async def set_project_runner(project_id: int, body: ProjectRunnerIn, session: Se
 @sockets.websocket("/api/runners/connect")
 async def connect(websocket: WebSocket) -> None:
     """The tunnel of an external runner (orchestration/tunnel.py). It says hello first, then answers
-    what the app sends; a ping every 20 s, and a line silent for longer than ``DEAD_SECONDS`` is gone."""
+    what the app sends. Both sides ping every ``PING_SECONDS``; a line silent for ``DEAD_SECONDS`` is
+    gone (half-open). A newer connection with the same token replaces this one (``CLOSE_REPLACED``)."""
     token = websocket.headers.get("authorization", "").removeprefix("Bearer ").strip()
     async with sessionmaker()() as session:
         runner = await runner_service.authenticate(session, token) if token else None
     if runner is None:
-        await websocket.close(code=4401)
+        log.info("A runner was refused: unknown or revoked token")
+        await websocket.close(code=CLOSE_REFUSED)
         return
     await websocket.accept()
     runs = websocket.app.state.runs
@@ -105,17 +107,50 @@ async def connect(websocket: WebSocket) -> None:
         with contextlib.suppress(RuntimeError):
             await websocket.close(code=4400)
         return
+    if hello.get("protocol") != PROTOCOL:
+        log.warning("Runner %s speaks tunnel protocol %s, PlainBoard %s: it has to be updated", runner.id, hello.get("protocol"), PROTOCOL)
+        with contextlib.suppress(RuntimeError):
+            await websocket.close(code=CLOSE_PROTOCOL)
+        return
+
+    async def ping() -> None:
+        while True:
+            await asyncio.sleep(PING_SECONDS)
+            await tunnel.send_json({"t": "ping"})
+
+    pinger = asyncio.create_task(ping())
+    ended = asyncio.create_task(tunnel.ended.wait())
+    receiving: asyncio.Task | None = None
+    reason = "closed"
     try:
         await runs.runner_connected(runner.id, tunnel, hello)  # in here: whatever ends it, the connection is let go
-        while not tunnel.closed:
-            message = await asyncio.wait_for(websocket.receive(), DEAD_SECONDS)
+        while True:
+            receiving = receiving or asyncio.create_task(websocket.receive())
+            done, _ = await asyncio.wait({receiving, ended, pinger}, timeout=DEAD_SECONDS, return_when=asyncio.FIRST_COMPLETED)
+            if ended in done:
+                reason = f"ended here ({tunnel.close_code})"
+                break
+            if pinger in done:
+                reason = "the ping could not be sent"
+                break
+            if not done:
+                reason = f"nothing heard for {DEAD_SECONDS} s"
+                break
+            message = receiving.result()
+            receiving = None
             if message["type"] == "websocket.disconnect":
+                reason = "the runner left"
                 break
             tunnel.feed(message["text"] if message.get("text") is not None else message["bytes"])
-    except (TimeoutError, WebSocketDisconnect, RuntimeError, ValueError) as exc:
-        log.info("Runner %s: connection ended (%s)", runner.id, type(exc).__name__)
+    except (WebSocketDisconnect, RuntimeError, ValueError, TunnelClosed) as exc:
+        reason = type(exc).__name__
     finally:
+        log.info("Runner %s: connection ended: %s", runner.id, reason)
+        for task in (pinger, ended, receiving):
+            if task is not None:
+                task.cancel()
+        code = tunnel.close_code
         tunnel.close()
         await runs.runner_gone(runner.id, tunnel)
         with contextlib.suppress(RuntimeError):
-            await websocket.close()
+            await websocket.close(code=code)

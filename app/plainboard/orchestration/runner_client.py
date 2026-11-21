@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -10,6 +11,10 @@ import httpx
 from plainboard_protocol import ProjectFiles, TidyResult, TidySpec, CandidatesSpec, CheckResult, CleanupCandidate, CleanupResult, CleanupSpec, CompletionResult, CompletionSpec, Credentials, DeleteSpec, JobPort, JobSpec, JobState, LimitsEvent, MachineUsage, ProviderAccount, ProviderInfo, PullRequestCheck, PullRequestState, RepoSpec, RunEvent, RunSpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, TrimSpec, UpstreamState, parse_event
 
 log = logging.getLogger(__name__)
+
+
+RESUME_SECONDS = 180.0  # how long a turn's stream waits for its external runner to be back
+RESUME_RETRY_SECONDS = 1.0
 
 
 class RunnerError(RuntimeError):
@@ -45,24 +50,47 @@ class RunnerClient:
             base_url=base_url, timeout=httpx.Timeout(60, connect=10), limits=httpx.Limits(max_keepalive_connections=0), transport=transport
         )
         self._providers: tuple[float, list[ProviderInfo]] | None = None
+        self.resumable = transport is not None  # an external runner: a broken turn stream is picked up again
 
     async def stream_run(self, spec: RunSpec) -> AsyncIterator[RunEvent]:
         timeout = httpx.Timeout(None, connect=10)  # agent turns can take a long time
         events = 0
-        try:
-            async with self._client.stream("POST", "/runs", json=spec.model_dump(mode="json"), timeout=timeout) as resp:
-                if resp.status_code >= 400:
-                    body = (await resp.aread()).decode(errors="replace")
-                    raise RunnerError(f"Runner rejected run ({resp.status_code}): {body[:500]}")
-                async for line in resp.aiter_lines():
-                    if line.strip():
-                        events += 1
-                        yield parse_event(line)
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            raise RunnerUnavailable(unreachable(exc)) from exc
-        except httpx.HTTPError as exc:
-            log.warning("The stream of run %s broke after %s events: %r", spec.run_id, events, exc)
-            raise RunnerStreamBroken(unreachable(exc), events) from exc
+        method, path, body = "POST", "/runs", spec.model_dump(mode="json")
+        resume_until: float | None = None
+        while True:
+            try:
+                async with self._client.stream(method, path, json=body, timeout=timeout) as resp:
+                    if method == "GET" and resp.status_code in (404, 410):
+                        # Gone: the runner was started anew, or it could not keep what was missed.
+                        if events == 0 and resp.status_code == 404:
+                            raise RunnerUnavailable("Runner unreachable: the turn never started there")
+                        raise RunnerStreamBroken(f"The runner no longer has this turn ({resp.status_code}): it was started anew", events)
+                    if resp.status_code >= 400:
+                        text = (await resp.aread()).decode(errors="replace")
+                        raise RunnerError(f"Runner rejected run ({resp.status_code}): {text[:500]}")
+                    resume_until = None
+                    async for line in resp.aiter_lines():
+                        if line.strip():
+                            events += 1
+                            yield parse_event(line)
+                return
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                if method == "POST":
+                    raise RunnerUnavailable(unreachable(exc)) from exc
+                error = exc  # the line is still away: tried again below
+            except httpx.HTTPError as exc:
+                log.warning("The stream of run %s broke after %s events: %r", spec.run_id, events, exc)
+                error = exc
+            if not self.resumable:
+                raise RunnerStreamBroken(unreachable(error), events) from error
+            # An external runner keeps the turn running through a broken line and has its events since:
+            # the stream goes on from the last line read here, once the runner is connected again.
+            now = time.monotonic()
+            resume_until = resume_until or now + RESUME_SECONDS
+            if now >= resume_until:
+                raise RunnerStreamBroken(unreachable(error), events) from error
+            await asyncio.sleep(RESUME_RETRY_SECONDS)
+            method, path, body = "GET", f"/runs/{spec.run_id}/events?after={events}", None
 
     async def cancel(self, run_id: int) -> None:
         try:

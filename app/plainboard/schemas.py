@@ -229,7 +229,9 @@ class StorageOut(BaseModel):
     notices: list[StorageNoticeOut] = Field(default_factory=list)
 
 
-class UsageOut(BaseModel):
+class MachineOut(BaseModel):
+    """What one runner's machine uses: disk, memory and CPU, with the projects that run on it."""
+
     runner_ok: bool
     measured_at: UTCDateTime | None = None  # when the folders were last measured
     measuring: bool = False
@@ -237,7 +239,6 @@ class UsageOut(BaseModel):
     projects: list[ProjectUsageOut] = Field(default_factory=list)
     shared: list[FolderOut] = Field(default_factory=list)  # parts of the agents' home: caches, toolchains
     other_disk: int = 0  # folders in the workspaces of no project
-    data: int | None = None  # the database and the key, in the app's data folder
     memory_total: int = 0
     memory_used: int = 0
     memory_other: int = 0  # processes of the runner that work in no agent's folder: the runner itself, browsers
@@ -249,6 +250,23 @@ class UsageOut(BaseModel):
     cpu_other: float = 0  # cores used by what works in no project's folder: the runner itself, browsers, the system
     cpu_other_avg: list[float] = Field(default_factory=list)
     cpu_other_history: list[float] = Field(default_factory=list)
+
+
+class RunnerUsageOut(MachineOut):
+    """An external runner: connected, its numbers are current; away, they are the last known ones (if any)."""
+
+    id: int
+    name: str
+    connected: bool
+    last_seen_at: UTCDateTime | None = None  # when it was last connected
+    known_at: UTCDateTime | None = None  # when the numbers are from; None: nothing known
+
+
+class UsageOut(MachineOut):
+    """The built-in runner's machine (the fields of ``MachineOut``) and the app's, and the external runners'."""
+
+    data: int | None = None  # the database and the key, in the app's data folder
+    runners: list[RunnerUsageOut] = Field(default_factory=list)  # external runners that projects use, by name
     storage: StorageOut | None = None
     cleanups: list[CleanupOut] = Field(default_factory=list)  # newest first
     servers_stopped: CleanupOut | None = None  # by the memory cleanup, the last time

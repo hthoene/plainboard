@@ -592,7 +592,8 @@ export interface ProjectUsage {
   other_cpu_history: number[];
 }
 
-export interface Usage {
+/** What one runner's machine uses, with the projects that run on it. */
+export interface MachineUsage {
   runner_ok: boolean;
   measured_at: string | null;
   measuring: boolean;
@@ -600,7 +601,6 @@ export interface Usage {
   projects: ProjectUsage[];
   shared: { name: string; bytes: number }[];
   other_disk: number;
-  data: number | null;
   memory_total: number;
   memory_used: number;
   memory_other: number;
@@ -613,6 +613,21 @@ export interface Usage {
   cpu_other: number;
   cpu_other_avg: number[];
   cpu_other_history: number[];
+}
+
+/** An external runner: connected, its numbers are current; away, the last known ones (known_at; null: none). */
+export interface RunnerUsage extends MachineUsage {
+  id: number;
+  name: string;
+  connected: boolean;
+  last_seen_at: string | null;
+  known_at: string | null;
+}
+
+/** The built-in runner's machine and the app's, and the external runners'. */
+export interface Usage extends MachineUsage {
+  data: number | null;
+  runners: RunnerUsage[];
   storage: UsageStorage | null;
   cleanups: UsageCleanup[];
   servers_stopped: UsageCleanup | null;

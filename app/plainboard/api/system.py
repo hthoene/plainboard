@@ -107,15 +107,15 @@ async def limits(session: Session, runs: Runs) -> LimitsOut:
 
 
 @router.get("/usage", response_model=UsageOut)
-async def usage(session: Session, runner: Runner) -> UsageOut:
+async def usage(session: Session, runs: Runs) -> UsageOut:
     """Disk and memory, in total, per project and agent; folder sizes as last measured."""
-    return await usage_service.overview(session, runner)
+    return await usage_service.overview(session, runs)
 
 
 @router.post("/usage/measure", response_model=UsageOut)
-async def measure_usage(session: Session, runner: Runner) -> UsageOut:
+async def measure_usage(session: Session, runs: Runs) -> UsageOut:
     """Measure the folders again, in the background."""
-    return await usage_service.overview(session, runner, measure=True)
+    return await usage_service.overview(session, runs, measure=True)
 
 
 @router.get("/settings", response_model=SettingsOut)

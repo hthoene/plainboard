@@ -18,11 +18,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_config
-from ..models import Agent, Attachment, Project
-from ..orchestration.runner_client import RunnerClient, RunnerError
+from ..models import Agent, Attachment, Project, Runner
 from . import cleanup as cleanup_service
 from . import settings as settings_service
-from ..schemas import AgentUsageOut, FolderOut, ProjectUsageOut, UsageOut, VolumeOut
+from ..schemas import AgentUsageOut, FolderOut, MachineOut, ProjectUsageOut, RunnerUsageOut, UsageOut, VolumeOut
 
 LOW_FREE_SHARE = 0.1  # a volume is short of room below a tenth free ...
 LOW_FREE_BYTES = 10 * 2**30  # ... or below 10 GB
@@ -219,18 +218,58 @@ def _naive_utc(timestamp: float) -> datetime:
     return datetime.fromtimestamp(timestamp, UTC).replace(tzinfo=None)
 
 
-async def overview(session: AsyncSession, runner: RunnerClient, measure: bool = False) -> UsageOut:
+_LAST: dict[int, tuple[MachineUsage, datetime]] = {}  # what each external runner measured last, for while it is away
+
+
+async def _ask(client, measure: bool) -> MachineUsage | None:
+    try:
+        return await asyncio.wait_for(client.usage(measure), 30)
+    except Exception:
+        return None
+
+
+async def overview(session: AsyncSession, runs, measure: bool = False) -> UsageOut:
+    """``runs``: the app's ``RunManager``; every runner a project uses is asked, at once."""
+    hub = runs.runners
     projects = list((await session.scalars(select(Project).order_by(Project.name))).all())
     agents = list((await session.scalars(select(Agent).order_by(Agent.is_manager.desc(), Agent.name))).all())
     settings = await settings_service.get_all(session)
     uploads = {pid: int(size or 0) for pid, size in (await session.execute(select(Attachment.project_id, func.sum(Attachment.size)).group_by(Attachment.project_id))).all()}
-    await session.commit()  # no transaction stays open while the runner is asked
-    try:
-        machine: MachineUsage | None = await runner.usage(measure)
-    except RunnerError:
-        machine = None
+    names = dict((await session.execute(select(Runner.id, Runner.name))).all())
+    seen = dict((await session.execute(select(Runner.id, Runner.last_seen_at))).all())
+    await session.commit()  # no transaction stays open while the runners are asked
+    external = [rid for rid in hub.in_use() if rid is not None]
+    asked = [rid for rid in external if hub.connected(rid)]
+    answers = await asyncio.gather(_ask(hub.builtin, measure), *(_ask(hub.client(rid), measure) for rid in asked))
+    machine, found = answers[0], dict(zip(asked, answers[1:]))
     own = await asyncio.to_thread(own_machine)
-    out = summarize(projects, agents, uploads, machine, own)
+
+    def on(runner_id: int | None) -> tuple[list[Project], list[Agent]]:
+        here = [p for p in projects if p.runner_id == runner_id]
+        ids = {p.id for p in here}
+        return here, [a for a in agents if a.project_id in ids]
+
+    out = summarize(*on(None), uploads, machine, own)
+    now = datetime.now(UTC).replace(tzinfo=None)
+    for rid in external:
+        here, here_agents = on(rid)
+        if found.get(rid) is not None:
+            _LAST[rid] = (found[rid], now)
+        last = _LAST.get(rid)
+        summary = summarize(here, here_agents, uploads, found.get(rid) or (last[0] if last else None), Machine())
+        connected = rid in asked
+        out.runners.append(
+            RunnerUsageOut(
+                **summary.model_dump(include=set(MachineOut.model_fields)),
+                id=rid,
+                name=names.get(rid, ""),
+                connected=connected,
+                last_seen_at=now if connected else seen.get(rid),
+                known_at=now if found.get(rid) is not None else (last[1] if last else None),
+            )
+        )
+        out.runners[-1].runner_ok = found.get(rid) is not None
+    out.runners.sort(key=lambda r: r.name.lower())
     from . import storage
 
     volume = cleanup_service.workspace_volume(machine, get_config().workspaces_root) if machine else None

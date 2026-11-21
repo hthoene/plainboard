@@ -303,8 +303,23 @@ class RunnerClient:
         return int((await self._github("/github/rerun-failed", body, 150)).json().get("rerun", 0))
 
     async def merge_pull_request(
-        self, credentials: Credentials, repo: str, number: int, *, methods: list[str] | None = None, key: str | None = None, remote: RepoSpec | None = None, delete_branches: dict[str, str] | None = None
+        self,
+        credentials: Credentials,
+        repo: str,
+        number: int,
+        *,
+        methods: list[str] | None = None,
+        key: str | None = None,
+        remote: RepoSpec | None = None,
+        delete_branches: dict[str, str] | None = None,
+        base: str = "",
+        head_sha: str = "",
+        branch: str = "",
+        restack: list[str] | None = None,
     ) -> CheckResult:
+        """Land a train's pull request: its checked commit pushed to ``base`` if that is a fast-forward,
+        else merged with the first of ``methods`` the repository allows. After a squash, the ``restack``
+        branches that build on the train are moved onto it."""
         body = {
             "credentials": credentials.model_dump(mode="json"),
             "repo": repo,
@@ -313,6 +328,10 @@ class RunnerClient:
             "key": key,
             "remote": remote.model_dump(mode="json") if remote else None,
             "delete_branches": delete_branches or {},
+            "base": base,
+            "head_sha": head_sha,
+            "branch": branch,
+            "restack": restack or [],
         }
         try:
             resp = await self._client.post("/github/pull-request/merge", json=body, timeout=300)

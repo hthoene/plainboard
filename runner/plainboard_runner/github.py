@@ -3,6 +3,7 @@ own checks. Everything else about trains is plain git (trains.py) and works with
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any
@@ -14,7 +15,7 @@ from .workspace import WorkspaceError, git_env, run_cmd
 
 FIELDS = "state,mergeable,headRefOid,headRefName,url,title,statusCheckRollup"
 PASSED = {"SUCCESS", "NEUTRAL", "SKIPPED"}
-MERGE_METHODS = ("squash", "merge", "rebase")  # tried in this order: a repository may allow only some
+MERGE_METHODS = ("merge", "rebase", "squash")  # tried in this order: a repository may allow only some
 PULL_URL = re.compile(r"https://\S+/pull/(\d+)")
 
 
@@ -74,18 +75,60 @@ async def open_pull_request(credentials: Credentials, repo: str, base: str, head
     return int(created.group(1)), created.group(0)
 
 
+_allowed: dict[str, tuple[str, ...]] = {}  # repository -> the merge methods it allows, read once
+
+
+async def allowed_methods(credentials: Credentials, repo: str) -> tuple[str, ...] | None:
+    """The merge methods a repository allows for pull requests. None if that cannot be read."""
+    if repo not in _allowed:
+        try:
+            out = await run_cmd(
+                ["gh", "api", f"repos/{repo}", "--jq", "[.allow_merge_commit, .allow_rebase_merge, .allow_squash_merge]"], cwd=None, env=git_env(credentials), timeout=60
+            )
+            flags = json.loads(out)
+        except (WorkspaceError, ValueError):
+            return None
+        if not isinstance(flags, list) or len(flags) != 3 or any(flag is None for flag in flags):
+            return None  # not shown to this token
+        _allowed[repo] = tuple(method for method, ok in zip(("merge", "rebase", "squash"), flags) if ok)
+    return _allowed[repo]
+
+
 async def merge(credentials: Credentials, repo: str, number: int, methods: tuple[str, ...] | list[str] = MERGE_METHODS) -> CheckResult:
+    """Merge a pull request with the first of ``methods`` the repository allows. A rebase GitHub cannot
+    replay (a branch with a merge commit that resolved a conflict: "can't be rebased") goes on to the next."""
     env = git_env(credentials)
+    order = list(methods or MERGE_METHODS)
+    allowed = await allowed_methods(credentials, repo)
+    if allowed:
+        order = [method for method in order if method in allowed] or order
     error = ""
-    for method in methods or MERGE_METHODS:
+    for method in order:
         try:
             await run_cmd(["gh", "pr", "merge", str(number), "--repo", repo, f"--{method}", "--delete-branch"], cwd=None, env=env, timeout=120)
             return CheckResult(ok=True, detail=method)
         except WorkspaceError as exc:
             error = str(exc)
-            if "not allowed" not in error.lower() and "not enabled" not in error.lower():
+            said = error.lower()
+            if "not allowed" in said or "not enabled" in said:
+                _allowed.pop(repo, None)  # the settings changed since they were read
+            elif "be rebased" not in said:
                 break  # not about the merge method: another one would fail the same way
     return CheckResult(ok=False, detail=error[-600:])
+
+
+async def merged_soon(credentials: Credentials, repo: str, number: int, tries: int = 10, pause: float = 2.0) -> bool:
+    """Whether GitHub marks a pull request as merged after its head was pushed to the base branch. It
+    does so by itself, a moment later; its branch is removed only then, or the pull request would be closed."""
+    for attempt in range(tries):
+        try:
+            if (await pull_request(credentials, repo, number)).state == "merged":
+                return True
+        except (WorkspaceError, ValueError):
+            pass
+        if attempt < tries - 1:
+            await asyncio.sleep(pause)
+    return False
 
 
 async def commit_checks(credentials: Credentials, repo: str, sha: str) -> list[PullRequestCheck]:

@@ -434,13 +434,35 @@ class MergeRequest(PullRequestRef):
     key: str | None = None
     remote: RepoSpec | None = None
     delete_branches: dict[str, str] = {}  # branch -> the commit that landed
+    # The train's checked commit, its base and its branch: the base branch is moved to exactly that
+    # commit if it can be (a fast-forward), before the pull request is merged in any other way.
+    base: str = ""
+    head_sha: str = ""
+    branch: str = ""
+    restack: list[str] = []  # branches that may build on the train: moved onto the base branch after a squash
 
 
 @app.post("/github/pull-request/merge", response_model=CheckResult)
 async def github_merge(ref: MergeRequest) -> CheckResult:
+    """Land a train's pull request. First the checked commit itself, pushed to the base branch (a fast-forward,
+    so every commit stays as it was: branches built on them go on as they are). Refused when the base branch
+    moved or its protection forbids it: then the pull request is merged with a method the repository allows."""
+    pushed = None
+    if ref.key and ref.remote and ref.base and ref.head_sha:
+        pushed = await trains.land(TrainLandSpec(credentials=ref.credentials, key=ref.key, remote=ref.remote, base=ref.base, head_sha=ref.head_sha, delete_branches=ref.delete_branches))
+        if pushed.ok:
+            if ref.branch and await github.merged_soon(ref.credentials, ref.repo, ref.number):
+                await trains.delete_branches(ref.credentials, ref.remote, ref.key, {ref.branch: ref.head_sha})
+            return CheckResult(ok=True, detail="fast-forward")
     result = await github.merge(ref.credentials, ref.repo, ref.number, ref.methods)
     if result.ok and ref.key and ref.remote and ref.delete_branches:
         await trains.delete_branches(ref.credentials, ref.remote, ref.key, ref.delete_branches)
+    if result.ok and result.detail == "squash" and ref.key and ref.remote and ref.base and ref.head_sha and ref.restack:
+        moved = await trains.restack(ref.credentials, ref.remote, ref.key, ref.base, ref.head_sha, ref.restack)
+        if moved:
+            result.detail += "; moved onto it: " + ", ".join(moved)
+    if not result.ok and pushed is not None:
+        result.detail = f"push of the checked commit: {pushed.detail[-250:]} | merge: {result.detail[-300:]}"
     return result
 
 

@@ -734,16 +734,22 @@ async def test_merge_tries_the_methods_a_repository_allows(monkeypatch):
     from plainboard_runner import github
 
     calls = []
+    monkeypatch.setattr(github, "_allowed", {})
 
     async def fake_run(args, cwd, env, timeout=600):
+        if args[:2] == ["gh", "api"]:
+            calls.append("settings")
+            return "[false,true,true]"  # merge commits not allowed, rebase and squash are
         calls.append(next(a for a in args if a in ("--squash", "--merge", "--rebase")))
-        if "--squash" in args:
-            raise WorkspaceError("gh pr failed: Squash merges are not allowed on this repository")
+        if "--rebase" in args:
+            raise WorkspaceError("gh pr failed: GraphQL: This branch can't be rebased (mergePullRequest)")
         return ""
 
     monkeypatch.setattr(github, "run_cmd", fake_run)
-    result = await github.merge(Credentials(github_token="t"), "acme/api", 7)
-    assert result.ok and result.detail == "merge" and calls == ["--squash", "--merge"]
+    result = await github.merge(Credentials(github_token="t"), "acme/api", 7, ["merge", "rebase", "squash"])
+    assert result.ok and result.detail == "squash" and calls == ["settings", "--rebase", "--squash"]
+    result = await github.merge(Credentials(github_token="t"), "acme/api", 8, ["merge", "rebase", "squash"])
+    assert calls[3:] == ["--rebase", "--squash"]  # the settings are read once
 
     async def conflict(args, cwd, env, timeout=600):
         calls.append("x")
@@ -751,7 +757,7 @@ async def test_merge_tries_the_methods_a_repository_allows(monkeypatch):
 
     monkeypatch.setattr(github, "run_cmd", conflict)
     result = await github.merge(Credentials(github_token="t"), "acme/api", 7)
-    assert not result.ok and "not mergeable" in result.detail and calls[2:] == ["x"]  # another method would fail the same way
+    assert not result.ok and "not mergeable" in result.detail and calls[5:] == ["x"]  # another method would fail the same way
 
 
 async def test_how_far_the_running_plainboard_is_behind_its_upstream():

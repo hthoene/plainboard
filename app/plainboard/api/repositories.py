@@ -9,17 +9,17 @@ from ..schemas import RepositoryCreate, RepositoryOut, RepositoryUpdate
 from ..services import projects as project_service
 from ..services import repositories as repo_service
 from ..services import settings as settings_service
-from .deps import Runner, Session
+from .deps import Runs, Session
 
 router = APIRouter(prefix="/api", tags=["repositories"])
 
 
 @router.get("/github/repos")
-async def github_repos(session: Session, runner: Runner, project_id: int | None = None) -> dict[str, Any]:
+async def github_repos(session: Session, runs: Runs, project_id: int | None = None) -> dict[str, Any]:
     """Repositories visible to the GitHub token (project override first), for the repo picker."""
     override = project_service.github_token(await project_service.get(session, project_id)) if project_id else None
     credentials = settings_service.credentials(await settings_service.get_all(session), override)
-    return await runner.github_repos(credentials)
+    return await runs.runners.of(project_id).github_repos(credentials)  # a project's token goes to its own runner only
 
 
 class GithubRepoIn(BaseModel):
@@ -30,11 +30,11 @@ class GithubRepoIn(BaseModel):
 
 
 @router.post("/github/repos")
-async def create_github_repo(body: GithubRepoIn, session: Session, runner: Runner) -> dict[str, Any]:
+async def create_github_repo(body: GithubRepoIn, session: Session, runs: Runs) -> dict[str, Any]:
     """A new repository on GitHub, made with the GitHub token. The answer has the shape of the list above."""
     override = project_service.github_token(await project_service.get(session, body.project_id)) if body.project_id else None
     credentials = settings_service.credentials(await settings_service.get_all(session), override)
-    return await runner.github_create_repo(credentials, body.name, body.owner, body.private)
+    return await runs.runners.of(body.project_id).github_create_repo(credentials, body.name, body.owner, body.private)
 
 
 @router.get("/projects/{project_id}/repositories", response_model=list[RepositoryOut])

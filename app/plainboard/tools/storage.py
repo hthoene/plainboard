@@ -19,16 +19,17 @@ class DeleteArgs(BaseModel):
 async def list_cleanup(ctx: ToolContext, _args) -> str:
     settings = await settings_service.get_all(ctx.session)
     try:
-        found = await storage.listing(ctx.session, ctx.runs.runner)
+        found = await storage.listing(ctx.session, ctx.runs.runners.of(ctx.project.id), runner_id=ctx.project.runner_id)
     except RunnerError as exc:
         raise ToolError(str(exc)) from exc
-    return storage.tool_listing(found, ctx.project, storage.TREND.forecast(), settings)
+    # The disk's trend is watched on the built-in runner only.
+    return storage.tool_listing(found, ctx.project, storage.TREND.forecast() if ctx.project.runner_id is None else None, settings)
 
 
 @tool("delete_cleanup", "Delete your project's cleanup candidates from list_cleanup.", DeleteArgs, roles=(MANAGER,))
 async def delete_cleanup(ctx: ToolContext, args: DeleteArgs) -> str:
     try:
-        result, refused = await storage.delete(ctx.session, ctx.runs.runner, ctx.project, ctx.agent, args.paths, args.force)
+        result, refused = await storage.delete(ctx.session, ctx.runs.runners.of(ctx.project.id), ctx.project, ctx.agent, args.paths, args.force)
     except RunnerError as exc:
         raise ToolError(str(exc)) from exc
     out = storage.delete_text(result, refused)

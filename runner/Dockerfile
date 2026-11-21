@@ -43,7 +43,7 @@ RUN git config --system credential.https://github.com.helper '!gh auth git-crede
 
 RUN useradd --create-home --uid 1000 --shell /bin/bash agent \
     && echo "agent ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agent && chmod 0440 /etc/sudoers.d/agent \
-    && mkdir -p /workspaces /uploads && chown agent:agent /workspaces
+    && mkdir -p /workspaces /uploads && chown agent:agent /workspaces /uploads
 
 ENV VIRTUAL_ENV=/opt/venv
 RUN python -m venv $VIRTUAL_ENV
@@ -61,6 +61,8 @@ COPY runner/plainboard_runner /src/runner/plainboard_runner
 RUN pip install --no-cache-dir /src/protocol "/src/runner[dev]" \
     && ln -s $VIRTUAL_ENV/lib/python3.12/site-packages/claude_agent_sdk/_bundled/claude /usr/local/bin/claude
 COPY runner/tests /src/runner/tests
+# The commit this image is built from: an external runner tells PlainBoard, which shows a mismatch.
+RUN --mount=type=bind,target=/ctx python -I /ctx/app/plainboard/services/version.py /ctx/.git > /etc/plainboard-commit
 
 USER agent
 WORKDIR /workspaces

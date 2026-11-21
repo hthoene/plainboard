@@ -116,15 +116,16 @@ async def delete_project(project_id: int, session: Session, runs: Runs, files: b
         raise ServiceError("Stop all running agents of this project first")
     for job in await job_service.running_for_project(session, project_id):
         await runs.stop_job(session, job, settle=False)  # nothing of it keeps running on the runner
-    await project_service.delete(session, project, runs.runner, files=files)
+    await project_service.delete(session, project, runs.runners.of(project_id), files=files)
+    runs.runners.assign(project_id, None)
 
 
 @router.post("/projects/{project_id}/check-github", response_model=CheckOut)
-async def check_project_github(project_id: int, session: Session, runner: Runner) -> CheckOut:
+async def check_project_github(project_id: int, session: Session, runs: Runs) -> CheckOut:
     project = await project_service.get(session, project_id)
     values = await settings_service.get_all(session)
     repos = repo_service.specs(await repo_service.list_for_project(session, project_id))
-    result = await runner.check_github(settings_service.credentials(values, project_service.github_token(project)), repos)
+    result = await runs.runners.of(project_id).check_github(settings_service.credentials(values, project_service.github_token(project)), repos)
     return CheckOut(ok=result.ok, detail=result.detail)
 
 
@@ -156,10 +157,10 @@ async def revoke_public_api_key(key_id: int, session: Session) -> None:
 
 
 @router.get("/projects/{project_id}/previews", response_model=list[PreviewOut])
-async def list_previews(project_id: int, session: Session, runner: Runner) -> list[PreviewOut]:
+async def list_previews(project_id: int, session: Session, runs: Runs) -> list[PreviewOut]:
     jobs = preview_service.servers(await job_service.running_for_project(session, project_id))
     try:
-        ports = await runner.job_ports([job.runner_id for job in jobs]) if jobs else {}
+        ports = await runs.runners.of(project_id).job_ports([job.runner_id for job in jobs]) if jobs else {}
     except RunnerError:
         ports = {}  # the runner is restarting, or older than this: nothing to show for now
     return await preview_service.running(session, project_id, jobs, ports)

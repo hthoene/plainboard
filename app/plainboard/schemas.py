@@ -350,6 +350,7 @@ class ProjectOut(ORM):
     parallel_agents: int | None = None
     account_id: int | None = None
     account_ids: list[int] = []  # the only accounts it may use, set by an admin; empty: any
+    runner_id: int | None = None  # its external runner; None: the built-in one
     role: ProjectRole | None = None  # the asking user's role; not part of events, which go to everyone
     auto_archive_days: int
     review_days: int = 3
@@ -987,6 +988,55 @@ class PreviewOut(BaseModel):
     started_at: UTCDateTime
     access: Literal["private", "password", "public"]  # who opens it without the login (share_preview)
     shared_until: UTCDateTime | None = None
+
+
+# --- runners --------------------------------------------------------------------------------
+
+
+class RunnerIn(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
+class RunnerOut(BaseModel):
+    """An external runner, as Settings > Runners lists it. Disk and memory only while it is connected."""
+
+    id: int
+    name: str
+    connected: bool
+    version: str = ""  # the commit it runs, short; empty: not known
+    version_ok: bool = True  # the same as the app's (or one of them is not known)
+    last_seen_at: UTCDateTime | None = None
+    created_at: UTCDateTime
+    projects: list[str] = []
+    disk_total: int = 0
+    disk_used: int = 0
+    memory_total: int = 0
+    memory_used: int = 0
+
+
+class RunnerCreated(BaseModel):
+    """Shown once: the token is stored only as a hash."""
+
+    runner: RunnerOut
+    token: str
+    command: str  # docker run ...
+    compose: str  # the same as a docker-compose.yml
+
+
+class RunnerChoice(BaseModel):
+    id: int | None  # None: the built-in runner
+    name: str
+    connected: bool
+
+
+class ProjectRunnerOut(BaseModel):
+    runner_id: int | None
+    runners: list[RunnerChoice]
+    busy: str = ""  # why it can't be switched right now; empty: it can
+
+
+class ProjectRunnerIn(BaseModel):
+    runner_id: int | None
 
 
 # --- events ---------------------------------------------------------------------------------

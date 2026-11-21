@@ -130,7 +130,7 @@ async def merge_when_green(ctx: ToolContext, args: MergeWhenGreenArgs) -> str:
         raise ToolError("Name the branch with your change, not the base branch.")
     credentials = settings_service.credentials(await settings_service.get_all(ctx.session), project_service.github_token(ctx.project))
     try:
-        head = await ctx.runs.runner.branch_head(credentials, landing_service.remote(repo), branch)
+        head = await ctx.runs.runners.of(ctx.project.id).branch_head(credentials, landing_service.remote(repo), branch)
     except RunnerError as exc:
         raise ToolError(f"Could not reach {repo.name}: {str(exc)[:300]}") from exc
     if head is None:

@@ -15,6 +15,7 @@ import { CheckBadge } from "../settings/SettingsDialog";
 import { MembersEditor } from "./MembersEditor";
 import { ProjectAccounts, allowedAccounts, sameAccounts } from "./ProjectAccounts";
 import { ProjectPauseSwitch } from "./ProjectPause";
+import { ProjectRunnerEditor } from "./ProjectRunner";
 import { ExportProject } from "./MoveProject";
 import { RepositoriesEditor, toBody, toDraft } from "./RepositoriesEditor";
 
@@ -253,6 +254,7 @@ export function ProjectSettings({ onOpenTeam, onDeleted }: { onOpenTeam: () => v
         </div>
       ),
     },
+    { id: "runner", label: t("projectRunner.title"), description: t("projectRunner.description"), content: <ProjectRunnerEditor projectId={project.id} isOwner={isOwner} /> },
     { id: "move", label: t("move.label"), description: t("move.description"), content: <ExportProject project={project} /> },
     {
       id: "advanced",

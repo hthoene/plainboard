@@ -17,6 +17,7 @@ import { AccountEditor } from "./AccountEditor";
 import { AccountsEditor } from "./AccountsEditor";
 import { EndpointAccounts } from "./EndpointAccounts";
 import { PauseEditor } from "./PauseEditor";
+import { RunnersEditor } from "./RunnersEditor";
 import { SecretsEditor } from "./SecretsEditor";
 import { UsageEditor } from "./UsageEditor";
 import { UsersEditor } from "./UsersEditor";
@@ -245,6 +246,7 @@ export function SettingsDialog({ open, onClose, section }: { open: boolean; onCl
           ),
         },
         { id: "pause", label: t("pause.title"), description: t("pause.description"), content: <PauseEditor /> },
+        { id: "runners", label: t("runners.title"), description: t("runners.description"), content: <RunnersEditor /> },
         {
           id: "usage",
           label: t("usage.title"),

@@ -12,7 +12,6 @@ from fastapi import APIRouter, Form, Request, WebSocket
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
 from starlette.requests import HTTPConnection
-from websockets.asyncio.client import connect
 from websockets.exceptions import InvalidHandshake
 
 from ..config import get_config
@@ -38,38 +37,50 @@ UNLOCK_PREFIX = "/api/public/preview/"  # under the public API: its visitors are
 Access = Literal["ok", "shared", "password", "denied", "unknown"]
 
 
-async def _listening(conn: HTTPConnection, ids: list[str]) -> dict[str, list[int]]:
-    try:
-        return await conn.app.state.runner.job_listening(ids)
-    except RunnerError:
-        return {}  # the runner is restarting: no port is known, none opens
+async def _listening(conn: HTTPConnection, jobs: list) -> dict[str, list[int]]:
+    """Every port these jobs listen on, asked of each project's runner."""
+    runners = conn.app.state.runs.runners
+    by_runner: dict[int | None, list[str]] = {}
+    for job in jobs:
+        by_runner.setdefault(runners.runner_id(job.project_id), []).append(job.runner_id)
+    found: dict[str, list[int]] = {}
+    for runner_id, ids in by_runner.items():
+        try:
+            found |= await runners.client(runner_id).job_listening(ids)
+        except RunnerError:
+            pass  # the runner is restarting or away: no port of it is known, none opens
+    return found
 
 
-async def access(conn: HTTPConnection, port: int) -> Access:
+async def access(conn: HTTPConnection, port: int) -> tuple[Access, int | None]:
     """``ok``: the viewer has a role in the project whose running server listens on the port, is an
     admin, or gave the password of its share; ``shared``: it is shared publicly (no login involved);
     ``unknown``: no server of an agent runs there. On the preview origin the viewer is who came
-    there from PlainBoard (its cookie for this port), on PlainBoard's own the signed-in user."""
+    there from PlainBoard (its cookie for this port), on PlainBoard's own the signed-in user.
+    With it the project whose server it is: a port can be used on several runners, and the viewer
+    gets the one of a project they have a part in, else the one that shares it."""
     async with sessionmaker()() as session:
-        project_id = await conn.app.state.preview_owners.project_of(session, port, lambda ids: _listening(conn, ids))
-        if project_id is None:
-            return "unknown"
+        projects = await conn.app.state.preview_owners.project_of(session, port, lambda jobs: _listening(conn, jobs))
+        if not projects:
+            return "unknown", None
         if guard.on_preview_host(conn.headers):
             entered = preview.read_auth(conn.cookies.get(preview.auth_cookie(port)), port)
             user = await session_service.user_of(session, entered[0], entered[2], entered[1]) if entered else None
         else:
             who = await access_service.principal(session, conn.cookies.get(SESSION_COOKIE))
             user = who.user if who else None
-        if user is not None and await user_service.role_in(session, user, project_id) is not None:
-            return "ok"
+        if user is not None:
+            for project_id in projects:
+                if await user_service.role_in(session, user, project_id) is not None:
+                    return "ok", project_id
         row = await preview.active_share(session, port)
-    if row is None or row.project_id != project_id:  # a share of the project that ran here before is none
-        return "denied"
+    if row is None or row.project_id not in projects:  # a share of the project that ran here before is none
+        return "denied", None
     if row.access == "public":
-        return "shared"
+        return "shared", row.project_id
     if preview.unlocked(row, conn.cookies.get(preview.unlock_cookie(port))):
-        return "ok"
-    return "password"
+        return "ok", row.project_id
+    return "password", None
 
 
 def new_client() -> httpx.AsyncClient:
@@ -155,7 +166,7 @@ async def _proxy(request: Request, port: int, path: str, base: bool) -> Response
     preview.check_port(port)
     if preview.origin() and not guard.on_preview_host(request.headers):
         return await _to_preview_origin(request, port, path, base)
-    allowed = await access(request, port)
+    allowed, project_id = await access(request, port)
     if allowed == "unknown":
         return PlainTextResponse(preview.unreachable(port), status_code=404)
     if allowed == "password":
@@ -163,7 +174,8 @@ async def _proxy(request: Request, port: int, path: str, base: bool) -> Response
     if allowed == "denied":
         return PlainTextResponse("This preview is private. Open it from PlainBoard, signed in with a role in its project.", status_code=401)
     preview.note_opened(port)
-    client: httpx.AsyncClient = request.app.state.preview_client
+    runners = request.app.state.runs.runners
+    client: httpx.AsyncClient = runners.preview_client(runners.runner_id(project_id), request.app.state.preview_client)
     body = await request.body()
     upstream = client.build_request(
         request.method,
@@ -243,7 +255,7 @@ async def _pipe(websocket: WebSocket, port: int, path: str, base: bool = False) 
     if preview.origin() and not guard.on_preview_host(websocket.headers):
         await websocket.close(code=4404)  # the pages are on the preview origin, and so are their sockets
         return
-    allowed = await access(websocket, port)
+    allowed, project_id = await access(websocket, port)
     if allowed not in ("ok", "shared"):
         await websocket.close(code=4401)
         return
@@ -252,11 +264,15 @@ async def _pipe(websocket: WebSocket, port: int, path: str, base: bool = False) 
         await websocket.close(code=4403)
         return
     headers = [(k, v) for k, v in preview.request_headers(list(websocket.headers.items()), port) if k.lower() in ("cookie", "user-agent", "accept-language")]
+    runners = websocket.app.state.runs.runners
+    upstream_path = preview.upstream_path(port, path, base) + (f"?{websocket.url.query}" if websocket.url.query else "")
     try:
-        upstream = await connect(
-            f"ws://localhost:{port}{preview.upstream_path(port, path, base)}" + (f"?{websocket.url.query}" if websocket.url.query else ""),
+        upstream = await runners.socket(
+            runners.runner_id(project_id),
+            port,
+            upstream_path,
+            url=f"ws://localhost:{port}{upstream_path}",
             host=preview.runner_host(),  # where to connect; the URL is what the server sees
-            port=port,
             origin=f"http://localhost:{port}",
             subprotocols=websocket.scope.get("subprotocols") or None,
             additional_headers=headers,

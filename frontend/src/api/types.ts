@@ -24,6 +24,7 @@ export interface Project {
   account_id: number | null;
   /** The only subscriptions it may use, set by an admin; empty: any. */
   account_ids: number[];
+  runner_id?: number | null;
   /** The signed-in user's role in the project. */
   role: ProjectRole | null;
   auto_archive_days: number;
@@ -637,4 +638,32 @@ export interface UsageCleanup {
   told: boolean;
   by: string;
   project: string;
+}
+
+export interface RunnerInfo {
+  id: number;
+  name: string;
+  connected: boolean;
+  version: string;
+  version_ok: boolean;
+  last_seen_at: string | null;
+  created_at: string;
+  projects: string[];
+  disk_total: number;
+  disk_used: number;
+  memory_total: number;
+  memory_used: number;
+}
+
+export interface RunnerCreated {
+  runner: RunnerInfo;
+  token: string;
+  command: string;
+  compose: string;
+}
+
+export interface ProjectRunner {
+  runner_id: number | null;
+  runners: { id: number | null; name: string; connected: boolean }[];
+  busy: string;
 }

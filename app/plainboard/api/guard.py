@@ -24,7 +24,7 @@ SAFE_METHODS = ("GET", "HEAD", "OPTIONS", "TRACE")
 NO_CSRF_CHECK = ("/api/internal/", "/api/public/", preview.PREFIX + "/", preview.BASE_PREFIX + "/")
 # What the preview origin serves: previews, and how one gets in (a token from PlainBoard, a share's password).
 PREVIEW_HOST_PATHS = (preview.PREFIX + "/", preview.BASE_PREFIX + "/", "/api/public/preview/")
-OWN_SOCKETS = re.compile(r"^/api/projects/\d+/(ws|browser)$")
+OWN_SOCKETS = re.compile(r"^/api/(projects/\d+/(ws|browser)|runners/connect)$")
 IMPORT_PATH = "/api/projects/import"
 HSTS = (b"strict-transport-security", b"max-age=31536000")
 

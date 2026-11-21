@@ -126,6 +126,19 @@ class Setting(Base):
     secret: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class Runner(Timestamps, Base):
+    """An external runner: a runner on another machine that connects out to PlainBoard with its token
+    (orchestration/runners.py). The built-in runner has no row. Installation data, not a project's."""
+
+    __tablename__ = "runners"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)  # sha256 of the token, which is shown once
+    version: Mapped[str] = mapped_column(String(64), default="", server_default="")  # the commit it said it runs, last time
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime)
+    away_told_at: Mapped[datetime | None] = mapped_column(DateTime)  # its managers heard it is away (once per absence)
+
+
 # --- projects & agents ----------------------------------------------------------------------
 
 
@@ -153,6 +166,8 @@ class Project(Timestamps, Base):
     # The only accounts this project's agents may run on, set by an admin (empty: any). A project
     # shared with others does not draw on a subscription that is meant for something else.
     account_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
+    # The runner its agents, jobs and trains run on. Unset: the built-in one.
+    runner_id: Mapped[int | None] = mapped_column(ForeignKey("runners.id", ondelete="SET NULL"))
     # Paused by a person, for good: nothing of this project starts until a person resumes it
     # (RunManager.pause_project). Not ended by a restart, nor when "pause everything" ends.
     paused_at: Mapped[datetime | None] = mapped_column(DateTime)

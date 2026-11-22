@@ -8,7 +8,9 @@ import time
 from collections.abc import AsyncIterator
 
 import httpx
-from plainboard_protocol import ProjectFiles, TidyResult, TidySpec, CandidatesSpec, CheckResult, CleanupCandidate, CleanupResult, CleanupSpec, CompletionResult, CompletionSpec, Credentials, DeleteSpec, JobPort, JobSpec, JobState, LimitsEvent, MachineUsage, ProviderAccount, ProviderInfo, PullRequestCheck, PullRequestState, RepoSpec, RunEvent, RunSpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, TrimSpec, UnpushedSpec, UnpushedWork, UpstreamState, parse_event
+from plainboard_protocol import ProjectFiles, TidyResult, TidySpec, CandidatesSpec, CheckResult, CleanupCandidate, CleanupResult, CleanupSpec, CompletionResult, CompletionSpec, Credentials, DeleteSpec, JobPort, JobSpec, JobState, LimitsEvent, MachineUsage, ProviderAccount, ProviderInfo, PullRequestCheck, PullRequestState, RepoSpec, RunEvent, RunSpec, SkillFetch, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, TrimSpec, UnpushedSpec, UnpushedWork, UpstreamState, parse_event
+
+from ..services.errors import ServiceError
 
 log = logging.getLogger(__name__)
 
@@ -253,6 +255,20 @@ class RunnerClient:
         if resp.status_code >= 400:
             return {"ok": False, "detail": resp.text[:300], "repos": []}
         return resp.json()
+
+    async def fetch_skill(self, spec: SkillFetch) -> bytes:
+        """A skill's folder from git as a zip (``SkillFetch``). A failure is the user's to read: a ServiceError."""
+        try:
+            resp = await self._client.post("/skills/fetch", json=spec.model_dump(mode="json"), timeout=200)
+        except httpx.HTTPError as exc:
+            raise ServiceError(unreachable(exc), 502) from exc
+        if resp.status_code >= 400:
+            try:
+                detail = str(resp.json().get("detail") or resp.text)
+            except ValueError:
+                detail = resp.text
+            raise ServiceError(detail[:600], 400 if resp.status_code < 500 else 502)
+        return resp.content
 
     async def tidy_branches(self, spec: TidySpec) -> TidyResult:
         try:

@@ -568,6 +568,11 @@ class ClaudeCodeProvider(Provider):
         runs on, for a provider that has to name it more than once (providers/endpoints.py)."""
         return auth_env(creds)
 
+    def skills_folder(self, spec: RunSpec, workspace: Path) -> Path | None:
+        # Claude Code loads the skills of its working directory with the project's settings (setting_sources),
+        # which only the full toolset reads.
+        return workspace / ".claude" / "skills" if spec.toolset == "full" else None
+
     def _options(self, spec: RunSpec, bridge: ToolBridge, stderr_tail: collections.deque[str], background: BackgroundWork | None = None) -> ClaudeAgentOptions:
         env = {**tool_env(spec.credentials), **self.auth_env(spec.credentials, spec.model), **spec.env}
         mcp_servers: dict[str, Any] = {s.name: external_mcp_config(s) for s in spec.mcp_servers if s.name != MCP_SERVER_NAME}

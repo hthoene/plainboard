@@ -46,6 +46,7 @@ class UserOut(ORM):
     may_use_shared: bool = False
     enabled: bool
     avatar_version: int = 0  # 0: no picture; otherwise part of its address (/api/avatars/{id}?v=...)
+    show_mentions: bool = True
     created_at: UTCDateTime
 
 
@@ -116,6 +117,21 @@ class MemberOut(BaseModel):
     username: str
     name: str
     role: ProjectRole
+    project_owner: bool = False  # the person whose limits hold for the project (Project.owner_id), not the role
+
+
+class OwnerChangeOut(BaseModel):
+    """What changes for a project if this person owned it (services/ownership.py)."""
+
+    user_id: int
+    name: str
+    runner: str  # the project's runner; "": the built-in one
+    runner_allowed: bool  # False: the change is refused until the project moves to another runner
+    lost_accounts: list[str]  # subscriptions the project may use now and then no longer
+    unpinned: list[str]  # "the project" and agents whose chosen subscription is then chosen automatically
+    loses_shared: bool  # the installation's secrets, GitHub token and MCP servers
+    max_parallel_before: int | None
+    max_parallel_after: int | None
 
 
 # --- repositories ---------------------------------------------------------------------------
@@ -1017,6 +1033,37 @@ class McpServerOut(ORM):
     enabled: bool
     all_agents: bool
     agent_ids: list[int] = Field(default_factory=list)
+
+
+class SkillOut(ORM):
+    id: int
+    name: str
+    description: str
+    enabled: bool
+    all_agents: bool
+    agent_ids: list[int] = Field(default_factory=list)
+    source: str
+    source_url: str
+    source_ref: str
+    source_path: str
+    content_hash: str
+    size: int
+    file_count: int
+    updated_at: UTCDateTime
+
+
+class SkillImport(BaseModel):
+    url: str = Field(max_length=500)
+    ref: str = Field(default="", max_length=200)
+    path: str = Field(default="", max_length=300)
+    all_agents: bool = True
+    agent_ids: list[int] = Field(default_factory=list)
+
+
+class SkillUpdate(BaseModel):
+    enabled: bool | None = None
+    all_agents: bool | None = None
+    agent_ids: list[int] | None = None
 
 
 # --- settings -------------------------------------------------------------------------------

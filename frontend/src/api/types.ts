@@ -369,6 +369,23 @@ export interface Schedule {
   created_at: string;
 }
 
+export interface Skill {
+  id: number;
+  name: string;
+  description: string;
+  enabled: boolean;
+  all_agents: boolean;
+  agent_ids: number[];
+  source: "upload" | "git";
+  source_url: string;
+  source_ref: string;
+  source_path: string;
+  content_hash: string;
+  size: number;
+  file_count: number;
+  updated_at: string;
+}
+
 export interface McpServer {
   id: number;
   project_id: number | null;
@@ -568,6 +585,8 @@ export interface User {
   enabled: boolean;
   /** 0: no profile picture. */
   avatar_version: number;
+  /** The @ list and browser notifications for mentions; they are recorded either way. */
+  show_mentions: boolean;
   created_at: string;
 }
 
@@ -606,6 +625,23 @@ export interface Member {
   username: string;
   name: string;
   role: ProjectRole;
+  /** The person whose limits hold for the project (not the role "owner"). */
+  project_owner: boolean;
+}
+
+/** What changes for a project if this person owned it (GET /projects/{id}/owner/{user_id}). */
+export interface OwnerChange {
+  user_id: number;
+  name: string;
+  /** The project's runner; "": the built-in one. */
+  runner: string;
+  runner_allowed: boolean;
+  lost_accounts: string[];
+  /** "the project" and agents whose chosen subscription is then chosen automatically. */
+  unpinned: string[];
+  loses_shared: boolean;
+  max_parallel_before: number | null;
+  max_parallel_after: number | null;
 }
 
 /** Disk and memory of the installation (GET /usage, admins). Sizes in bytes. */

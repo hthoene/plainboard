@@ -66,6 +66,7 @@ from ..services import ticket_state
 from ..services import flow_log
 from ..services import jobs as job_service
 from ..services import mcp as mcp_service
+from ..services import skills as skill_service
 from ..services import mentions as mention_service
 from ..services import pause as pause_service
 from ..services import permissions
@@ -220,6 +221,7 @@ class RunManager:
         self._limits_asked = 0.0
         self._limits_task: asyncio.Task[None] | None = None
         self._state_tasks: dict[int, asyncio.Task[None]] = {}  # tickets whose state is being rewritten
+        self._resting: set[asyncio.Task[None]] = set()  # paused projects whose turns and jobs are being stopped
         self._state_tried: dict[int, float] = {}  # closed tickets whose last rewrite was started then (see refresh_closed_tickets)
         self._unread: dict[int, set[int]] = {}  # running turn -> waiting chat messages (runs) it was told about and has not read yet
         # agent -> what changes its waiting chat run (a message joining, one withdrawn): read and write back
@@ -967,19 +969,38 @@ class RunManager:
     async def pause_project(self, s: AsyncSession, project: Project, by: str) -> None:
         """One project comes to rest and stays there until a person resumes it. Nothing of it starts,
         whoever asks for it: the turns that run are told to wrap up, the background jobs are stopped,
-        and what is queued or gets queued waits. Unlike "pause everything" it does not end by itself."""
+        and what is queued or gets queued waits. Unlike "pause everything" it does not end by itself.
+        Saved at once; telling the turns and stopping the jobs goes on in the background (``_rest_project``)."""
         project.paused_at, project.paused_by = project.paused_at or utcnow(), project.paused_by or by
         await s.commit()
-        reason = f"{by} paused this project. Your open work goes on by itself when it is resumed."
-        turns = select(Run).where(Run.project_id == project.id, Run.status == RunStatus.RUNNING, Run.stop_requested_at.is_(None))
-        for run in list(await s.scalars(turns)):
-            if await self.runners.of(run.project_id).notify_run(run.id, prompts.wind_down_notice(reason, jobs_end=True), urgent=True):
-                run.stop_requested_at = utcnow()
-                await s.commit()
-                bus.publish(run.project_id, "run.upserted", RunOut.model_validate(run))
-        await self._rest_jobs(s, project_id=project.id)  # of everyone without a turn; a turn that still runs wraps up first
         await flow_log.record(s, project.id, "project.paused", by=by)
         bus.publish(project.id, "project.updated", project_service.to_out(project))
+        task = asyncio.create_task(self._rest_project(project.id, by), name=f"rest-project-{project.id}")
+        self._resting.add(task)
+        task.add_done_callback(self._resting.discard)
+
+    async def _rest_project(self, project_id: int, by: str) -> None:
+        """Every one of these is a call to the runner (an external one through its tunnel): together they
+        took seconds, and the switch waited for them. Ends early when the project is resumed meanwhile."""
+        reason = f"{by} paused this project. Your open work goes on by itself when it is resumed."
+        try:
+            async with self._sm() as s:
+                turns = select(Run).where(Run.project_id == project_id, Run.status == RunStatus.RUNNING, Run.stop_requested_at.is_(None))
+                for run in list(await s.scalars(turns)):
+                    if not await self._still_paused(s, project_id):
+                        return
+                    if await self.runners.of(run.project_id).notify_run(run.id, prompts.wind_down_notice(reason, jobs_end=True), urgent=True):
+                        run.stop_requested_at = utcnow()
+                        await s.commit()
+                        bus.publish(run.project_id, "run.upserted", RunOut.model_validate(run))
+                if await self._still_paused(s, project_id):
+                    await self._rest_jobs(s, project_id=project_id)  # of everyone without a turn; a turn that still runs wraps up first
+        except Exception:
+            log.exception("Pausing project %s: its turns and jobs were not all stopped", project_id)
+
+    @staticmethod
+    async def _still_paused(s: AsyncSession, project_id: int) -> bool:
+        return await s.scalar(select(Project.paused_at).where(Project.id == project_id)) is not None
 
     async def resume_project(self, s: AsyncSession, project: Project) -> None:
         """End a project's pause: what waited starts, and open assignments go on with their next turn."""
@@ -1471,6 +1492,7 @@ class RunManager:
                     base_url=get_config().internal_url, run_id=str(run.id), run_token=ctx.token, tools=registry.tool_defs_for(agent)
                 ),
                 mcp_servers=await mcp_service.specs_for_agent(s, agent),
+                skills=await skill_service.specs_for_agent(s, agent),
             )
             return spec, ctx
 

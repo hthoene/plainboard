@@ -1,6 +1,7 @@
 """How work flows: one piece of work per assignment, with its own context, one report and its time
 measured; pull requests watched and merged without any agent's turn."""
 
+import asyncio
 import gzip
 import json
 from datetime import timedelta
@@ -1445,6 +1446,31 @@ def test_checks_that_cannot_be_read_do_not_stop_landing(client, project, lands_o
     assert events == ["base.unchecked", "base.unchecked", "base.green"]
 
 
+def test_pausing_a_project_does_not_wait_for_the_runner(client, project):
+    """Telling the turns to wrap up goes to the runner (an external one through its tunnel): the switch does not wait for it."""
+    pid = project["id"]
+    manager = manager_of(client, pid)
+    fake = runner(client)
+    gate: list[bool] = []
+    told = fake.notify_run
+
+    async def slow_notify(run_id: int, text: str, urgent: bool = False) -> bool:
+        while not gate:
+            await asyncio.sleep(0.01)
+        return await told(run_id, text, urgent)
+
+    fake.notify_run = slow_notify
+    chat(client, manager["id"], "HOLD\nSAY wrapped up")
+    wait_for(lambda: any(r["status"] == "running" for r in runs_of(client, pid)))
+    assert client.post(f"/api/projects/{pid}/pause").json()["paused_at"]
+    assert not fake.notices
+    gate.append(True)
+    wait_for(lambda: any("paused this project" in text for _, text in fake.notices))
+    fake.released = True
+    wait_for(lambda: idle(client, pid))
+    assert client.delete(f"/api/projects/{pid}/pause").json()["paused_at"] is None
+
+
 def test_a_paused_project_starts_nothing_until_a_person_resumes_it(client, project):
     from datetime import datetime
 
@@ -1462,8 +1488,8 @@ def test_a_paused_project_starts_nothing_until_a_person_resumes_it(client, proje
     wait_for(lambda: any(r["status"] == "running" for r in runs_of(client, pid)))
     paused = client.post(f"/api/projects/{pid}/pause").json()
     assert paused["paused_at"] and paused["paused_by"]
-    assert any("You are being paused" in text and "paused this project" in text for _, text in fake.notices)
-    assert agents_by_slug(client, pid)["dev1"]["running_jobs"] == 0
+    wait_for(lambda: any("You are being paused" in text and "paused this project" in text for _, text in fake.notices))
+    wait_for(lambda: agents_by_slug(client, pid)["dev1"]["running_jobs"] == 0)
     fake.released = True
     wait_for(lambda: idle(client, pid))
     before = turns()

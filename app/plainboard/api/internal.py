@@ -6,11 +6,12 @@ import asyncio
 import secrets
 from typing import Any
 
-from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, Form, Header, HTTPException, Request, Response, UploadFile
 from plainboard_protocol import TOOL_PENDING_HEADER, ToolCallResult
 
 from ..services import agents as agent_service
 from ..services import board as board_service
+from ..services import skills as skill_service
 from ..services.errors import ServiceError
 from .deps import Runs, Session
 
@@ -64,6 +65,17 @@ async def pending_tool_call(run_id: int, call_id: str, runs: Runs, authorization
     if _calls.get(call_id, (None,))[0] != run_id:
         return ToolCallResult(text="This tool call's result is gone.", is_error=True)
     return await _answer(call_id)
+
+
+@router.get("/runs/{run_id}/skills/{skill_id}")
+async def skill_archive(run_id: int, skill_id: int, runs: Runs, session: Session, authorization: str | None = Header(default=None)) -> Response:
+    """The zip of one of the turn's skills: the runner fetches it when what it laid down is older."""
+    ctx = _context(runs, run_id, authorization)
+    try:
+        data = await skill_service.archive_for_agent(session, ctx.project_id, ctx.agent_id, skill_id)
+    except ServiceError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+    return Response(data, media_type="application/zip")
 
 
 @router.post("/runs/{run_id}/attachments", response_model=ToolCallResult)

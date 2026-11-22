@@ -121,7 +121,7 @@ def test_a_persons_limit_of_agents_at_work_holds_across_their_projects(client, p
     devs = [client.post(f"/api/projects/{pid}/agents", json={"name": "Dev", "role": "Developer", "description": "x"}).json() for pid in (one, two)]
     working = lambda: [r["agent_id"] for pid in (one, two) for r in runs_of(client, pid) if r["status"] == "running"]
     for dev in devs:
-        assert client.post(f"/api/agents/{dev['id']}/messages", json={"text": "HOLD"}).status_code == 202
+        assert client.post(f"/api/agents/{dev['id']}/messages", json={"text": "Go on\nHOLD"}).status_code == 202  # HOLD on a line of its own: the name goes in front of the first
     wait_for(lambda: len(working()) == 1)
     assert len(working()) == 1  # each project would have a slot of its own; the person has one
     runner: FakeRunner = client.app_ref.state.runner

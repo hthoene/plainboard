@@ -43,7 +43,8 @@
     "more": "More",
     "theme": "Design and theme",
     "views": "Views",
-    "project": "Project settings"
+    "project": "Project settings",
+    "projectShort": "Settings"
   },
   "browser": {
     "address": "Address, e.g. localhost:5173",
@@ -808,6 +809,25 @@
     "confirmDelete": "Delete secret {{name}}?",
     "updated": "updated {{when}}"
   },
+  "skills": {
+    "upload": "Upload skill",
+    "fromGit": "From a git repository",
+    "path": "Folder in it (optional)",
+    "ref": "Branch or tag (optional)",
+    "import": "Import skill",
+    "hint": "A skill is a folder with a SKILL.md (name and description at its top) and what it needs. Upload it as a zip or as a single SKILL.md, or take it from a repository: the project's GitHub token opens a private one. PlainBoard puts it into each agent's folder before its next turn.",
+    "notClaude": "Only Claude agents that write code use skills; these don't: {{names}}.",
+    "uploaded": "uploaded",
+    "meta_one": "{{source}} · {{count}} file, {{size}} · updated {{when}}",
+    "meta_other": "{{source}} · {{count}} files, {{size}} · updated {{when}}",
+    "enabled": "On",
+    "allAgents": "All agents of the project",
+    "noAgents": "No agent chosen: nobody gets it.",
+    "reimport": "Import again from git",
+    "replace": "Upload new files",
+    "delete": "Delete skill",
+    "confirmDelete": "Delete skill {{name}}?"
+  },
   "mentions": {
     "label": "Mentions",
     "title_one": "Mentions: {{count}} unread",
@@ -831,7 +851,7 @@
   },
   "account": {
     "title": "Your account",
-    "hint": "Your picture, your name and your password.",
+    "hint": "Your picture, your name, your password and what you are told.",
     "addPicture": "Add a picture",
     "changePicture": "Change picture",
     "removePicture": "Remove",
@@ -840,6 +860,8 @@
     "signedInAs": "Signed in as {{username}}.",
     "currentPassword": "Current password",
     "newPassword": "New password",
+    "showMentions": "Show mentions",
+    "showMentionsHint": "The @ list with its counter and browser notifications when someone mentions you. Off: you see none of them; mentions are still kept, so they are there when you turn this on.",
     "save": "Save account",
     "saved": "Saved.",
     "signOut": "Sign out"
@@ -885,7 +907,25 @@
     "none": "Nobody yet. Only admins see this project.",
     "nobodyElse": "Everyone with an account is a member. An admin adds further people under PlainBoard settings → People.",
     "readOnly": "You are a viewer of this project: you can read everything and change nothing.",
-    "readOnlyShort": "You can view this project but not change it."
+    "readOnlyShort": "You can view this project but not change it.",
+    "projectOwner": "Project owner",
+    "projectOwnerHint": "Whose permissions apply to this project: subscriptions, runners, parallel limit and shared secrets.",
+    "makeOwner": "Make project owner…",
+    "makeOwnerTitle": "Hand the project to {{name}}",
+    "makeOwnerIntro": "From now on, what {{name}} may use applies to this project. {{name}} gets the role owner; the current project owner keeps the role owner.",
+    "makeOwnerConfirm": "Make project owner",
+    "change": {
+      "loading": "Checking what changes…",
+      "nothing": "Nothing else changes for this project.",
+      "runnerBlocked": "{{name}} may not use this project's runner ({{runner}}). Move the project to a runner they may use first (Settings → Runner), then hand it over.",
+      "builtinRunner": "built-in runner",
+      "lostAccounts": "No longer allowed subscriptions: {{list}}",
+      "unpinned": "Chosen subscription not allowed, will choose automatically: {{list}}. The project's manager is told.",
+      "theProject": "the project",
+      "losesShared": "The installation's secrets, GitHub token and shared MCP servers are no longer available; the project's own stay.",
+      "parallel": "Members working at once (across all projects of the owner): {{before}} → {{after}}",
+      "noLimit": "no limit"
+    }
   },
   "wizard": {
     "steps": "Steps",
@@ -1038,6 +1078,10 @@
     "board": {
       "label": "Board",
       "description": "What happens to tickets by themselves."
+    },
+    "skills": {
+      "label": "Skills",
+      "description": "Claude skills for this project's agents: instructions and scripts they load when a task calls for them."
     },
     "secrets": {
       "label": "Secrets",

@@ -134,6 +134,7 @@ async def update(
     may_create_projects: bool | None = None,
     may_use_shared: bool | None = None,
     enabled: bool | None = None,
+    show_mentions: bool | None = None,
     limits: dict | None = None,
 ) -> User:
     """``limits``: what this person's projects may use (``permissions.FIELDS``); None in it: no limit."""
@@ -157,6 +158,8 @@ async def update(
         user.may_create_projects = may_create_projects
     if may_use_shared is not None:
         user.may_use_shared = may_use_shared
+    if show_mentions is not None:
+        user.show_mentions = show_mentions
     if enabled is not None and enabled != user.enabled:
         user.enabled = enabled
         user.session_version += 1

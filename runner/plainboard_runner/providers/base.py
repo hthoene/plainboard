@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 from plainboard_protocol import CheckResult, CompletionResult, CompletionSpec, Credentials, LimitWindow, ProviderAccount, ProviderInfo, RunEvent, RunSpec
 
@@ -30,6 +31,10 @@ class Provider(ABC):
     async def catalog(self) -> ProviderInfo:
         """Like :meth:`info`, but may ask the provider which models the account offers."""
         return self.info()
+
+    def skills_folder(self, spec: RunSpec, workspace: Path) -> Path | None:
+        """Where the turn's skills (``spec.skills``) go so the provider loads them; None: it has no skills."""
+        return None
 
     @abstractmethod
     def run(self, spec: RunSpec, bridge: ToolBridge) -> AsyncIterator[RunEvent]:

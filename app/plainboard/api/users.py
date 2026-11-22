@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, File, Response, UploadFile
 
-from ..schemas import MemberIn, MemberOut, MentionsOut, MentionsRead, PersonOut, UserCreate, UserOut, UserUpdate
+from ..schemas import MemberIn, MemberOut, OwnerChangeOut, MentionsOut, MentionsRead, PersonOut, UserCreate, UserOut, UserUpdate
 from ..services import mentions as mention_service
+from ..services import ownership
 from ..services import permissions
 from ..services import projects as project_service
 from ..services import users as user_service
@@ -70,8 +71,24 @@ async def delete_user(user_id: int, session: Session) -> None:
 
 @router.get("/projects/{project_id}/members", response_model=list[MemberOut])
 async def list_members(project_id: int, session: Session) -> list[MemberOut]:
-    await project_service.get(session, project_id)
-    return [MemberOut(user_id=u.id, username=u.username, name=u.name, role=role) for u, role in await user_service.members(session, project_id)]
+    project = await project_service.get(session, project_id)
+    return [
+        MemberOut(user_id=u.id, username=u.username, name=u.name, role=role, project_owner=u.id == project.owner_id)
+        for u, role in await user_service.members(session, project_id)
+    ]
+
+
+@router.get("/projects/{project_id}/owner/{user_id}", response_model=OwnerChangeOut)
+async def owner_preview(project_id: int, user_id: int, session: Session, who: Who) -> OwnerChangeOut:
+    """What changes for the project if this person owned it."""
+    return await ownership.preview(session, await project_service.get(session, project_id), who.user, user_id)
+
+
+@router.put("/projects/{project_id}/owner/{user_id}", response_model=list[MemberOut])
+async def change_owner(project_id: int, user_id: int, session: Session, who: Who, runs: Runs) -> list[MemberOut]:
+    await ownership.change(session, await project_service.get(session, project_id), who.user, user_id)
+    runs.recheck()  # another owner's limit of members at work
+    return await list_members(project_id, session)
 
 
 @router.put("/projects/{project_id}/members/{user_id}", response_model=list[MemberOut])

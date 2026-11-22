@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { AlertTriangle, AppWindow, ArrowUpCircle, BarChart3, CalendarClock, FolderKanban, Menu, MessageSquare, NotebookPen, Palette, PanelRight, Plug, Settings, SlidersHorizontal, Users } from "lucide-react";
+import { AlertTriangle, AppWindow, ArrowUpCircle, BarChart3, CalendarClock, FolderKanban, Menu, MessageSquare, NotebookPen, Palette, Plug, Settings, SlidersHorizontal, Users } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useProjectEvents } from "../../api/events";
@@ -37,13 +37,13 @@ const VIEWS: { id: View; icon: (cls: string) => ReactNode }[] = [
   { id: "board", icon: (c) => <FolderKanban className={c} /> },
   { id: "chat", icon: (c) => <MessageSquare className={c} /> },
   { id: "team", icon: (c) => <Users className={c} /> },
+  // The project's own settings: for its owners. Fixed entry after the core views; on the phone the 4th tab.
+  { id: "project", icon: (c) => <SlidersHorizontal className={c} /> },
   { id: "notes", icon: (c) => <NotebookPen className={c} /> },
   { id: "schedules", icon: (c) => <CalendarClock className={c} /> },
   { id: "browser", icon: (c) => <AppWindow className={c} /> },
   { id: "tools", icon: (c) => <Plug className={c} /> },
   { id: "stats", icon: (c) => <BarChart3 className={c} /> },
-  // The project's own settings: for its owners.
-  { id: "project", icon: (c) => <SlidersHorizontal className={c} /> },
 ];
 /** The phone's bottom bar holds this many views; the rest sit behind "More". */
 const PHONE_TABS = 4;
@@ -258,6 +258,7 @@ function ProjectWorkspace({
         if (isDesktop && view !== "chat") setPanelOpen(true);
         else setView("chat");
       },
+      panel: { available: isDesktop && view !== "chat" && activeChatId !== null, open: panelOpen, toggle: () => setPanelOpen(!panelOpen) },
       openTask: setOpenTaskId,
       openSettings,
       openBrowser: (address) => {
@@ -265,7 +266,7 @@ function ProjectWorkspace({
         setView("browser");
       },
     }),
-    [project, agents.data, agentById, previews, openSettings, setChatAgentId, isDesktop, view, setPanelOpen, setView],
+    [project, agents.data, agentById, previews, openSettings, setChatAgentId, isDesktop, view, activeChatId, panelOpen, setPanelOpen, setView],
   );
   // A mention of this project chosen in another one: open where it was written.
   useEffect(() => {
@@ -354,11 +355,6 @@ function ProjectWorkspace({
               <IconButton label={t("nav.settings")} onClick={onSettings}>
                 <Settings className="size-4" />
               </IconButton>
-              {view !== "chat" && (
-                <IconButton label={t("nav.togglePanel")} aria-pressed={panelOpen} onClick={() => setPanelOpen(!panelOpen)} className={clsx(panelOpen && "bg-sunk text-fg")}>
-                  <PanelRight className="size-4" />
-                </IconButton>
-              )}
             </div>
           </aside>
         )}
@@ -483,12 +479,12 @@ function PhoneTabs({ views, view, setView, onSettings, previews }: { views: type
       <LookDialog open={lookOpen} onClose={() => setLookOpen(false)} />
       <nav data-part="tabs" aria-label={t("nav.views")} className="relative z-40 flex shrink-0 border-t border-line-2 bg-bg pb-[env(safe-area-inset-bottom)]">
         {tabs.map((v) => (
-          <button key={v.id} type="button" onClick={() => go(v.id)} aria-current={view === v.id && !more ? "page" : undefined} className={tab(view === v.id && !more)}>
+          <button key={v.id} type="button" onClick={() => go(v.id)} aria-label={t(`nav.${v.id}`)} aria-current={view === v.id && !more ? "page" : undefined} className={tab(view === v.id && !more)}>
             <span className="relative">
               {v.icon("size-5")}
               {marked(v.id) && <span className="mk mk-run absolute -top-0.5 -right-2 scale-75 bg-current" />}
             </span>
-            <span className="max-w-full truncate">{t(`nav.${v.id}`)}</span>
+            <span className="max-w-full truncate">{v.id === "project" ? t("nav.projectShort") : t(`nav.${v.id}`)}</span>
           </button>
         ))}
         <button type="button" aria-haspopup="menu" aria-expanded={more} onClick={() => setMore(!more)} className={tab(more || rest.some((v) => v.id === view))}>

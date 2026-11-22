@@ -1,16 +1,30 @@
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { PauseCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { api } from "../../api/client";
-import { qk, useApiMutation } from "../../api/queries";
+import { qk } from "../../api/queries";
 import type { Project } from "../../api/types";
 import { ErrorText, Toggle } from "../../components/ui";
 
-/** Pause or resume one project. Paused, nothing of it starts until a person resumes it here. */
+/** Pause or resume one project. Paused, nothing of it starts until a person resumes it here.
+ *  The switch flips at once; if the request fails, it flips back and the error is shown. */
 function usePauseSwitch(project: Project) {
-  return useApiMutation(
-    (on: boolean) => (on ? api.post<Project>(`/projects/${project.id}/pause`) : api.del<Project>(`/projects/${project.id}/pause`)),
-    () => [qk.projects],
-  );
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (on: boolean) => (on ? api.post<Project>(`/projects/${project.id}/pause`) : api.del<Project>(`/projects/${project.id}/pause`)),
+    onMutate: async (on: boolean) => {
+      await qc.cancelQueries({ queryKey: qk.projects });
+      const before = qc.getQueryData<Project[]>(qk.projects);
+      qc.setQueryData<Project[]>(qk.projects, (list) =>
+        list?.map((p) => (p.id === project.id ? { ...p, paused_at: on ? p.paused_at || new Date().toISOString() : null, paused_by: on ? p.paused_by : "" } : p)),
+      );
+      return { before };
+    },
+    onError: (_error, _on, context) => {
+      if (context?.before) qc.setQueryData(qk.projects, context.before);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.projects }),
+  });
 }
 
 const since = (iso: string) => new Date(iso).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
@@ -45,6 +59,7 @@ export function ProjectPauseBanner({ project, isOwner }: { project: Project; isO
           {t("projects.resume")}
         </button>
       )}
+      <ErrorText error={turn.error} />
     </div>
   );
 }

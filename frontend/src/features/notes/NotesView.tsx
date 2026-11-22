@@ -7,7 +7,7 @@ import { api } from "../../api/client";
 import { qk, useMeta, useNotes } from "../../api/queries";
 import type { Note } from "../../api/types";
 import { Markdown } from "../../components/Markdown";
-import { Button, EmptyState, ErrorText, Input, Textarea, Toggle } from "../../components/ui";
+import { Button, ChatPanelToggle, EmptyState, ErrorText, Input, Textarea, Toggle } from "../../components/ui";
 import { timeAgo } from "../../lib/format";
 import { useShell } from "../layout/shell-context";
 
@@ -79,7 +79,10 @@ export function NotesView() {
           </div>
         </div>
       </aside>
-      <section className={clsx("min-w-0 flex-1 flex-col", detail ? "flex" : "max-md:hidden md:flex")}>
+      <section className={clsx("relative min-w-0 flex-1 flex-col", detail ? "flex" : "max-md:hidden md:flex")}>
+        <div className="absolute top-2.5 right-4 z-10 flex items-center">
+          <ChatPanelToggle where="view" />
+        </div>
         <button onClick={() => setDetail(false)} className="flex items-center gap-1 px-4 pt-3 text-fg-3 md:hidden">
           <ChevronLeft className="size-4" /> {t("notes.back")}
         </button>
@@ -152,7 +155,7 @@ function NoteEditor({ note, onSaved, onDeleted }: { note?: Note; onSaved: (n: No
   return (
     <div className="scroll-thin h-full overflow-y-auto">
       <div className="max-w-3xl space-y-4 px-4 pb-6">
-        <div className="flex min-h-12 items-center gap-3 border-b border-line">
+        <div className="flex min-h-12 items-center gap-3 border-b border-line md:pr-10">
           {editing ? (
             <Input autoFocus value={title} placeholder={t("notes.titlePlaceholder")} onChange={(e) => setTitle(e.target.value)} className="h-10 font-semibold" />
           ) : (

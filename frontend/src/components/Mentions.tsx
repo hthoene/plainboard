@@ -215,6 +215,7 @@ export function MentionsBell({
   variant?: "plate" | "side" | "rail";
 }) {
   const { t } = useTranslation();
+  const show = useMe()?.show_mentions !== false;
   const mentions = useMentions();
   const read = useReadMentions();
   const [open, setOpen] = useState(false);
@@ -235,7 +236,7 @@ export function MentionsBell({
   const goRef = useRef(go);
   goRef.current = go;
   const [onOpen] = useState(() => (m: Mention) => goRef.current(m));
-  useMentionNotifications(mentions.data?.items, onOpen);
+  useMentionNotifications(show ? mentions.data?.items : undefined, onOpen);
 
   useEffect(() => {
     if (!open) return;
@@ -249,7 +250,7 @@ export function MentionsBell({
     };
   }, [open]);
 
-  if (!items.length) return null;
+  if (!show || !items.length) return null;
   const label = t("mentions.title", { count: unread });
   return (
     <div ref={ref} className={clsx("relative shrink-0", variant === "side" && "w-full")}>

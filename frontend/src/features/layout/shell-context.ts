@@ -17,6 +17,8 @@ export interface ShellApi {
   openSettings: (section?: string) => void;
   /** Show an address of the agents' environment (e.g. http://localhost:5173/) in the browser window. */
   openBrowser: (address: string) => void;
+  /** The side chat next to the views: only on desktop, and not in the chat view itself. */
+  panel: { available: boolean; open: boolean; toggle: () => void };
 }
 
 export const ShellContext = createContext<ShellApi | null>(null);

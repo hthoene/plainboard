@@ -240,6 +240,7 @@ class User(Timestamps, Base):
     avatar: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
     avatar_type: Mapped[str | None] = mapped_column(String(30))
     avatar_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # 0: none
+    show_mentions: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())  # the @ list and browser notifications; mentions are recorded either way
 
 
 class UserSession(Base):

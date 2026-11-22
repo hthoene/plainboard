@@ -10,7 +10,7 @@ import type { Attachment, Conversation } from "../../api/types";
 import { Avatar } from "../../components/Avatar";
 import { Markdown } from "../../components/Markdown";
 import { useMentionPicker, useReadMentionsOf } from "../../components/Mentions";
-import { AgentSquare, IconButton, Select, Spinner } from "../../components/ui";
+import { AgentSquare, ChatPanelToggle, IconButton, Select, Spinner } from "../../components/ui";
 import { formatCost, formatTokens } from "../../lib/format";
 import { useStored } from "../../lib/hooks";
 import { useNow } from "../../lib/time";
@@ -157,7 +157,7 @@ export function ChatPanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col" onDragOver={onDragOver} onDrop={onDrop}>
-      <header className="flex h-12 shrink-0 items-center gap-0.5 border-b border-line pr-2 pl-3">
+      <header className={clsx("flex h-12 shrink-0 items-center gap-0.5 border-b border-line pl-3", onClose ? "pr-4" : "pr-2")}>
         <div className="min-w-0 flex-1">
           <Select
             value={agentId}
@@ -194,11 +194,7 @@ export function ChatPanel({
             <Maximize2 className="size-4" />
           </IconButton>
         )}
-        {onClose && (
-          <IconButton label={t("common.close")} onClick={onClose}>
-            <X className="size-4" />
-          </IconButton>
-        )}
+        {onClose && <ChatPanelToggle where="chat" />}
       </header>
 
       <div ref={scroller} onScroll={onScroll} className="scroll-thin min-h-0 flex-1 overflow-x-hidden overflow-y-auto">

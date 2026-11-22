@@ -37,6 +37,7 @@ class MeUpdate(BaseModel):
     name: str | None = Field(default=None, max_length=100)
     current_password: str | None = None
     new_password: str | None = None
+    show_mentions: bool | None = None
 
 
 async def _sign_in(session: Session, request: Request, response: Response, user: User) -> None:
@@ -84,6 +85,8 @@ async def update_me(body: MeUpdate, who: Who, session: Session, request: Request
     user = await user_service.get(session, who.user.id)
     if body.name is not None:
         user = await user_service.update(session, user, name=body.name)
+    if body.show_mentions is not None:
+        user = await user_service.update(session, user, show_mentions=body.show_mentions)
     if body.new_password is not None:
         user = await user_service.change_own_password(session, user, body.current_password or "", body.new_password)
         await session_service.end(session, request.cookies.get(SESSION_COOKIE))

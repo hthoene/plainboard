@@ -1,5 +1,7 @@
 import clsx from "clsx";
-import { Check, ChevronDown, Loader2, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { ShellContext } from "../features/layout/shell-context";
+import { Check, ChevronDown, Loader2, PanelRight, X } from "lucide-react";
 import {
   Children,
   forwardRef,
@@ -9,6 +11,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  useContext,
   type ButtonHTMLAttributes,
   type CSSProperties,
   type InputHTMLAttributes,
@@ -487,12 +490,31 @@ export function AgentSquare({ agent, className }: { agent: { name: string; color
 }
 
 /** The bar every view starts with: 48px high, title at the left, actions at the right. */
+/**
+ * Shows or hides the side chat. It sits at the far right of the header of the view and, while the chat is open,
+ * at the same spot in the chat's own header; `where` says which of the two this one is.
+ */
+export function ChatPanelToggle({ where, divider }: { where: "view" | "chat"; divider?: boolean }) {
+  const { t } = useTranslation();
+  const panel = useContext(ShellContext)?.panel;
+  if (!panel?.available || (where === "view" && panel.open)) return null;
+  return (
+    <>
+      {divider && <span aria-hidden className="mx-1 h-5 w-px shrink-0 bg-line-2" />}
+      <IconButton label={t("nav.togglePanel")} aria-pressed={panel.open} onClick={panel.toggle} className={clsx(panel.open && "bg-sunk text-fg")}>
+        <PanelRight className="size-4" />
+      </IconButton>
+    </>
+  );
+}
+
 export function PageHead({ title, children }: { title: ReactNode; children?: ReactNode }) {
   return (
     <header data-part="page-head" className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-4">
       <h1 className="min-w-0 truncate font-extrabold">{title}</h1>
       <div className="flex-1" />
       {children}
+      <ChatPanelToggle where="view" divider />
     </header>
   );
 }

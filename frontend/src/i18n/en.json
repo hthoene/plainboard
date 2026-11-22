@@ -43,7 +43,8 @@
     "more": "More",
     "theme": "Design and theme",
     "views": "Views",
-    "project": "Project settings"
+    "project": "Project settings",
+    "projectShort": "Settings"
   },
   "browser": {
     "address": "Address, e.g. localhost:5173",
@@ -848,7 +849,7 @@
   },
   "account": {
     "title": "Your account",
-    "hint": "Your picture, your name and your password.",
+    "hint": "Your picture, your name, your password and what you are told.",
     "addPicture": "Add a picture",
     "changePicture": "Change picture",
     "removePicture": "Remove",
@@ -857,6 +858,8 @@
     "signedInAs": "Signed in as {{username}}.",
     "currentPassword": "Current password",
     "newPassword": "New password",
+    "showMentions": "Show mentions",
+    "showMentionsHint": "The @ list with its counter and browser notifications when someone mentions you. Off: you see none of them; mentions are still kept, so they are there when you turn this on.",
     "save": "Save account",
     "saved": "Saved.",
     "signOut": "Sign out"

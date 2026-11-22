@@ -1,6 +1,6 @@
 import clsx from "clsx";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import ReactMarkdown from "react-markdown";
+import { useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useArchivedTasks, useTasks } from "../api/queries";
 import { AppWindow, Check, Copy } from "lucide-react";
@@ -207,34 +207,37 @@ export function CodeBlock({ text, children, alwaysCopy }: { text: string; childr
   );
 }
 
+// Module-level components: react-markdown uses them as element types, so inline ones would be new
+// types on every render and remount every code block (its horizontal scroll position would jump back).
+function MdLink({ node: _node, ...props }: ComponentProps<"a"> & { node?: unknown }) {
+  const people = usePeopleMap();
+  const ticket = props.href?.match(/^#ticket-(\d+)$/);
+  if (ticket) return <TicketLink number={Number(ticket[1])}>{props.children}</TicketLink>;
+  const person = people.get(props.href?.match(/^#mention-(.+)$/)?.[1] ?? "");
+  if (person) return <MentionChip person={person} />;
+  const link = <a {...props} target="_blank" rel="noreferrer" />;
+  const address = browserAddress(props.href);
+  return address ? <PreviewLink address={address}>{link}</PreviewLink> : link;
+}
+
+const MD_COMPONENTS: Components = {
+  a: MdLink,
+  img: ({ src, alt }) => (typeof src === "string" ? <ZoomableImage src={src} alt={alt ?? ""} /> : null),
+  pre: ({ node, children }) => <CodeBlock text={(node ? hastText(node) : "").replace(/\r?\n$/, "")}>{children}</CodeBlock>,
+  table: ({ node: _node, ...props }) => (
+    <div className="scroll-thin overflow-x-auto">
+      <table {...props} />
+    </div>
+  ),
+};
+
 export function Markdown({ children, className }: { children: string; className?: string }) {
   const people = usePeopleMap();
   const mentions = useMemo(() => linkMentions(people), [people]);
+  const plugins = useMemo(() => [remarkGfm, linkTickets, mentions], [mentions]);
   return (
     <div className={clsx("prose-chat break-words", className)}>
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, linkTickets, mentions]}
-        components={{
-          a: ({ node: _node, ...props }) => {
-            const ticket = props.href?.match(/^#ticket-(\d+)$/);
-            if (ticket) return <TicketLink number={Number(ticket[1])}>{props.children}</TicketLink>;
-            const person = people.get(props.href?.match(/^#mention-(.+)$/)?.[1] ?? "");
-            if (person) return <MentionChip person={person} />;
-            const link = <a {...props} target="_blank" rel="noreferrer" />;
-            const address = browserAddress(props.href);
-            return address ? <PreviewLink address={address}>{link}</PreviewLink> : link;
-          },
-          img: ({ src, alt }) => (typeof src === "string" ? <ZoomableImage src={src} alt={alt ?? ""} /> : null),
-          pre: ({ node, children }) => (
-            <CodeBlock text={(node ? hastText(node) : "").replace(/\r?\n$/, "")}>{children}</CodeBlock>
-          ),
-          table: ({ node: _node, ...props }) => (
-            <div className="scroll-thin overflow-x-auto">
-              <table {...props} />
-            </div>
-          ),
-        }}
-      >
+      <ReactMarkdown remarkPlugins={plugins} components={MD_COMPONENTS}>
         {children}
       </ReactMarkdown>
     </div>

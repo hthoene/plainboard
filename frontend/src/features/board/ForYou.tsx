@@ -37,10 +37,10 @@ export function ForYou({ variant = "plate" }: { variant?: "plate" | "side" | "ra
         onClick={() => setOpen(!open)}
         className={clsx(
           "caps inline-flex h-8 items-center gap-2 rounded-sm bg-you font-extrabold whitespace-nowrap text-on-you touch:h-11",
-          variant === "side" ? "w-full px-2" : variant === "rail" ? "w-[34px] justify-center gap-1" : "px-2.5",
+          variant === "side" ? "w-full px-2" : variant === "rail" ? "mx-auto w-8 justify-center tabular-nums" : "px-2.5",
         )}
       >
-        <span className="mk bg-on-you [transform:rotate(45deg)_scale(0.86)]" />
+        {variant !== "rail" && <span className="mk bg-on-you [transform:rotate(45deg)_scale(0.86)]" />}
         {variant === "rail" ? tasks.length : t("shell.forYou", { n: tasks.length })}
       </button>
       {open && (

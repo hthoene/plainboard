@@ -46,6 +46,7 @@ class UserOut(ORM):
     may_use_shared: bool = False
     enabled: bool
     avatar_version: int = 0  # 0: no picture; otherwise part of its address (/api/avatars/{id}?v=...)
+    show_mentions: bool = True
     created_at: UTCDateTime
 
 

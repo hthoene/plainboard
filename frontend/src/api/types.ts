@@ -568,6 +568,8 @@ export interface User {
   enabled: boolean;
   /** 0: no profile picture. */
   avatar_version: number;
+  /** The @ list and browser notifications for mentions; they are recorded either way. */
+  show_mentions: boolean;
   created_at: string;
 }
 

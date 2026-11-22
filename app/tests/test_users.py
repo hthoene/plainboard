@@ -259,6 +259,19 @@ def test_a_profile_picture_is_set_by_its_user_and_a_chat_message_knows_who_wrote
     assert (run["input_text"], run["author_name"]) == ("SAY hi", me["name"])
 
 
+def test_the_mentions_switch_is_per_account_and_mentions_are_recorded_either_way(client):
+    assert client.get("/api/auth/status").json()["user"]["show_mentions"] is True  # on by default
+    new_user(client, "max")
+    sign_in(client, "max", "max-password")
+    assert client.patch("/api/auth/me", json={"show_mentions": False}).json()["show_mentions"] is False
+    assert client.get("/api/auth/status").json()["user"]["show_mentions"] is False
+    assert client.patch("/api/auth/me", json={"name": "Max"}).json()["show_mentions"] is False  # other changes leave it
+    as_admin(client)
+    assert client.get("/api/auth/status").json()["user"]["show_mentions"] is True  # another account's own
+    sign_in(client, "max", "max-password")
+    assert client.patch("/api/auth/me", json={"show_mentions": True}).json()["show_mentions"] is True
+
+
 def test_an_admin_sets_the_profile_of_anyone_and_nobody_else_does(client):
     png = b"\x89PNG\r\n\x1a\n" + b"0" * 64
     user = new_user(client, "max")

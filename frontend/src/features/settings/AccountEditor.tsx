@@ -6,7 +6,7 @@ import { api } from "../../api/client";
 import { qk, useMe } from "../../api/queries";
 import { squarePicture } from "../../components/Avatar";
 import { PictureField } from "../../components/PictureField";
-import { Button, ErrorText, Field, Input } from "../../components/ui";
+import { Button, ErrorText, Field, Input, Toggle } from "../../components/ui";
 
 /** One's own account: picture, name, password, signing out. Saved right away. */
 export function AccountEditor() {
@@ -63,6 +63,10 @@ export function AccountEditor() {
         <Field label={t("auth.name")} hint={t("account.signedInAs", { username: me.username })} className="min-w-0 flex-1">
           <Input value={name} onChange={(e) => setName(e.target.value)} />
         </Field>
+      </div>
+      <div>
+        <Toggle checked={me.show_mentions} onChange={(show_mentions) => void run({ show_mentions })} label={t("account.showMentions")} />
+        <p className="mt-1 text-fg-3">{t("account.showMentionsHint")}</p>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label={t("account.currentPassword")}>

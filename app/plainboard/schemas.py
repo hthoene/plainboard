@@ -1034,6 +1034,37 @@ class McpServerOut(ORM):
     agent_ids: list[int] = Field(default_factory=list)
 
 
+class SkillOut(ORM):
+    id: int
+    name: str
+    description: str
+    enabled: bool
+    all_agents: bool
+    agent_ids: list[int] = Field(default_factory=list)
+    source: str
+    source_url: str
+    source_ref: str
+    source_path: str
+    content_hash: str
+    size: int
+    file_count: int
+    updated_at: UTCDateTime
+
+
+class SkillImport(BaseModel):
+    url: str = Field(max_length=500)
+    ref: str = Field(default="", max_length=200)
+    path: str = Field(default="", max_length=300)
+    all_agents: bool = True
+    agent_ids: list[int] = Field(default_factory=list)
+
+
+class SkillUpdate(BaseModel):
+    enabled: bool | None = None
+    all_agents: bool | None = None
+    agent_ids: list[int] | None = None
+
+
 # --- settings -------------------------------------------------------------------------------
 
 

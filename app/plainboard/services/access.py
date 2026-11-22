@@ -125,6 +125,7 @@ RULES: tuple[Rule, ...] = (
     _project("/previews", write=Need.MEMBER),  # which servers run; a member stops one
     _project("/export", read=Need.OWNER),  # the whole project as a file, credentials included
     _project("/secrets", read=Need.OWNER),
+    _project("/skills"),  # its Claude skills: everyone sees which, its owner changes them
     _project("/accounts", write=Need.ADMIN),  # which of the installation's subscriptions it may use: not its owner's call
     _project("/runner"),
     _project("/owner", read=Need.OWNER),  # who owns it: an admin, or its owner (services/ownership.py)  # which runner its agents use: its owner chooses

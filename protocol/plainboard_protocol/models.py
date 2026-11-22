@@ -103,6 +103,24 @@ class McpServerSpec(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
 
 
+class SkillSpec(BaseModel):
+    """A Claude skill of the project for this agent. The runner fetches its files (a zip) from the app with the
+    run's token (``GET /api/internal/runs/<run>/skills/<id>``) only when ``hash`` differs from what it laid down."""
+
+    id: int
+    name: str  # its folder: <workspace>/.claude/skills/<name>
+    hash: str  # sha256 of its files
+
+
+class SkillFetch(BaseModel):
+    """Import a skill from git: the runner clones ``url`` at ``ref`` and answers with ``path`` in it as a zip."""
+
+    url: str
+    ref: str = ""
+    path: str = ""
+    credentials: Credentials
+
+
 class RunSpec(BaseModel):
     run_id: str
     provider: str
@@ -118,6 +136,7 @@ class RunSpec(BaseModel):
     bridge: ToolBridgeSpec
     mcp_servers: list[McpServerSpec] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
+    skills: list[SkillSpec] = Field(default_factory=list)
 
 
 class CompletionSpec(BaseModel):

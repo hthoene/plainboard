@@ -66,6 +66,7 @@ from ..services import ticket_state
 from ..services import flow_log
 from ..services import jobs as job_service
 from ..services import mcp as mcp_service
+from ..services import skills as skill_service
 from ..services import mentions as mention_service
 from ..services import pause as pause_service
 from ..services import permissions
@@ -1478,6 +1479,7 @@ class RunManager:
                     base_url=get_config().internal_url, run_id=str(run.id), run_token=ctx.token, tools=registry.tool_defs_for(agent)
                 ),
                 mcp_servers=await mcp_service.specs_for_agent(s, agent),
+                skills=await skill_service.specs_for_agent(s, agent),
             )
             return spec, ctx
 

@@ -369,6 +369,23 @@ export interface Schedule {
   created_at: string;
 }
 
+export interface Skill {
+  id: number;
+  name: string;
+  description: string;
+  enabled: boolean;
+  all_agents: boolean;
+  agent_ids: number[];
+  source: "upload" | "git";
+  source_url: string;
+  source_ref: string;
+  source_path: string;
+  content_hash: string;
+  size: number;
+  file_count: number;
+  updated_at: string;
+}
+
 export interface McpServer {
   id: number;
   project_id: number | null;

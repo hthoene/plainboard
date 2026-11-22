@@ -80,6 +80,12 @@ class ToolBridge:
                 files={"file": (file.name, fh, mime)},
             )
 
+    async def skill_archive(self, skill_id: int) -> bytes:
+        """The zip of one of the turn's skills (runner skills.py)."""
+        resp = await self._client.get(f"/api/internal/runs/{self.spec.run_id}/skills/{skill_id}", timeout=120)
+        resp.raise_for_status()
+        return resp.content
+
     async def aclose(self) -> None:
         await self._client.aclose()
 

@@ -13,8 +13,8 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket
-from fastapi.responses import StreamingResponse
-from plainboard_protocol import ACCOUNT_KEY_PATTERN, DEFAULT_ACCOUNT, BranchRef, CandidatesSpec, CheckResult, CleanupCandidate, CleanupResult, CleanupSpec, CommitRef, CompletionResult, CompletionSpec, Credentials, DeleteSpec, ErrorEvent, JobPort, JobSpec, JobState, LimitsEvent, MachineUsage, ProjectFiles, ProviderAccount, ProviderInfo, PullRequestCheck, PullRequestRef, PullRequestState, RepoSpec, RerunRef, RunSpec, TidyResult, TidySpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, TrimSpec, UnpushedSpec, UnpushedWork, UpstreamRef, UpstreamState
+from fastapi.responses import Response, StreamingResponse
+from plainboard_protocol import ACCOUNT_KEY_PATTERN, DEFAULT_ACCOUNT, BranchRef, CandidatesSpec, CheckResult, CleanupCandidate, CleanupResult, CleanupSpec, CommitRef, CompletionResult, CompletionSpec, Credentials, DeleteSpec, ErrorEvent, JobPort, JobSpec, JobState, LimitsEvent, MachineUsage, ProjectFiles, ProviderAccount, ProviderInfo, PullRequestCheck, PullRequestRef, PullRequestState, RepoSpec, RerunRef, RunSpec, SkillFetch, TidyResult, TidySpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, TrimSpec, UnpushedSpec, UnpushedWork, UpstreamRef, UpstreamState
 from pydantic import BaseModel, Field
 
 from . import cleanup
@@ -27,6 +27,7 @@ from . import jobs
 from . import notices
 from . import ports
 from . import selfupdate
+from . import skills
 from . import trains
 from . import translate
 from . import usage
@@ -184,10 +185,12 @@ async def _execute(spec: RunSpec, queue: asyncio.Queue[str | None]) -> None:
     try:
         provider = get_provider(spec.provider)
         workspace, problems = await prepare_workspace(spec.workspace, spec.credentials)
+        bridge = ToolBridge(spec.bridge, workspace)
+        if (folder := provider.skills_folder(spec, workspace)) is not None:
+            problems += await skills.sync(folder, spec.skills, bridge.skill_archive)
         if problems:  # tell the agent instead of failing the whole run
             notice = "\n".join(f"- {p}" for p in problems)
             spec = spec.model_copy(update={"prompt": f"[Workspace notice]\n{notice}\n\n{spec.prompt}"})
-        bridge = ToolBridge(spec.bridge, workspace)
         async for event in provider.run(spec, bridge):
             await queue.put(event.model_dump_json())
     except asyncio.CancelledError:
@@ -602,6 +605,15 @@ async def github_upstream(ref: UpstreamRef) -> UpstreamState | None:
         return await github.upstream(ref.credentials, ref.repository, ref.branch, ref.commit)
     except WorkspaceError as exc:
         raise HTTPException(502, str(exc)[:600]) from exc
+
+
+@app.post("/skills/fetch")
+async def fetch_skill(spec: SkillFetch) -> Response:
+    """A skill's folder from git, as a zip (the app checks it)."""
+    try:
+        return Response(await skills.fetch(spec), media_type="application/zip")
+    except WorkspaceError as exc:
+        raise HTTPException(400, str(exc)[:600]) from exc
 
 
 @app.post("/git/branch")

@@ -1,8 +1,10 @@
-"""Notes, schedules and MCP servers."""
+"""Notes, schedules, MCP servers and skills."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+import json
+
+from fastapi import APIRouter, File, Form, UploadFile
 
 from ..schemas import (
     McpServerCreate,
@@ -14,12 +16,17 @@ from ..schemas import (
     ScheduleCreate,
     ScheduleOut,
     ScheduleUpdate,
+    SkillImport,
+    SkillOut,
+    SkillUpdate,
 )
 from ..services import mcp as mcp_service
 from ..services import notes as note_service
 from ..services import projects as project_service
 from ..services import schedules as schedule_service
-from .deps import Session
+from ..services import skills as skill_service
+from ..services.errors import ServiceError
+from .deps import Runs, Session
 
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["knowledge"])
 
@@ -89,3 +96,61 @@ async def update_mcp(project_id: int, server_id: int, body: McpServerUpdate, ses
 @router.delete("/mcp-servers/{server_id}", status_code=204)
 async def delete_mcp(project_id: int, server_id: int, session: Session) -> None:
     await mcp_service.delete(session, await mcp_service.get(session, server_id, project_id), project_id)
+
+
+async def _upload(file: UploadFile) -> skill_service.Bundle:
+    data = await file.read(skill_service.MAX_UPLOAD_BYTES + 1)
+    return skill_service.parse_upload(file.filename or "", data)
+
+
+def _ids(raw: str) -> list[int]:
+    try:
+        return [int(i) for i in json.loads(raw or "[]")]
+    except (ValueError, TypeError) as exc:
+        raise ServiceError("agent_ids must be a list of ids") from exc
+
+
+@router.get("/skills", response_model=list[SkillOut])
+async def list_skills(project_id: int, session: Session) -> list[SkillOut]:
+    return [SkillOut.model_validate(s) for s in await skill_service.list_for_project(session, project_id)]
+
+
+@router.post("/skills", response_model=SkillOut, status_code=201)
+async def upload_skill(
+    project_id: int, session: Session, file: UploadFile = File(...), all_agents: bool = Form(True), agent_ids: str = Form("[]")
+) -> SkillOut:
+    """A zip of the skill's folder or a single SKILL.md."""
+    await project_service.get(session, project_id)
+    bundle = await _upload(file)
+    return SkillOut.model_validate(await skill_service.store(session, project_id, bundle, all_agents=all_agents, agent_ids=_ids(agent_ids)))
+
+
+@router.post("/skills/import", response_model=SkillOut, status_code=201)
+async def import_skill(project_id: int, body: SkillImport, session: Session, runs: Runs) -> SkillOut:
+    project = await project_service.get(session, project_id)
+    return SkillOut.model_validate(await skill_service.import_git(session, runs.runners.of(project_id), project, body))
+
+
+@router.patch("/skills/{skill_id}", response_model=SkillOut)
+async def update_skill(project_id: int, skill_id: int, body: SkillUpdate, session: Session) -> SkillOut:
+    skill = await skill_service.get(session, skill_id, project_id)
+    return SkillOut.model_validate(await skill_service.update(session, skill, body))
+
+
+@router.put("/skills/{skill_id}/files", response_model=SkillOut)
+async def replace_skill_files(project_id: int, skill_id: int, session: Session, file: UploadFile = File(...)) -> SkillOut:
+    """New files for an uploaded skill."""
+    skill = await skill_service.get(session, skill_id, project_id)
+    bundle = await _upload(file)
+    return SkillOut.model_validate(await skill_service.store(session, project_id, bundle, skill=skill))
+
+
+@router.post("/skills/{skill_id}/reimport", response_model=SkillOut)
+async def reimport_skill(project_id: int, skill_id: int, session: Session, runs: Runs) -> SkillOut:
+    skill = await skill_service.get(session, skill_id, project_id)
+    return SkillOut.model_validate(await skill_service.reimport(session, runs.runners.of(project_id), skill))
+
+
+@router.delete("/skills/{skill_id}", status_code=204)
+async def delete_skill(project_id: int, skill_id: int, session: Session) -> None:
+    await skill_service.delete(session, await skill_service.get(session, skill_id, project_id))

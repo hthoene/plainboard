@@ -18,6 +18,7 @@ import { ProjectPauseSwitch } from "./ProjectPause";
 import { ProjectRunnerEditor } from "./ProjectRunner";
 import { ExportProject } from "./MoveProject";
 import { RepositoriesEditor, toBody, toDraft } from "./RepositoriesEditor";
+import { SkillsEditor } from "./SkillsEditor";
 
 const days = (value: string, max: number) => Math.max(0, Math.min(max, Math.round(Number(value) || 0)));
 
@@ -237,6 +238,17 @@ export function ProjectSettings({ onOpenTeam, onDeleted }: { onOpenTeam: () => v
       content: (
         <div className="space-y-4">
           <SecretsEditor projectId={project.id} />
+          <SavedAtOnce />
+        </div>
+      ),
+    },
+    {
+      id: "skills",
+      label: t("projectSettings.skills.label"),
+      description: t("projectSettings.skills.description"),
+      content: (
+        <div className="space-y-4">
+          <SkillsEditor projectId={project.id} />
           <SavedAtOnce />
         </div>
       ),

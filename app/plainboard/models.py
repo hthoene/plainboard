@@ -769,6 +769,28 @@ class Secret(Timestamps, Base):
     description: Mapped[str] = mapped_column(String(300), default="")
 
 
+class Skill(Timestamps, Base):
+    """A Claude skill of a project (services/skills.py): its files as a zip, laid into the agents' workspaces."""
+
+    __tablename__ = "skills"
+    __table_args__ = (UniqueConstraint("project_id", "name"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(64))
+    description: Mapped[str] = mapped_column(String(1024), default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    all_agents: Mapped[bool] = mapped_column(Boolean, default=True)
+    agent_ids: Mapped[list[int]] = mapped_column(JSON, default=list)  # without all_agents: these agents only
+    source: Mapped[str] = mapped_column(String(10), default="upload")  # upload | git
+    source_url: Mapped[str] = mapped_column(String(500), default="")
+    source_ref: Mapped[str] = mapped_column(String(200), default="")
+    source_path: Mapped[str] = mapped_column(String(300), default="")
+    archive: Mapped[str] = mapped_column(Text, default="")  # base64 of the zip of its files
+    content_hash: Mapped[str] = mapped_column(String(64), default="")
+    size: Mapped[int] = mapped_column(Integer, default=0)  # bytes of its files, unpacked
+    file_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class McpServer(Timestamps, Base):
     __tablename__ = "mcp_servers"
     __table_args__ = (UniqueConstraint("project_id", "name"),)

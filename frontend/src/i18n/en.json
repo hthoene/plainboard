@@ -806,6 +806,25 @@
     "confirmDelete": "Delete secret {{name}}?",
     "updated": "updated {{when}}"
   },
+  "skills": {
+    "upload": "Upload skill",
+    "fromGit": "From a git repository",
+    "path": "Folder in it (optional)",
+    "ref": "Branch or tag (optional)",
+    "import": "Import skill",
+    "hint": "A skill is a folder with a SKILL.md (name and description at its top) and what it needs. Upload it as a zip or as a single SKILL.md, or take it from a repository: the project's GitHub token opens a private one. PlainBoard puts it into each agent's folder before its next turn.",
+    "notClaude": "Only Claude agents that write code use skills; these don't: {{names}}.",
+    "uploaded": "uploaded",
+    "meta_one": "{{source}} · {{count}} file, {{size}} · updated {{when}}",
+    "meta_other": "{{source}} · {{count}} files, {{size}} · updated {{when}}",
+    "enabled": "On",
+    "allAgents": "All agents of the project",
+    "noAgents": "No agent chosen: nobody gets it.",
+    "reimport": "Import again from git",
+    "replace": "Upload new files",
+    "delete": "Delete skill",
+    "confirmDelete": "Delete skill {{name}}?"
+  },
   "mentions": {
     "label": "Mentions",
     "title_one": "Mentions: {{count}} unread",
@@ -1054,6 +1073,10 @@
     "board": {
       "label": "Board",
       "description": "What happens to tickets by themselves."
+    },
+    "skills": {
+      "label": "Skills",
+      "description": "Claude skills for this project's agents: instructions and scripts they load when a task calls for them."
     },
     "secrets": {
       "label": "Secrets",

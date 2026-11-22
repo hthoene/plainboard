@@ -66,6 +66,7 @@ TABLES: tuple[Table, ...] = (
     Table("repositories", sealed=("token_enc", "ssh_key_enc"), reset={"tidied_at": None, "failing_told_at": None}),
     Table("mcp_servers", sealed=("env_enc", "headers_enc")),
     Table("secrets", sealed=("value_enc",)),
+    Table("skills", lists={"agent_ids": "agents"}),
     Table("public_api_keys"),
     Table("agent_mcp_servers", ("agent_id", "agents"), {"agent_id": "agents", "mcp_server_id": "mcp_servers"}, key=None),
     Table("agent_repositories", ("agent_id", "agents"), {"agent_id": "agents", "repository_id": "repositories"}, key=None),

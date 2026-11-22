@@ -90,7 +90,7 @@ export function SettingsDialog({ open, onClose, section }: { open: boolean; onCl
   };
   const MODELS = ["default_provider", "default_manager_model", "default_worker_model", "default_summary_model", "default_manager_effort", "default_worker_effort", "default_summary_effort", "default_context_limit", "default_keep_recent"];
   const PACE = ["max_parallel_runs", "manager_parallel_limit"];
-  const GENERAL = ["timezone", "member_chat", "update_check"];
+  const GENERAL = ["timezone", "member_chat", "switch_providers", "update_check"];
   const CLEANUP = ["storage_notify_percent", "storage_emergency_percent", "cleanup", "cleanup_memory_free_percent"];
 
   const account: SettingsSection = { id: "account", label: t("account.title"), description: t("account.hint"), content: <AccountEditor /> };
@@ -273,6 +273,10 @@ export function SettingsDialog({ open, onClose, section }: { open: boolean; onCl
               <div className="space-y-1">
                 <Toggle checked={values.member_chat ?? false} onChange={(v) => set({ member_chat: v })} label={t("settings.memberChat")} />
                 <p className="text-fg-3">{t("settings.memberChatHint")}</p>
+              </div>
+              <div className="space-y-1">
+                <Toggle checked={values.switch_providers ?? false} onChange={(v) => set({ switch_providers: v })} label={t("settings.switchProviders")} />
+                <p className="text-fg-3">{t("settings.switchProvidersHint")}</p>
               </div>
               <div className="space-y-1">
                 <Toggle checked={values.update_check ?? true} onChange={(v) => set({ update_check: v })} label={t("settings.updateCheck")} />

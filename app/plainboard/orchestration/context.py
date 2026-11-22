@@ -197,7 +197,9 @@ class ContextManager:
             return False
 
         values = await settings_service.get_all(session)
-        account = await account_service.pick(session, agent.provider, agent, conv, model=agent.summary_model)
+        # The summary is written where the agent's turns run right now: its own provider may be used up.
+        route = await account_service.route(session, agent, await self.runners.catalog())
+        account = await account_service.account_for(session, route, agent, conv, summary=True)
         credentials = settings_service.credentials(values, account=account_service.fields(account))
         summary = conv.summary
         cost = 0.0
@@ -205,12 +207,12 @@ class ContextManager:
         for chunk in self._chunks([render_message(m) for m in to_summarize]):
             result = await self.runners.of(agent.project_id).complete(
                 CompletionSpec(
-                    provider=agent.provider,
-                    model=agent.summary_model,
+                    provider=route.provider,
+                    model=route.summary_model,
                     system_prompt=prompts.SUMMARY_SYSTEM,
                     prompt=prompts.summary_prompt(summary, chunk),
                     credentials=credentials,
-                    effort=agent.summary_effort or values["default_summary_effort"] or None,
+                    effort=route.effort(agent.summary_effort or values["default_summary_effort"] or None),
                 )
             )
             summary = result.text.strip()

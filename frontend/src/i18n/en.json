@@ -708,6 +708,8 @@
   "settings": {
     "memberChat": "Allow direct messages to members",
     "memberChatHint": "Off: you talk to the manager, and members' conversations can only be read. Agents still talk to each other, and schedules and assignments are not affected.",
+    "switchProviders": "Switch to another provider when a subscription is used up",
+    "switchProvidersHint": "An agent whose own provider has no subscription with room runs on another provider's subscription (Codex is used up: Claude takes over), on that provider's model of the same size, until its own is free again. The other provider starts from the conversation's summary and its last messages. Agents and projects that name their subscription stay on it; API keys are never switched to.",
     "updateCheck": "Tell me when a newer PlainBoard is available",
     "updateCheckHint": "Every few hours PlainBoard asks GitHub whether its repository has newer commits than the one that is running. Only that commit id is sent.",
     "versionRunning": "Running {{commit}}.",

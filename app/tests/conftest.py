@@ -184,7 +184,7 @@ class FakeRunner:
                 yield LimitsEvent(windows=[LimitWindow(name=name, utilization=float(used), resets_at=int(time.time()) + int(resets_in))], complete=rest == ["ALL"])
             elif line.startswith("REJECT "):  # "REJECT token window resets_in": the account with that token is used up
                 _, token, name, resets_in = line.split()
-                if token in (spec.credentials.claude_oauth_token, spec.credentials.anthropic_api_key):
+                if token in ((spec.credentials.codex_account,) if spec.provider == "codex" else (spec.credentials.claude_oauth_token, spec.credentials.anthropic_api_key)):
                     yield LimitsEvent(windows=[LimitWindow(name=name, utilization=1.0, resets_at=int(time.time()) + int(resets_in), status="rejected")])
                     yield ResultEvent(session_id=session_id, is_error=True, error="You've hit your limit")
                     return

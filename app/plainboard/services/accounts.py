@@ -8,6 +8,9 @@ keys (they cost money per token), then used-up subscriptions. Among subscription
 usage would be lost soonest: what is left of it in absolute terms (what its fullest window leaves,
 times the size of its plan) per hour until its longest window resets. A conversation moves off its
 account only when another one is clearly better (``MARGIN``).
+
+With the setting ``switch_providers`` an agent whose own provider has nothing left runs on another
+provider's subscription until its own is free again (``route``): Codex is used up, Claude takes over.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ from __future__ import annotations
 import os
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
@@ -27,8 +31,10 @@ from ..schemas import AccountCreate, AccountOut, AccountUpdate
 from ..security import decrypt, encrypt
 from . import limits as limits_service
 from . import permissions
+from . import settings as settings_service
 from . import users as user_service
 from .errors import NotFound, ServiceError
+from .model_choice import equivalent_model
 
 AUTH_MODES = {"claude_code": ("oauth_token", "api_key", "runner_login"), "codex": ("chatgpt", "api_key")}
 # Every other provider is an endpoint (ProviderInfo.endpoint): which ones exist is the runner's list, not the app's.
@@ -273,7 +279,7 @@ async def shut_out(session: AsyncSession, provider: str, agent: Agent) -> str:
     if not accounts or any(a.id in allowed for a in accounts):
         return ""
     return (
-        f"This project may only use some of the installation's subscriptions, and none of them is for {agent.provider}. "
+        f"This project may only use some of the installation's subscriptions, and none of them is for {provider}. "
         "An admin can change that (Project settings, Team, or what the project's owner may use in Settings, Users), or the agent can be given a provider the project has a subscription for."
     )
 
@@ -340,9 +346,75 @@ async def _candidates(session: AsyncSession, provider: str, agent: Agent | None,
     return accounts
 
 
-async def used_up_until(session: AsyncSession, agent: Agent) -> int | None:
+@dataclass(frozen=True)
+class Route:
+    """What an agent's turns run on right now: its own provider and models, or another provider's
+    while every subscription of its own is used up (``switched``)."""
+
+    provider: str
+    model: str
+    summary_model: str
+    switched: bool = False
+    efforts: tuple[str, ...] | None = None  # what the other provider understands; None: the agent's own, as set
+
+    def effort(self, value: str | None) -> str | None:
+        """An effort the provider understands, else its own default."""
+        return value if self.efforts is None or value in self.efforts else None
+
+
+async def route(session: AsyncSession, agent: Agent, catalog: list[ProviderInfo]) -> Route:
+    """The provider and models for the agent's next turn. Its own, unless the installation switches
+    providers (setting ``switch_providers``), every subscription the agent may use on its own provider
+    is used up, and another provider has a subscription with room the agent may use: then that
+    provider, with its models of the same size (``model_choice.equivalent_model``). Of several such
+    providers, the first in the runner's list. An agent or project that names its subscription stays
+    on it, and API keys are never switched to (they cost money per token). Endpoints are no target:
+    which of their models is as good is not known. The account for the turn: ``account_for``."""
+    own = Route(agent.provider, agent.model, agent.summary_model)
+    if not catalog or not await settings_service.get(session, "switch_providers"):
+        return own
+    project = await session.get(Project, agent.project_id)
+    if agent.account_id or (project is not None and project.account_id):
+        return own
+    found = await limits_service.windows(session)
+    mine = await _candidates(session, agent.provider, agent)
+    if not mine or not all(used_up_now(a, found) for a in mine):
+        return own
+    for provider in catalog:
+        if provider.name == agent.provider or provider.endpoint is not None or not provider.models:
+            continue
+        free = [a for a in await _candidates(session, provider.name, agent) if has_plan(a) and not used_up_now(a, found)]
+        if free:
+            return Route(
+                provider.name,
+                equivalent_model(catalog, agent.model, provider.name) or agent.model,
+                equivalent_model(catalog, agent.summary_model, provider.name) or agent.summary_model,
+                switched=True,
+                efforts=tuple(provider.efforts),
+            )
+    return own
+
+
+async def account_for(session: AsyncSession, route: Route, agent: Agent, conv: Conversation | None = None, *, summary: bool = False, fresh: bool = False) -> Account | None:
+    """The account for a turn on ``route`` (``pick``), or for a summary on it: always of the route's
+    provider and for the route's model, whichever provider the agent itself names."""
+    return await pick(session, route.provider, agent, conv, model=route.summary_model if summary else route.model, fresh=fresh)
+
+
+async def session_provider(session: AsyncSession, conv: Conversation) -> str | None:
+    """The provider the conversation's session belongs to: that of the account its last turn ran on."""
+    if not conv.account_key:
+        return None
+    return await session.scalar(select(Account.provider).where(Account.key == conv.account_key))
+
+
+async def used_up_until(session: AsyncSession, agent: Agent, catalog: list[ProviderInfo] | None = None) -> int | None:
     """When the first of the subscriptions the agent's turns may run on is free again (unix
-    seconds), if every one of them is used up; None if one has room, or a reset time is unknown."""
+    seconds), if every one of them is used up; None if one has room, or a reset time is unknown.
+    ``catalog``: the providers, so that another provider's subscription with room counts
+    (``route``)."""
+    if catalog and (await route(session, agent, catalog)).switched:
+        return None
     accounts = await _candidates(session, agent.provider, agent)
     found = await limits_service.windows(session)
     ends = []

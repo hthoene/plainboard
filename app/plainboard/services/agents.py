@@ -12,22 +12,11 @@ from . import settings as settings_service
 from . import own_notes as own_note_service
 from . import todos as todo_service
 from .errors import NotFound, ServiceError
+from .model_choice import equivalent_model
 from .util import slugify
 
 NULLABLE_FIELDS = {"effort", "summary_effort", "max_turns", "account_id"}
 PALETTE = ["#6366f1", "#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#84cc16", "#f97316"]
-
-
-def equivalent_model(catalog: list[ProviderInfo], model: str, target: str) -> str | None:
-    """The target provider's model of the same size (tier) as ``model``, which may belong to any provider."""
-    providers = {p.name: p for p in catalog}
-    if target not in providers or not providers[target].models:
-        return None
-    models = providers[target].models
-    if any(m.id == model for m in models):
-        return model
-    tier = next((m.tier for p in catalog for m in p.models if m.id == model), None)
-    return next((m.id for m in models if m.tier == tier), models[0].id)
 
 
 async def _unique_slug(session: AsyncSession, project_id: int, name: str, exclude_id: int | None = None) -> str:

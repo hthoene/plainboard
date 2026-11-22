@@ -148,6 +148,12 @@ The set-up asks for these; later they are under **PlainBoard settings → Subscr
   stays on its account while that one has room and then moves to the subscription with the most room
   left. The last 5 % of each subscription are used once all are that full; API keys only step in when
   every subscription is used up.
+- **Settings → General → Switch to another provider when a subscription is used up**: an agent whose
+  own provider has no subscription with room runs on another provider's subscription (Codex is used
+  up: Claude takes over), on that provider's model of the same size, until its own is free again. The
+  other provider cannot take up the session, so the agent starts from the conversation's summary and
+  its last messages. Agents and projects that name their subscription stay on it, and API keys are
+  never switched to. Off (the default): the agent waits until its own provider is free again.
 - A project can name the subscription its agents run on (**Project settings → Team**), and an agent
   can have its own (**Team**).
 - An admin can limit a project to some subscriptions (**Project settings → Team → Subscriptions this

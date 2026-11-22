@@ -120,6 +120,8 @@ class RunContext:
     account_key: str | None = None  # the provider account the run uses (its limit reports belong to it)
     assignment_id: int | None = None  # the piece of work this turn belongs to
     task_id: int | None = None
+    text: str = ""  # the turn's text with its preface, to build it again for another provider (_switch_provider)
+    message_id: int | None = None
 
 
 def _count_and_age(stats: tuple[int, datetime | None] | None) -> tuple[int, int]:
@@ -860,18 +862,19 @@ class RunManager:
                 if not task or not (reports or closed):
                     return
                 manager = await agent_service.get_manager(s, task.project_id)
-                account = await account_service.pick(s, manager.provider, manager, model=manager.summary_model)
+                route = await account_service.route(s, manager, await self.runners.catalog())
+                account = await account_service.account_for(s, route, manager, summary=True)
                 values = await settings_service.get_all(s)
                 credentials = settings_service.credentials(values, account=account_service.fields(account))
                 before = await ticket_state.text_for(s, task.id)
                 names = await board_service.agent_names(s, task.project_id)
                 spec = CompletionSpec(
-                    provider=manager.provider,
-                    model=manager.summary_model,
+                    provider=route.provider,
+                    model=route.summary_model,
                     system_prompt=ticket_state.SYSTEM,
                     prompt=ticket_state.prompt(task, before, reports, names, closed),
                     credentials=credentials,
-                    effort=manager.summary_effort or values["default_summary_effort"] or None,
+                    effort=route.effort(manager.summary_effort or values["default_summary_effort"] or None),
                 )
                 await s.commit()  # no transaction is held while the model writes
                 result = await self.runners.of(task.project_id).complete(spec)
@@ -1216,12 +1219,13 @@ class RunManager:
         get that message. The rest starts when the first subscription is free again."""
         held: set[int] = set()
         until_of: dict[int, int | None] = {}
+        catalog = await self.runners.catalog()
         for run in runs:
             if run.trigger == RunTrigger.CHAT or run.parent_run_id is not None or run.stop_requested_at:
                 continue
             if run.agent_id not in until_of:
                 agent = await s.get(Agent, run.agent_id)
-                until_of[run.agent_id] = await account_service.used_up_until(s, agent) if agent else None
+                until_of[run.agent_id] = await account_service.used_up_until(s, agent, catalog) if agent else None
             if until := until_of[run.agent_id]:
                 held.add(run.id)
                 self._wake_at(until)
@@ -1410,7 +1414,14 @@ class RunManager:
                     earlier = list(await s.scalars(done.order_by(Assignment.id.desc()).limit(3)))
                 facts = timing_service.facts_text(await timing_service.cached_overview(s, project.id, timing_service.FACTS_DAYS * 24))
                 board = prompts.assignment_opening(facts, earlier, fresh)
-            subscriptions = prompts.subscriptions_line(values["timezone"], await account_service.used_up_until(s, agent), await _limit_since_answer(s, conv.id))
+            catalog = await self.runners.catalog()
+            route = await account_service.route(s, agent, catalog)
+            if conv.provider_session_id and (before := await account_service.session_provider(s, conv)) and before != route.provider:
+                # The session belongs to the provider the last turn ran on: the other one starts from summary + recent messages.
+                log.info("Run %s: %s runs on %s instead of %s", run.id, agent.slug, route.provider, before)
+                conv.provider_session_id, conv.context_tokens, conv.session_cost_usd = None, 0, 0.0
+                await s.commit()
+            subscriptions = prompts.subscriptions_line(values["timezone"], await account_service.used_up_until(s, agent, catalog), await _limit_since_answer(s, conv.id))
             full_text = prompts.with_preface(
                 prompts.with_attachments(text, meta.get("attachments")), now=prompts.now_line(values["timezone"]), inbox=updates, board=board, subscriptions=subscriptions
             )
@@ -1419,8 +1430,8 @@ class RunManager:
                 message.meta = {**message.meta, "briefing_update": turn.briefing_changes}
                 await s.commit()
                 bus.publish(project.id, "message.updated", MessageOut.model_validate(message))
-            account = await account_service.pick(s, agent.provider, agent, conv, fresh=turn.resume_session_id is None)
-            if account is None and (why := await account_service.shut_out(s, agent.provider, agent)):
+            account = await account_service.account_for(s, route, agent, conv, fresh=turn.resume_session_id is None)
+            if account is None and (why := await account_service.shut_out(s, route.provider, agent)):
                 raise RuntimeError(why)  # the turn fails with the reason, instead of at the provider for a missing key
             if account:
                 conv.account_key, run.account_key = account.key, account.key
@@ -1435,13 +1446,15 @@ class RunManager:
                 account_key=account.key if account else None,
                 assignment_id=run.assignment_id,
                 task_id=run.task_id,
+                text=full_text,
+                message_id=message.id,
             )
             self._tokens[ctx.token] = ctx
             spec = RunSpec(
                 run_id=str(run.id),
-                provider=agent.provider,
-                model=agent.model,
-                effort=run.effort or agent.effort or None,
+                provider=route.provider,
+                model=route.model,
+                effort=route.effort(run.effort or agent.effort or None),
                 toolset=agent.toolset,  # type: ignore[arg-type]
                 system_prompt=turn.system_prompt,
                 prompt=turn.prompt,
@@ -1539,14 +1552,48 @@ class RunManager:
             if run is None or agent is None or run.status != RunStatus.RUNNING:
                 return None
             conv = await agent_service.conversation_for(s, agent.id)
-            account = await account_service.other_with_room(s, agent.provider, agent, conv, ctx.account_key)
+            account = await account_service.other_with_room(s, spec.provider, agent, conv, ctx.account_key)
             if account is None:
-                return None
+                return await self._switch_provider(s, spec, ctx, run, agent, conv)
             log.info("Run %s: account %s is used up, the turn runs again on %s", run.id, ctx.account_key, account.key)
             conv.account_key, run.account_key, ctx.account_key = account.key, account.key, account.key
             await s.commit()
             bus.publish(run.project_id, "run.upserted", RunOut.model_validate(run))
         return spec.model_copy(update={"credentials": spec.credentials.model_copy(update=account_service.fields(account))})
+
+    async def _switch_provider(self, s: AsyncSession, spec: RunSpec, ctx: RunContext, run: Run, agent: Agent, conv: Conversation) -> RunSpec | None:
+        """The turn was turned away and no subscription of its provider has room: the same turn on
+        another provider's, if the installation switches providers (account_service.route). The
+        session stays behind, so the turn starts from summary + recent messages; what it had done
+        before the limit is in the workspace, not in its context. None if there is nowhere to go."""
+        if ctx.message_id is None:
+            return None
+        route = await account_service.route(s, agent, await self.runners.catalog())
+        if route.provider == spec.provider:
+            return None
+        account = await account_service.account_for(s, route, agent, conv, fresh=True)
+        if account is None or account_service.used_up_now(account, await limits_service.windows(s)):
+            return None
+        project = await s.get(Project, run.project_id)
+        if project is None:
+            return None
+        log.info("Run %s: %s is used up, the turn runs again on %s (%s)", run.id, spec.provider, route.provider, account.key)
+        conv.provider_session_id, conv.context_tokens, conv.session_cost_usd = None, 0, 0.0
+        conv.account_key, run.account_key, ctx.account_key = account.key, account.key, account.key
+        await s.commit()
+        turn = await self.context.build_turn(s, project=project, agent=agent, conv=conv, text=ctx.text, message_id=ctx.message_id)
+        bus.publish(run.project_id, "run.upserted", RunOut.model_validate(run))
+        return spec.model_copy(
+            update={
+                "provider": route.provider,
+                "model": route.model,
+                "effort": route.effort(spec.effort),
+                "system_prompt": turn.system_prompt,
+                "prompt": turn.prompt,
+                "resume_session_id": None,
+                "credentials": spec.credentials.model_copy(update=account_service.fields(account)),
+            }
+        )
 
     async def _add_message(self, s: AsyncSession, ctx: RunContext, conv_id: int, **fields) -> Message:
         msg = Message(conversation_id=conv_id, run_id=ctx.run_id, **fields)

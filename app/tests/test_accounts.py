@@ -538,3 +538,82 @@ def test_a_turn_without_a_single_step_is_not_a_finished_assignment(client, proje
     assert second["status"] == "failed"
     run = next(r for r in client.get(f"/api/projects/{pid}/runs").json() if r["assignment_id"] == second["id"])
     assert run["status"] == "failed" and "without a single step" in run["error"]
+
+
+def test_a_used_up_provider_hands_its_agents_to_another_one(client, project):
+    """Production, 2026-11-21: every agent ran on Codex, Codex was used up until the evening, and the
+    Claude subscription beside it stood idle at 0 %."""
+    pid = project["id"]
+    first = accounts(client)["Claude"]
+    client.patch(f"/api/accounts/{first['id']}", json={"auth_mode": "oauth_token", "secret": "tok-a"})
+    dev = make_dev(client, pid)
+    turn(client, pid, dev["id"])
+    own = runner(client).specs[-1]
+    assert (own.provider, own.model) == ("claude_code", "claude-sonnet-5-5")
+
+    # Off (the default): the turn stays on its provider and fails with the limit message.
+    report_limits(client, Claude=(1.0, "rejected"))
+    turn(client, pid, dev["id"])
+    assert runner(client).specs[-1].provider == "claude_code"
+
+    # On: Codex takes over, with its model of the same size and a session of its own.
+    client.put("/api/settings", json={"values": {"switch_providers": True}})
+    creds = turn(client, pid, dev["id"], "SAY from codex")
+    spec = runner(client).specs[-1]
+    assert (spec.provider, spec.model, spec.resume_session_id) == ("codex", "gpt-6.1-terra", None)
+    assert creds.codex_account == "default" and "All subscriptions are used up" not in spec.prompt
+    assert client.get(f"/api/projects/{pid}/runs?limit=1").json()[0]["status"] == "succeeded"
+    turn(client, pid, dev["id"])  # the next turn takes Codex's session up
+    assert (runner(client).specs[-1].provider, runner(client).specs[-1].resume_session_id) == ("codex", spec.resume_session_id or f"session-{spec.run_id}")
+    assert agents_by_slug(client, pid)["dev"]["provider"] == "claude_code"  # the agent itself is unchanged
+
+    # Its own subscription is free again: back there, in a new session.
+    report_limits(client, Claude=(0.1, "allowed"))
+    turn(client, pid, dev["id"])
+    back = runner(client).specs[-1]
+    assert (back.provider, back.model, back.resume_session_id) == ("claude_code", "claude-sonnet-5-5", None)
+
+    # An agent that names its subscription stays on it.
+    client.patch(f"/api/agents/{dev['id']}", json={"account_id": first["id"]})
+    report_limits(client, Claude=(1.0, "rejected"))
+    turn(client, pid, dev["id"])
+    assert runner(client).specs[-1].provider == "claude_code"
+
+
+def test_a_turn_turned_away_runs_again_on_another_provider(client, project):
+    pid = project["id"]
+    first = accounts(client)["Claude"]
+    client.patch(f"/api/accounts/{first['id']}", json={"auth_mode": "oauth_token", "secret": "tok-a"})
+    client.put("/api/settings", json={"values": {"switch_providers": True}})
+    dev = make_dev(client, pid)
+    turn(client, pid, dev["id"], "SAY before")
+
+    # The limit is hit during the turn: the same turn runs on Codex, from the recent messages.
+    specs = len(runner(client).specs)
+    turn(client, pid, dev["id"], "REJECT tok-a five_hour 3600\nSAY done")
+    tried = runner(client).specs[specs:]
+    assert [(s.provider, s.resume_session_id is None) for s in tried] == [("claude_code", False), ("codex", True)]
+    assert tried[1].model == "gpt-6.1-terra" and "SAY done" in tried[1].prompt and "before" in tried[1].prompt
+    last = client.get(f"/api/projects/{pid}/runs?limit=1").json()[0]
+    assert last["status"] == "succeeded" and "done" in last["result_text"], (last["error"], tried[1].prompt)
+
+    # Codex is used up as well: nowhere to go, the turn fails with the provider's message.
+    specs = len(runner(client).specs)
+    turn(client, pid, dev["id"], "REJECT default codex_five_hour 3600")
+    assert [s.provider for s in runner(client).specs[specs:]] == ["codex"]
+    assert client.get(f"/api/projects/{pid}/runs?limit=1").json()[0]["status"] == "failed"
+
+
+def test_another_provider_never_gets_a_larger_model_than_the_agents_own():
+    from plainboard_protocol import ModelInfo, ProviderInfo
+
+    from plainboard.services.model_choice import equivalent_model
+
+    own = ProviderInfo(name="a", label="A", models=[ModelInfo(id="a-big", label="", tier="xlarge"), ModelInfo(id="a-mid", label="", tier="medium"), ModelInfo(id="a-tiny", label="", tier="small")])
+    other = ProviderInfo(name="b", label="B", models=[ModelInfo(id="b-large", label="", tier="large"), ModelInfo(id="b-medium", label="", tier="medium")])
+    catalog = [own, other]
+    assert equivalent_model(catalog, "a-mid", "b") == "b-medium"
+    assert equivalent_model(catalog, "a-big", "b") == "b-large"  # no model that large: the next smaller one
+    assert equivalent_model(catalog, "a-tiny", "b") == "b-medium"  # all are larger: the smallest
+    assert equivalent_model(catalog, "unknown", "b") == "b-medium"  # a model the runner does not list counts as medium
+    assert equivalent_model(catalog, "a-mid", "a") == "a-mid" and equivalent_model(catalog, "a-mid", "gone") is None

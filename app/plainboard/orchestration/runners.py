@@ -24,7 +24,9 @@ from websockets.asyncio.client import connect
 from ..models import Project
 from plainboard_protocol.tunnel import CLOSE_REFUSED, CLOSE_REPLACED
 
-from .runner_client import RunnerClient
+from plainboard_protocol import ProviderInfo
+
+from .runner_client import RunnerClient, RunnerError
 from .tunnel import Tunnel, TunnelTransport
 
 log = logging.getLogger(__name__)
@@ -73,6 +75,15 @@ class Runners:
     def of(self, project_id: int | None) -> Any:
         """The runner of a project."""
         return self.client(self.runner_id(project_id))
+
+    async def catalog(self) -> list[ProviderInfo]:
+        """The installation's providers (the built-in runner's), to tell what an agent can run on
+        (``services/accounts.route``). Empty while that runner does not answer: then every agent
+        stays on its own provider."""
+        try:
+            return await self.builtin.providers()
+        except RunnerError:
+            return []
 
     def in_use(self) -> list[int | None]:
         """The built-in runner and every external runner a project uses."""

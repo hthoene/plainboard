@@ -48,6 +48,9 @@ SETTINGS: dict[str, SettingDef] = {
     "timezone": SettingDef("Europe/Berlin"),
     # The user may also write to members, not only to the manager (api/chat.py). Agents among themselves are not affected.
     "member_chat": SettingDef(False),
+    # An agent whose own provider has no subscription with room runs on another provider's until its
+    # own is free again (services/accounts.route). Off: it waits, or fails with the limit message.
+    "switch_providers": SettingDef(False),
     "update_check": SettingDef(True),  # ask now and then whether a newer PlainBoard exists
     # The admin has gone through the basic settings once (the set-up in the browser). Until then the UI asks for them.
     "setup_done": SettingDef(False),

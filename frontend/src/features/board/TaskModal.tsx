@@ -11,7 +11,7 @@ import { Lightbox } from "../../components/Lightbox";
 import { Markdown, TicketText } from "../../components/Markdown";
 import { useMentionPicker, useReadMentionsOf } from "../../components/Mentions";
 import { AgentSquare, AgentDot, Badge, Button, ErrorText, IconButton, Input, Modal, Select, Spinner, Textarea } from "../../components/ui";
-import { formatBytes, formatDateTime, timeAgo } from "../../lib/format";
+import { chatTime, formatBytes, formatDateTime, timeAgo } from "../../lib/format";
 import { useShell } from "../layout/shell-context";
 import { STATUSES } from "./Board";
 import { Decisions, isImage, reviewAttachmentIds } from "./Decisions";
@@ -464,7 +464,9 @@ function Attachments({
                   </AttachmentLink>
                 )}
                 <AttachmentLink file={a} className="block w-full truncate px-2 py-1">
-                  {a.filename} <span className="text-fg-3">· {formatBytes(a.size)}</span>
+                  {a.filename} <span className="text-fg-3" title={formatDateTime(a.created_at)}>
+                    · {formatBytes(a.size)} · {chatTime(a.created_at)}
+                  </span>
                 </AttachmentLink>
                 {reviewIds.has(a.id) && (
                   <Badge tone="amber" className="absolute top-1 left-1">

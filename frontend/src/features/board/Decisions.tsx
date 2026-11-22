@@ -13,9 +13,9 @@ import { useShell } from "../layout/shell-context";
 
 export const isImage = (attachment: Attachment) => attachment.content_type.startsWith("image/");
 
-/** Attachments that a decision shows to the user. */
+/** Attachments of open decisions: those still wait for the user's review. */
 export function reviewAttachmentIds(decisions: Decision[]): Set<number> {
-  return new Set(decisions.flatMap((d) => [...d.attachment_ids, ...d.options.flatMap((o) => o.attachment_ids)]));
+  return new Set(decisions.filter((d) => d.status === "open").flatMap((d) => [...d.attachment_ids, ...d.options.flatMap((o) => o.attachment_ids)]));
 }
 
 function Thumbs({ ids, attachments, onView, small }: { ids: number[]; attachments: Attachment[]; onView: (id: number) => void; small?: boolean }) {

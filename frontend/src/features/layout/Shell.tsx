@@ -37,13 +37,13 @@ const VIEWS: { id: View; icon: (cls: string) => ReactNode }[] = [
   { id: "board", icon: (c) => <FolderKanban className={c} /> },
   { id: "chat", icon: (c) => <MessageSquare className={c} /> },
   { id: "team", icon: (c) => <Users className={c} /> },
+  // The project's own settings: for its owners. Fixed entry after the core views; on the phone the 4th tab.
+  { id: "project", icon: (c) => <SlidersHorizontal className={c} /> },
   { id: "notes", icon: (c) => <NotebookPen className={c} /> },
   { id: "schedules", icon: (c) => <CalendarClock className={c} /> },
   { id: "browser", icon: (c) => <AppWindow className={c} /> },
   { id: "tools", icon: (c) => <Plug className={c} /> },
   { id: "stats", icon: (c) => <BarChart3 className={c} /> },
-  // The project's own settings: for its owners.
-  { id: "project", icon: (c) => <SlidersHorizontal className={c} /> },
 ];
 /** The phone's bottom bar holds this many views; the rest sit behind "More". */
 const PHONE_TABS = 4;
@@ -483,12 +483,12 @@ function PhoneTabs({ views, view, setView, onSettings, previews }: { views: type
       <LookDialog open={lookOpen} onClose={() => setLookOpen(false)} />
       <nav data-part="tabs" aria-label={t("nav.views")} className="relative z-40 flex shrink-0 border-t border-line-2 bg-bg pb-[env(safe-area-inset-bottom)]">
         {tabs.map((v) => (
-          <button key={v.id} type="button" onClick={() => go(v.id)} aria-current={view === v.id && !more ? "page" : undefined} className={tab(view === v.id && !more)}>
+          <button key={v.id} type="button" onClick={() => go(v.id)} aria-label={t(`nav.${v.id}`)} aria-current={view === v.id && !more ? "page" : undefined} className={tab(view === v.id && !more)}>
             <span className="relative">
               {v.icon("size-5")}
               {marked(v.id) && <span className="mk mk-run absolute -top-0.5 -right-2 scale-75 bg-current" />}
             </span>
-            <span className="max-w-full truncate">{t(`nav.${v.id}`)}</span>
+            <span className="max-w-full truncate">{v.id === "project" ? t("nav.projectShort") : t(`nav.${v.id}`)}</span>
           </button>
         ))}
         <button type="button" aria-haspopup="menu" aria-expanded={more} onClick={() => setMore(!more)} className={tab(more || rest.some((v) => v.id === view))}>

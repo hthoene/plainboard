@@ -9,7 +9,7 @@ import asyncio
 import time
 from pathlib import Path
 
-from plainboard_protocol import CheckResult, Credentials, JobSpec, JobState, RepoSpec, TidyResult, TidySpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec
+from plainboard_protocol import CheckResult, Credentials, JobSpec, JobState, RepoSpec, TidyBranch, TidyResult, TidySpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec
 
 from . import jobs
 from .workspace import WorkspaceError, config_args, git_env, run_cmd
@@ -219,12 +219,42 @@ KEPT_NAMES = {"main", "master", "develop", "development", "dev", "trunk", "stagi
 KEPT_PREFIXES = ("release", "hotfix", "dependabot/")
 
 
+# How far back the base branch's history is searched for the point at which a branch had landed.
+LANDED_SEARCH = 1000
+
+
+async def merged_how(git: Git, sha: str, tip: str) -> str:
+    """How the content of a commit is on the base branch already, by content and not only by history:
+    "ancestor" (its commits are there), "merged" (merging it into the base branch changes nothing) or
+    "landed at <commit>" (at that commit of the base branch merging it changed nothing: it got there
+    squashed, rebased or together with other branches, and the base branch went on since). Empty: it
+    has something of its own, or that is unclear."""
+    if await git.ok("merge-base", "--is-ancestor", sha, tip):
+        return "ancestor"
+    try:
+        shared = await git("merge-base", tip, sha)
+    except WorkspaceError:
+        return ""  # no common history
+    listed = await git("log", "--first-parent", f"--max-count={LANDED_SEARCH}", "--format=%H %T", f"{shared}..{tip}")
+    for index, line in enumerate(listed.splitlines()):
+        commit, _, tree = line.partition(" ")
+        try:
+            merged = (await git("merge-tree", "--write-tree", "--no-messages", commit, sha)).split()[0]
+        except (WorkspaceError, IndexError):
+            continue  # it conflicts with that state
+        if merged == tree.strip():
+            return "merged" if index == 0 else f"landed at {commit[:12]}"
+    return ""
+
+
 async def tidy(spec: TidySpec) -> TidyResult:
-    """Remove the branches whose commits are all on the base branch already: what merging left behind.
-    Only a name goes, never a commit. A branch stays if it has a commit of its own, if its last commit is
-    young (a branch just started from the base branch looks merged), if it is the base or the default
-    branch, has a name repositories keep on purpose, is named in ``spec.keep``, or is what an open pull
-    request on GitHub is based on."""
+    """Remove the branches whose content is all on the base branch already: what merging left behind,
+    also squashed, rebased or inside another branch (``merged_how``). Only a name goes, never work: a
+    branch stays if anything of it is not proven to be on the base branch, if its last commit is young
+    (a branch just started or pushed), if it is the base or the default branch, has a name repositories
+    keep on purpose, is named in ``spec.keep``, or, on GitHub, is protected or part of an open pull
+    request. Branches with work of their own whose last commit is older than ``spec.stale_days`` are
+    named in the result, and stay."""
     where = folder(spec.key)
     url = spec.remote.url
     async with _lock(spec.key):
@@ -243,30 +273,39 @@ async def tidy(spec: TidySpec) -> TidyResult:
         base = spec.base or default
         if base not in heads:
             raise WorkspaceError(f"Base branch {base or '?'} not found on the remote")
-        # Only the base branch is fetched: a commit that is not in it is unknown here, and so not merged.
-        await git("fetch", "-q", "--no-tags", "origin", f"+refs/heads/{base}:refs/remotes/origin/{base}")
-        tip = f"refs/remotes/origin/{base}"
         keep = {base, default, *spec.keep, *KEPT_NAMES}  # whatever git says about them
         if spec.github:
-            # A branch that open pull requests are based on: the host would close them with it. If this
-            # cannot be read, nothing is removed.
+            # A branch an open pull request comes from or is based on: the host would close it with the
+            # branch. And a protected one. If this cannot be read, nothing is removed.
             listed = await run_cmd(
-                ["gh", "api", "--paginate", f"repos/{spec.github}/pulls?state=open&per_page=100", "--jq", ".[].base.ref"], cwd=None, env=git.env, timeout=120
+                ["gh", "api", "--paginate", f"repos/{spec.github}/pulls?state=open&per_page=100", "--jq", ".[] | .base.ref, .head.ref"], cwd=None, env=git.env, timeout=120
             )
-            keep |= {line.strip() for line in listed.splitlines() if line.strip()}
-        young = time.time() - spec.min_age_hours * 3600
-        gone: dict[str, str] = {}
-        for name, sha in sorted(heads.items()):
-            if name in keep or name.startswith(KEPT_PREFIXES) or len(gone) >= spec.limit:
+            protected = await run_cmd(
+                ["gh", "api", "--paginate", f"repos/{spec.github}/branches?protected=true&per_page=100", "--jq", ".[].name"], cwd=None, env=git.env, timeout=120
+            )
+            keep |= {line.strip() for line in (listed + "\n" + protected).splitlines() if line.strip()}
+        candidates = {name: sha for name, sha in sorted(heads.items()) if name not in keep and not name.startswith(KEPT_PREFIXES)}
+        refs = [f"+refs/heads/{name}:refs/remotes/origin/{name}" for name in (base, *candidates)]
+        await git("fetch", "-q", "--no-tags", "origin", *refs)
+        tip = f"refs/remotes/origin/{base}"
+        now = time.time()
+        young = now - spec.min_age_hours * 3600
+        stale = now - spec.stale_days * 86400
+        gone: dict[str, TidyBranch] = {}
+        result = TidyResult()
+        for name, sha in candidates.items():
+            when = int(await git("show", "-s", "--format=%ct", sha))
+            if when > young or len(gone) >= spec.limit:
                 continue
-            if not await git.ok("merge-base", "--is-ancestor", sha, tip):
-                continue
-            if int(await git("show", "-s", "--format=%ct", sha)) > young:
-                continue
-            gone[name] = sha
-        await _remove(git, gone)
+            if how := await merged_how(git, sha, tip):
+                gone[name] = TidyBranch(name=name, sha=sha, how=how)
+            elif when < stale:
+                result.unmerged.append(TidyBranch(name=name, sha=sha, days=int((now - when) // 86400)))
+        await _remove(git, {name: b.sha for name, b in gone.items()})
         left = await remote_heads(git, url) if gone else {}
-        return TidyResult(deleted=[name for name in gone if name not in left])
+        result.removed = [b for name, b in gone.items() if name not in left]
+        result.deleted = [b.name for b in result.removed]
+        return result
 
 
 async def delete_branches(credentials: Credentials, remote: RepoSpec, key: str, branches: dict[str, str]) -> None:

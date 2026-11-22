@@ -392,21 +392,32 @@ TRAIN_KEY = r"^[\w.-]{1,80}$"
 
 
 class TidySpec(BaseModel):
-    """Remove the branches of a repository whose commits are all on its base branch already."""
+    """Remove the branches of a repository whose content is all on its base branch already."""
 
     credentials: Credentials
     key: str = Field(pattern=TRAIN_KEY)  # names the runner's clone for this repository
     remote: RepoSpec
     base: str | None = None  # None: the repository's default branch
     keep: list[str] = Field(default_factory=list)  # never these: in flight with PlainBoard, other base branches
-    # owner/name on GitHub: a branch that open pull requests are based on stays (deleting it would close them).
+    # owner/name on GitHub: a branch that an open pull request comes from or is based on stays, and so does a
+    # protected one. If that cannot be read, nothing is removed.
     github: str | None = Field(default=None, pattern=r"^[\w.-]+/[\w.-]+$")
-    min_age_hours: int = 24  # a branch whose last commit is younger stays
+    min_age_hours: float = 24  # a branch whose last commit is younger stays
+    stale_days: int = 14  # a branch with work of its own whose last commit is older is named in the result
     limit: int = 300
+
+
+class TidyBranch(BaseModel):
+    name: str
+    sha: str
+    how: str = ""  # removed: why its content is on the base branch (ancestor, merged, landed at <commit>)
+    days: int = 0  # unmerged: how old its last commit is
 
 
 class TidyResult(BaseModel):
     deleted: list[str] = Field(default_factory=list)
+    removed: list[TidyBranch] = Field(default_factory=list)  # the deleted ones, with the commit they pointed to
+    unmerged: list[TidyBranch] = Field(default_factory=list)  # work of their own, older than stale_days: they stay
 
 
 class ProjectFiles(BaseModel):

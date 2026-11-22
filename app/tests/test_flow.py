@@ -1352,33 +1352,42 @@ def test_a_repair_may_hand_over_a_branch_of_its_own_that_carries_the_trains_bran
     wait_for(lambda: idle(client, pid) and "Landed on main in api: merge/both carrying feat-a, feat-b (Dev1)" in last_update(fake))
 
 
-def test_merged_branches_are_removed_once_a_day_where_a_repository_asks_for_it(client, project):
+def test_branches_whose_content_is_on_the_base_branch_are_removed_every_hour_and_the_manager_knows(client, project):
     from plainboard.models import utcnow
+    from plainboard_protocol import TidyBranch
+    from test_own_accounts import inbox
 
     pid = project["id"]
     fake = team_with_branches(client, pid, ["feat-a"], url="https://github.com/acme/api.git", check_command="", land_first=True)
     fake.merged_branches = ["old-1", "old-2", "feat-a"]
+    fake.stale_branches = [TidyBranch(name="parked", sha="ab" * 20, days=30)]
     tick = lambda when: client.portal.call(client.app_ref.state.tidy.tick, when)  # noqa: E731
     now = utcnow()
-
-    # Off unless asked for: nothing is deleted in a repository on PlainBoard's own account.
-    tick(now)
-    assert not getattr(fake, "tidy_specs", [])
     (repo,) = client.get(f"/api/projects/{pid}/repositories").json()
-    assert repo["tidy_branches"] is False
-    assert client.patch(f"/api/repositories/{repo['id']}", json={"tidy_branches": True}).json()["tidy_branches"] is True
+    assert repo["tidy_branches"] is True  # on unless switched off: only what is proven to be on the base branch goes
 
     # What PlainBoard still has in flight is named, so it stays whatever git says about it.
     tick(now)
     (spec,) = fake.tidy_specs
-    assert spec.key == f"p{pid}-r{repo['id']}" and "feat-a" in spec.keep and spec.min_age_hours == 24
+    assert spec.key == f"p{pid}-r{repo['id']}" and "feat-a" in spec.keep and spec.min_age_hours == 1 and spec.stale_days == 14 and spec.github == "acme/api"
     (event,) = [e for e in flow_events(client, pid) if e["kind"] == "branches.tidied"]
-    assert event["data"] == {"repository": "api", "deleted": 2, "branches": ["old-1", "old-2"]}
+    assert event["data"] == {"repository": "api", "deleted": 2, "branches": {"old-1": f"{1:040x}", "old-2": f"{2:040x}"}}
+    told = inbox(client, pid)
+    (removed,) = [t for t in told if t.startswith("Removed 2 branches from api")]
+    assert f"old-1 at {1:040x} (squashed)" in removed and "git push origin <commit>:refs/heads/<name>" in removed
+    (stale,) = [t for t in told if "parked" in t]
+    assert "parked at abababababab (last commit 30 days ago)" in stale and "does not delete them" in stale
 
-    # Once a day, not with every look.
-    tick(now + timedelta(hours=23))
+    # Every hour, not with every look; an old unmerged branch is named once.
+    tick(now + timedelta(minutes=50))
     assert len(fake.tidy_specs) == 1
-    tick(now + timedelta(hours=25))
+    tick(now + timedelta(minutes=61))
+    assert len(fake.tidy_specs) == 2
+    assert len([t for t in inbox(client, pid) if "parked" in t]) == 1
+
+    # Switched off: nothing is looked at.
+    assert client.patch(f"/api/repositories/{repo['id']}", json={"tidy_branches": False}).json()["tidy_branches"] is False
+    tick(now + timedelta(hours=3))
     assert len(fake.tidy_specs) == 2
 
 

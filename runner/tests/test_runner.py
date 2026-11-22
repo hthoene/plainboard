@@ -1091,41 +1091,95 @@ async def test_only_branches_that_are_fully_on_the_base_branch_are_removed(tmp_p
     def run(*args, env=None):
         return subprocess.run(args, cwd=origin, check=True, capture_output=True, text=True, env={**__import__("os").environ, **(env or {})}).stdout.strip()
 
-    def commit(name: str, env=None):
-        (origin / f"{name}.txt").write_text(name)
+    def commit(name: str, content: str | None = None, env=old):
+        (origin / f"{name}.txt").write_text(content if content is not None else name)
         run("git", "add", ".")
-        run("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", name, env=env)
+        run("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", f"{name} {content}", env=env)
 
     # merged-old: its commit is on main. With main's own (young) commit on top, main's tip is not that commit.
     run("git", "checkout", "-q", "-b", "merged-old")
-    commit("merged", env=old)
+    commit("merged")
     run("git", "checkout", "-q", "main")
     run("git", "merge", "-q", "--ff-only", "merged-old")
-    run("git", "branch", "develop")  # merged and old, but a name repositories keep
-    run("git", "branch", "release/1.0")
-    run("git", "branch", "in-flight")  # merged and old, but PlainBoard has it
-    run("git", "branch", "stack-base")  # merged and old, but open pull requests are based on it
-    run("git", "checkout", "-q", "-b", "own-work")
-    commit("unmerged", env=old)  # a commit of its own: stays
+    for name in ("develop", "release/1.0", "in-flight", "stack-base", "pr-head", "protected"):
+        run("git", "branch", name)  # merged and old, but kept: by name, by PlainBoard, open pull requests, protection
+    commit("shared", "A")
+    # squashed: two commits, landed in one squash commit with another branch; main changed the same line since, so merging it conflicts.
+    run("git", "checkout", "-q", "-b", "squashed")
+    commit("shared", "X")
+    commit("shared", "B")
+    # rebased: one commit, landed as a copy with another parent; main changed its line since as well.
+    run("git", "checkout", "-q", "-b", "rebased", "main")
+    commit("other", "R")
+    # landed-inside: its change reached main inside another branch's merge commit (merging it changes nothing).
+    run("git", "checkout", "-q", "-b", "landed-inside", "main")
+    commit("inside", "I")
+    run("git", "checkout", "-q", "-b", "carrier")
+    commit("carried", "C")
     run("git", "checkout", "-q", "main")
-    commit("young")
+    (origin / "mate.txt").write_text("M")
+    commit("shared", "B")  # the squash, with a train mate
+    commit("other", "R")  # the rebase
+    rebase = run("git", "rev-parse", "HEAD")
+    commit("shared", "B2")
+    b2 = run("git", "rev-parse", "HEAD")
+    commit("other", "R2")
+    run("git", "merge", "-q", "--squash", "carrier")
+    run("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "carrier", env=old)
+    run("git", "branch", "-D", "carrier")
+    run("git", "checkout", "-q", "-b", "own-work")
+    commit("unmerged")  # a commit of its own, old: stays, named
+    run("git", "checkout", "-q", "-b", "half-landed", "squashed")
+    commit("extra", "E")  # its squash landed, but not this commit: stays
+    run("git", "checkout", "-q", "-b", "fresh", "main")
+    commit("fresh", env=None)  # young work of its own: stays, not named
+    run("git", "checkout", "-q", "-b", "fresh-copy", "main")
+    commit("shared", "B3", env=None)
+    commit("shared", "B2", env=None)  # on main by content, but just pushed: stays
+    run("git", "checkout", "-q", "main")
+    commit("young", env=None)
     run("git", "branch", "just-started")  # no commit of its own yet, and main's tip is young: stays
 
     real = trains.run_cmd
 
     async def host(args, cwd, env, timeout=600):
         if args[0] == "gh":
-            assert args[3] == "repos/acme/api/pulls?state=open&per_page=100"
-            return "main\nstack-base\n"
+            if "pulls" in args[3]:
+                assert args[3] == "repos/acme/api/pulls?state=open&per_page=100" and args[-1] == ".[] | .base.ref, .head.ref"
+                return "main\nstack-base\nmain\npr-head\n"
+            assert args[3] == "repos/acme/api/branches?protected=true&per_page=100"
+            return "main\nprotected\n"
         return await real(args, cwd, env, timeout)
 
     monkeypatch.setattr(trains, "run_cmd", host)
-    spec = TidySpec(credentials=Credentials(), key="p1-r1", remote=RepoSpec(name="origin", url=url), base="main", keep=["in-flight"], github="acme/api")
+    spec = TidySpec(credentials=Credentials(), key="p1-r1", remote=RepoSpec(name="origin", url=url), base="main", keep=["in-flight"], github="acme/api", min_age_hours=1)
+    heads = dict(line.split(" ") for line in run("git", "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads").splitlines())
     result = await trains.tidy(spec)
-    assert result.deleted == ["merged-old"]
+    # The newest state of main that has all of it is named: squashed and rebased are each in all states after they landed.
+    assert {b.name: (b.sha, b.how) for b in result.removed} == {
+        "merged-old": (heads["merged-old"], "ancestor"),
+        "squashed": (heads["squashed"], f"landed at {rebase[:12]}"),
+        "rebased": (heads["rebased"], f"landed at {b2[:12]}"),
+        "landed-inside": (heads["landed-inside"], "merged"),
+    }
+    assert sorted(result.deleted) == ["landed-inside", "merged-old", "rebased", "squashed"]
+    assert [(b.name, b.sha) for b in result.unmerged] == [("half-landed", heads["half-landed"]), ("own-work", heads["own-work"])] and result.unmerged[0].days > 365
     left = set(run("git", "branch", "--format=%(refname:short)").splitlines())
-    assert {"main", "develop", "release/1.0", "in-flight", "stack-base", "own-work", "just-started"} <= left and "merged-old" not in left
+    kept = {"main", "develop", "release/1.0", "in-flight", "stack-base", "pr-head", "protected", "own-work", "half-landed", "fresh", "fresh-copy", "just-started"}
+    assert left == kept
     assert (await trains.tidy(spec)).deleted == []  # nothing left to remove
+
+    # What the host's pull requests or protection cannot be read for: nothing is removed.
+    async def blind(args, cwd, env, timeout=600):
+        if args[0] == "gh":
+            raise trains.WorkspaceError("HTTP 403")
+        return await real(args, cwd, env, timeout)
+
+    run("git", "branch", "merged-later", "main~1")
+    monkeypatch.setattr(trains, "run_cmd", blind)
+    with pytest.raises(trains.WorkspaceError):
+        await trains.tidy(spec)
+    assert "merged-later" in run("git", "branch", "--format=%(refname:short)").splitlines()
 
 
 async def test_a_token_that_cannot_read_check_runs_reads_the_runs_of_actions(monkeypatch):

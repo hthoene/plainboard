@@ -329,6 +329,7 @@ class LandingWatcher:
         train.status = TrainStatus.LANDED
         for member in members:
             member.status, member.merged_at, member.group_no = LandingStatus.MERGED, now, None
+        r.repo.tidied_at = None  # what landed alongside may have left branches behind: looked at with the next tidy tick
         await s.commit()
         self._looked.pop(r.repo.id, None)  # the base branch moved: its checks are looked at right away (_guard)
         await flow_log.record(s, r.project.id, "train.landed", train_id=train.id, branches=[m.branch for m in members], check_seconds=train.check_seconds)
@@ -619,6 +620,7 @@ class LandingWatcher:
             for landing in landed:
                 landing.status, landing.train_id, landing.head_sha, landing.merged_at, landing.group_no = LandingStatus.MERGED, train.id, result.merged[landing.branch], now, None
                 landing.conflict_at, landing.conflict_files = None, []
+            r.repo.tidied_at = None  # the branch tidy looks again (orchestration/tidy.py)
             await s.commit()
             timing_service.forget_cache()
             await flow_log.record(

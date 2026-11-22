@@ -294,9 +294,10 @@ class Repository(Timestamps, Base):
     # quick check), and the checks run on the base branch afterwards; a red base is repaired by one
     # assignment. For a development branch. Off: nothing lands before its checks passed (trains).
     land_first: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
-    # Remove branches whose commits are all on the base branch already, once a day (orchestration/tidy.py).
-    tidy_branches: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    # Remove branches whose content is all on the base branch already, every hour (orchestration/tidy.py).
+    tidy_branches: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
     tidied_at: Mapped[datetime | None] = mapped_column(DateTime)
+    tidy_listed: Mapped[list[str] | None] = mapped_column(JSON)  # old branches with work of their own the manager was told of
     # When the manager was last told that most of this repository's check runs fail (landing._keeps_failing).
     failing_told_at: Mapped[datetime | None] = mapped_column(DateTime)
     red_told_at: Mapped[datetime | None] = mapped_column(DateTime)  # the manager was last reminded that its base branch stays red

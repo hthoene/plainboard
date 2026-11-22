@@ -148,7 +148,7 @@ class RepositoryCreate(BaseModel):
     check_command: str = Field(default="", max_length=2000)  # decides whether finished branches may land
     quick_check_command: str = Field(default="", max_length=2000)  # run on a branch when it is handed over
     land_first: bool = False  # merge finished branches at once, check the base branch afterwards
-    tidy_branches: bool = False  # remove branches that are fully merged, once a day
+    tidy_branches: bool = True  # remove branches whose content is all on the base branch (orchestration/tidy.py)
     agent_ids: list[int] | None = None  # explicit access for agents restricted to selected repos
     auth: RepoAuth = "default"
     token: str | None = None  # write-only
@@ -384,7 +384,7 @@ class RepositoryOut(ORM):
     check_command: str = ""
     quick_check_command: str = ""
     land_first: bool = False
-    tidy_branches: bool = False
+    tidy_branches: bool = True
     agent_ids: list[int] = Field(default_factory=list)
     auth: RepoAuth = "default"
     token_user: str = ""

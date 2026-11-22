@@ -40,6 +40,7 @@ from plainboard_protocol import (
     SessionEvent,
     ToolResultEvent,
     ToolUseEvent,
+    TidyBranch,
     TidyResult,
     TrainResult,
     UsageEvent,
@@ -348,7 +349,8 @@ class FakeRunner:
 
     async def tidy_branches(self, spec):
         self.tidy_specs = getattr(self, "tidy_specs", []) + [spec]
-        return TidyResult(deleted=[b for b in getattr(self, "merged_branches", []) if b not in spec.keep])
+        removed = [TidyBranch(name=b, sha=f"{i + 1:040x}", how="squashed") for i, b in enumerate(getattr(self, "merged_branches", [])) if b not in spec.keep]
+        return TidyResult(deleted=[b.name for b in removed], removed=removed, unmerged=getattr(self, "stale_branches", []))
 
     async def remove_files(self, spec):
         self.removed = getattr(self, "removed", []) + [spec]

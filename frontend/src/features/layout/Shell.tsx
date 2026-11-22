@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { AlertTriangle, AppWindow, ArrowUpCircle, BarChart3, CalendarClock, FolderKanban, Menu, MessageSquare, NotebookPen, Palette, PanelRight, Plug, Settings, SlidersHorizontal, Users } from "lucide-react";
+import { AlertTriangle, AppWindow, ArrowUpCircle, BarChart3, CalendarClock, FolderKanban, Menu, MessageSquare, NotebookPen, Palette, Plug, Settings, SlidersHorizontal, Users } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useProjectEvents } from "../../api/events";
@@ -258,6 +258,7 @@ function ProjectWorkspace({
         if (isDesktop && view !== "chat") setPanelOpen(true);
         else setView("chat");
       },
+      panel: { available: isDesktop && view !== "chat" && activeChatId !== null, open: panelOpen, toggle: () => setPanelOpen(!panelOpen) },
       openTask: setOpenTaskId,
       openSettings,
       openBrowser: (address) => {
@@ -265,7 +266,7 @@ function ProjectWorkspace({
         setView("browser");
       },
     }),
-    [project, agents.data, agentById, previews, openSettings, setChatAgentId, isDesktop, view, setPanelOpen, setView],
+    [project, agents.data, agentById, previews, openSettings, setChatAgentId, isDesktop, view, activeChatId, panelOpen, setPanelOpen, setView],
   );
   // A mention of this project chosen in another one: open where it was written.
   useEffect(() => {
@@ -354,11 +355,6 @@ function ProjectWorkspace({
               <IconButton label={t("nav.settings")} onClick={onSettings}>
                 <Settings className="size-4" />
               </IconButton>
-              {view !== "chat" && (
-                <IconButton label={t("nav.togglePanel")} aria-pressed={panelOpen} onClick={() => setPanelOpen(!panelOpen)} className={clsx(panelOpen && "bg-sunk text-fg")}>
-                  <PanelRight className="size-4" />
-                </IconButton>
-              )}
             </div>
           </aside>
         )}

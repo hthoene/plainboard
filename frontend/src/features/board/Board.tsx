@@ -20,7 +20,7 @@ import { useTranslation } from "react-i18next";
 import { api } from "../../api/client";
 import { qk, useTasks } from "../../api/queries";
 import type { Task, TaskStatus } from "../../api/types";
-import { Button, IconButton, Input, Spinner } from "../../components/ui";
+import { Button, ChatPanelToggle, IconButton, Input, Spinner } from "../../components/ui";
 import { useMediaQuery, useStored } from "../../lib/hooks";
 import { useShell } from "../layout/shell-context";
 import { ArchiveDialog } from "./ArchiveDialog";
@@ -130,6 +130,7 @@ export function Board() {
             <span className="label-line max-sm:hidden">{t("board.addTicket")}</span>
           </Button>
         )}
+        <ChatPanelToggle where="view" divider />
       </div>
       {archiveOpen && <ArchiveDialog onClose={() => setArchiveOpen(false)} />}
       {empty && adding === null && <p className="mx-4 mb-3 max-w-prose text-fg-2">{t("board.hint")}</p>}

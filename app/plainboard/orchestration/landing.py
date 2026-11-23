@@ -165,6 +165,7 @@ class LandingWatcher:
                 except (RunnerError, ServiceError) as exc:  # e.g. the runner or the git host is unreachable: next time
                     await s.rollback()
                     log.info("Landing for repository %s postponed: %s", repository_id, exc)
+            await self._held_long(s, now)
             for repository_id in list(await s.scalars(select(Repository.id).order_by(Repository.id))):
                 try:
                     await self._guard(s, repository_id, repository_id in busy, now)
@@ -251,6 +252,8 @@ class LandingWatcher:
             evidence = f"Check command: {r.repo.check_command.strip()}\nIt ended with exit code {state.exit_code}. Last output:\n{r.redact(state.tail)}\nFull log: {state.log_path}"  # type: ignore[operator]
             await self._failed(s, r, train, members, f"the check command ended with exit code {state.exit_code}", evidence, ["check command"])
             return True
+        if await self._held_back(s, r, train, members):
+            return True
         spec = TrainLandSpec(credentials=r.credentials, key=r.key, remote=r.remote, base=train.base, head_sha=train.head_sha, delete_branches={m.branch: m.head_sha for m in members})
         landed = await self._runs.runners.of(r.repo.project_id).land_train(spec)
         if landed.ok:
@@ -288,6 +291,10 @@ class LandingWatcher:
             evidence = f"Failed checks ({train.url}):\n{listed}\nRead the failed logs once: the links, or gh run view <run id> --log-failed."
             await self._failed(s, r, train, members, "failed checks: " + ", ".join(c.name for c in failed[:8]), evidence, [c.name for c in failed])
             return True
+        if any(m.hold for m in members):
+            await self._runs.runners.of(r.repo.project_id).close_pull_request(r.credentials, r.slug, train.number)
+            await self._held_back(s, r, train, members)
+            return True
         # Branches handed over that are not on this train may build on one of its branches: after a squash they are moved onto it.
         others = select(Landing.branch).where(Landing.repository_id == r.repo.id, Landing.status.in_([LandingStatus.WAITING, LandingStatus.BACK]), Landing.branch != "")
         restack = list(await s.scalars(others))
@@ -323,6 +330,8 @@ class LandingWatcher:
         train.status, train.finished_at = TrainStatus.ABORTED, train.finished_at or now
         for member in members:
             member.status, member.train_id = LandingStatus.WAITING, None
+            if member.hold == landing_service.NEXT:
+                landing_service.release(member)
         await s.commit()
         await flow_log.record(s, r.project.id, "train.aborted", train_id=train.id, branches=[m.branch for m in members])
 
@@ -364,6 +373,17 @@ class LandingWatcher:
         )  # fmt: skip
         await self._keeps_failing(s, r, train.finished_at or utcnow())
         await self._checks_slow(s, r, train, train.finished_at or utcnow())
+        # Held branches (and those handed over again since) are not repaired with the train: they are about to change.
+        if off := [m for m in members if m.hold]:
+            for member in off:
+                member.status, member.train_id, member.group_no = LandingStatus.WAITING, None, None
+                if member.hold == landing_service.NEXT:
+                    landing_service.release(member)
+            await s.commit()
+            await flow_log.record(s, r.project.id, "train.held_off", train_id=train.id, branches=[m.branch for m in off])
+            members = [m for m in members if m not in off]
+            if not members:
+                return
         if len(members) == 1:
             instructions = prompts.repair_instructions(members[0].branch, evidence, members[0].failures + 1, landing_service.MAX_FAILED_ROUNDS)
             await self._back(s, r, members[0], f"did not pass on its own ({summary})", f"Repair branch {members[0].branch}", instructions)
@@ -408,6 +428,42 @@ class LandingWatcher:
         instructions = prompts.train_repair_instructions(r.repo.name, train.base, labels, evidence, rounds, landing_service.MAX_FAILED_ROUNDS)
         repair = await self._runs.delegate(s, None, fixer, f"Make {len(members)} branches of {r.repo.name} pass together", instructions, None, train_id=train.id)
         await flow_log.record(s, r.project.id, "train.repair_ordered", train_id=train.id, agent_id=fixer.id, assignment_id=repair.id, rounds=rounds, branches=len(members))
+
+    async def _held_back(self, s: AsyncSession, r: Repo, train: Train, members: list[Landing]) -> bool:
+        """The train passed, but a branch on it is held (or was handed over again with another commit since):
+        it must not land with the commit that was checked. Nothing lands; the train is given up, and the
+        others go on the next train without it, so the base branch only gets what was checked together."""
+        held = [m for m in members if m.hold]
+        if not held:
+            return False
+        train.status = TrainStatus.ABORTED
+        for member in members:
+            member.status, member.train_id = LandingStatus.WAITING, None
+            if member.hold == landing_service.NEXT:
+                landing_service.release(member)
+        await s.commit()
+        await flow_log.record(s, r.project.id, "train.held_back", train_id=train.id, held=[m.branch for m in held], branches=[m.branch for m in members])
+        return True
+
+    async def _held_long(self, s: AsyncSession, now: datetime) -> None:
+        """A branch held for a message for HOLD_TELL_SECONDS: its author has neither handed it over again nor
+        confirmed it. The manager hears it once (it may not have meant a change, or the author may be stuck)."""
+        for landing in await landing_service.held_long(s, now):
+            if landing.hold_told_at is not None:
+                continue
+            landing.hold_told_at = now
+            await s.commit()
+            project = await s.get(Project, landing.project_id)
+            if project is None:
+                continue
+            author = await s.get(Agent, landing.agent_id) if landing.agent_id else None
+            await flow_log.record(s, project.id, "landing.held_long", landing_id=landing.id, branch=landing.branch, agent_id=landing.agent_id)
+            await tell_manager(
+                s, self._runs, project,
+                f"{await label(s, landing)} has been held for {timing_service.duration((now - (landing.held_at or now)).total_seconds())}: "
+                f"{author.name if author else 'its author'} got a message after handing it over ({landing.hold_reason or 'a message'}) and has neither handed it over again nor confirmed it. "
+                "Ask them, let it land as it is (release_branch), or take it off the list (forget_branch).",
+            )
 
     @staticmethod
     async def _fixer(s: AsyncSession, members: list[Landing]) -> Agent | None:
@@ -515,7 +571,7 @@ class LandingWatcher:
             if not await open_repair(s, landing):  # repaired: it goes on by itself
                 landing.status, landing.conflict_files = LandingStatus.WAITING, []
         await s.commit()
-        waiting = list(await s.scalars(ready.where(Landing.status == LandingStatus.WAITING).order_by(Landing.id)))
+        waiting = [w for w in await s.scalars(ready.where(Landing.status == LandingStatus.WAITING).order_by(Landing.id)) if not landing_service.held(w)]
         waiting.sort(key=lambda w: (w.conflict_at is None, w.conflict_at or datetime.min, w.id))
         busy = await landing_service.busy(s, r.repo.id, now)  # after the look above: who is back resolves nothing any more
         waiting = [w for w in waiting if not (busy.files and self._held.get(w.id) == busy.key)]

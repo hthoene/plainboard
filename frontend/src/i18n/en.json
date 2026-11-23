@@ -273,7 +273,8 @@
     "landing": {
       "waiting": "Finished: the branch waits to land",
       "checking": "Finished: the branch is being checked before it lands",
-      "repairing": "Finished: the branch is being repaired before it lands"
+      "repairing": "Finished: the branch is being repaired before it lands",
+      "held": "Finished, but the branch is held: it does not land until its author hands it over again or the manager releases it"
     },
     "userAction": "For you"
   },
@@ -1524,7 +1525,8 @@
     "state": {
       "waiting": "goes on the next train",
       "repairing": "back with its author ({{count}}×)",
-      "stuck": "with the manager"
+      "stuck": "with the manager",
+      "held": "does not land yet"
     },
     "noneHanded": "Nothing handed over",
     "train": "Train #{{n}}",
@@ -1582,6 +1584,11 @@
       "waiting": "waits for the next train",
       "checking": "on train #{{n}}",
       "repairing": "back with its author, repairing"
+    },
+    "held": {
+      "label": "held",
+      "message": "Held: its author got a message after handing it over. It lands once they hand it over again or confirm it.",
+      "manager": "Held by the manager: it lands once released."
     },
     "side": {
       "title": "Landing",

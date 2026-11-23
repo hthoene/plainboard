@@ -727,7 +727,8 @@ def test_the_repair_goes_to_an_author_who_is_free(client, project):
     dev1, dev2 = (agents_by_slug(client, pid)[slug] for slug in ("dev1", "dev2"))
     # Dev1 wrote most of the train, but is in the middle of other work.
     fake.branches["feat-x"] = "sha-feat-x"
-    chat(client, dev1["id"], "TOOL merge_when_green " + json.dumps({"repository": "api", "branch": "feat-x"}))
+    # (A message to a member holds what it handed over until it confirms it: #96.)
+    chat(client, dev1["id"], "TOOL merge_when_green " + json.dumps({"repository": "api", "branch": "feat-x"}) + "\nTOOL merge_when_green " + json.dumps({"repository": "api", "branch": "feat-a"}))
     wait_for(lambda: idle(client, pid))
     chat(client, manager_of(client, pid)["id"], delegate("dev1", "Long work", "TOOL start_job " + json.dumps({"command": "make all"})))
     wait_for(lambda: idle(client, pid) and fake.job_specs)
@@ -1560,8 +1561,8 @@ def test_a_conflict_costs_its_author_one_turn_not_one_per_train(client, project)
     # feat-a lands, so feat-b conflicts with main: that is its author's, with the file named. The author is
     # busy, so the resolving takes a while.
     fake.behind, fake.conflicting = set(), {"feat-b"}
-    chat(client, dev2["id"], "HOLD\nSAY busy")
-    wait_for(lambda: any(r["status"] == "running" for r in runs_of(client, pid)))
+    chat(client, dev2["id"], "TOOL merge_when_green " + json.dumps({"repository": "api", "branch": "feat-b"}) + "\nHOLD\nSAY busy")  # confirmed: a message holds it (#96)
+    wait_for(lambda: any(r["status"] == "running" for r in runs_of(client, pid)) and hold_of(client, "feat-b") == "")
     check_passes()
     (order,) = assignments(client, pid)
     assert order["title"] == "Resolve the conflicts of branch feat-b" and "It conflicts in: package-lock.json." in order["instructions"]
@@ -1596,8 +1597,8 @@ def test_a_conflict_costs_its_author_one_turn_not_one_per_train(client, project)
     finished("Dev6", "feat-f", {"styles.css"})
     fake.conflicting = {"feat-e"}
     fake.released = False
-    chat(client, agents_by_slug(client, pid)["dev5"]["id"], "HOLD\nSAY busy")
-    wait_for(lambda: any(r["status"] == "running" for r in runs_of(client, pid)))
+    chat(client, agents_by_slug(client, pid)["dev5"]["id"], "TOOL merge_when_green " + json.dumps({"repository": "api", "branch": "feat-e"}) + "\nHOLD\nSAY busy")
+    wait_for(lambda: any(r["status"] == "running" for r in runs_of(client, pid)) and hold_of(client, "feat-e") == "")
     now = utcnow()
     land_tick_at(client, now)
     # Both were ready together: feat-e conflicts and goes to its author. feat-f, after it, merged in the same go;
@@ -1719,3 +1720,146 @@ def test_a_ticket_that_is_done_does_not_keep_open_points_from_before(client, pro
     client.portal.call(scheduler.tick)
     wait_for(lambda: client.get(f"/api/tasks/{ticket['id']}").json()["state"] == "SUMMARY #3")
     assert "Assignment #5 (Dev, done): One more thing" in fake.completions[-1].prompt
+
+
+# --- held branches (#96): a message after the hand-over, or the manager by hand -----------------
+
+
+def hold_of(client, branch: str) -> str:
+    from plainboard.db import sessionmaker
+    from plainboard.models import Landing
+    from sqlalchemy import select
+
+    async def read() -> str:
+        async with sessionmaker()() as s:
+            return (await s.scalar(select(Landing).where(Landing.branch == branch).order_by(Landing.id.desc()).limit(1))).hold
+
+    return client.portal.call(read)
+
+
+def handed(branch: str) -> str:
+    return "TOOL merge_when_green " + json.dumps({"repository": "api", "branch": branch})
+
+
+def message(to: str, text: str) -> str:
+    return "TOOL message_agent " + json.dumps({"agent": to, "message": text})
+
+
+def test_a_message_after_the_hand_over_holds_the_branch_until_its_author_hands_it_over_again(client, project):
+    from plainboard.models import utcnow
+
+    pid = project["id"]
+    fake = team_with_branches(client, pid, ["feat-a", "feat-b"])
+    make_member(client, pid, "Idle")  # nothing of it is on its way
+    manager = manager_of(client, pid)
+    chat(client, manager["id"], message("dev1", "Rename the endpoint first") + "\n" + message("idle", "Rename the endpoint first"))
+    woken = lambda: [s.prompt for s in fake.specs if "Message from Manager (Project Manager): Rename the endpoint first" in s.prompt]  # noqa: E731
+    wait_for(lambda: idle(client, pid) and len(woken()) == 2)
+    woken = woken()
+    assert "PlainBoard holds your branch feat-a because of this message" in woken[0] and "holds your branch" not in woken[1]
+    assert (hold_of(client, "feat-a"), hold_of(client, "feat-b")) == ("message", "")
+    land_tick(client)
+    assert [t.members for t in fake.train_specs] == [["feat-b"]]  # the other one goes as before
+    finish_check(client, fake)
+    chat(client, manager["id"], "SAY ok")
+    wait_for(lambda: idle(client, pid))
+    assert "Branch feat-a, Dev1: goes on the next train; held (message from Manager)" in last_update(fake)
+
+    # Nobody answers: the manager hears it after two hours, once.
+    land_tick_at(client, utcnow() + timedelta(hours=2, minutes=1))
+    wait_for(lambda: idle(client, pid) and "feat-a (Dev1) has been held for 2 h" in last_update(fake))
+    land_tick_at(client, utcnow() + timedelta(hours=3))
+    wait_for(lambda: idle(client, pid))
+    assert sum("has been held for" in s.prompt for s in fake.specs) == 1
+
+    # Its author hands over the corrected branch, in a turn after the message: it lands.
+    fake.branches["feat-a"] = "sha-feat-a-2"
+    dev1 = agents_by_slug(client, pid)["dev1"]
+    chat(client, dev1["id"], handed("feat-a"))
+    wait_for(lambda: idle(client, pid))
+    assert "is with PlainBoard now" in tool_results(client, dev1["id"])[-1] and hold_of(client, "feat-a") == ""
+    land_tick(client)
+    assert fake.train_specs[-1].members == ["feat-a"]
+    finish_check(client, fake)
+    assert sorted(fake.land_specs[-1].delete_branches) == ["feat-a"]
+
+
+def test_a_message_while_the_branch_is_checked_takes_it_off_its_train_and_the_rest_lands(client, project):
+    pid = project["id"]
+    fake = team_with_branches(client, pid, ["feat-a", "feat-b", "feat-c"])
+    land_tick(client)
+    manager = manager_of(client, pid)
+    chat(client, manager["id"], message("dev1", "Wait, the endpoint must be renamed"))
+    wait_for(lambda: idle(client, pid) and hold_of(client, "feat-a") == "message")
+    finish_check(client, fake)  # it passed, but with feat-a: nothing of it lands, the others go again without it
+    assert not fake.land_specs and fake.train_specs[-1].members == ["feat-b", "feat-c"]
+    finish_check(client, fake)
+    assert sorted(fake.land_specs[-1].delete_branches) == ["feat-b", "feat-c"]
+    assert any(e["kind"] == "train.held_back" for e in flow_events(client, pid))
+
+    # Its author confirms it as it is: the same commit, handed over again in a turn after the message.
+    dev1 = agents_by_slug(client, pid)["dev1"]
+    chat(client, dev1["id"], handed("feat-a"))
+    wait_for(lambda: idle(client, pid) and hold_of(client, "feat-a") == "")
+    land_tick(client)
+    assert fake.train_specs[-1].members == ["feat-a"]
+
+    # A confirmation while its train runs: that train lands it, no further check run.
+    chat(client, manager["id"], message("dev1", "Is the rename in?"))
+    wait_for(lambda: idle(client, pid) and hold_of(client, "feat-a") == "message")
+    chat(client, dev1["id"], handed("feat-a"))
+    wait_for(lambda: idle(client, pid) and hold_of(client, "feat-a") == "")
+    assert "no longer held: it lands with the train that checks it now" in tool_results(client, dev1["id"])[-1]
+    checks = len(fake.check_specs)
+    finish_check(client, fake)
+    assert sorted(fake.land_specs[-1].delete_branches) == ["feat-a"] and len(fake.check_specs) == checks
+
+
+def test_a_held_branch_on_a_failed_train_is_not_repaired_with_it(client, project):
+    pid = project["id"]
+    fake = team_with_branches(client, pid, ["feat-a", "feat-b", "feat-c"])
+    land_tick(client)
+    chat(client, manager_of(client, pid)["id"], message("dev1", "Stop, that approach is wrong"))
+    wait_for(lambda: idle(client, pid) and hold_of(client, "feat-a") == "message")
+    finish_check(client, fake, every=True)
+    wait_for(lambda: idle(client, pid) and assignments(client, pid))
+    (repair,) = assignments(client, pid)
+    assert repair["title"] == "Make 2 branches of api pass together"
+    prompt = next(s.prompt for s in fake.specs if "pass together" in s.prompt)
+    assert "feat-a" not in prompt and landing_row(client, "feat-a")["status"] == "open"
+
+
+def test_the_manager_holds_a_branch_by_hand_and_releases_it(client, project):
+    pid = project["id"]
+    fake = team_with_branches(client, pid, ["feat-a", "feat-b"])
+    manager, dev1 = manager_of(client, pid), agents_by_slug(client, pid)["dev1"]
+    hold = "TOOL hold_branch " + json.dumps({"repository": "api", "branch": "feat-a", "reason": "waits for the user's decision"})
+    release = "TOOL release_branch " + json.dumps({"repository": "api", "branch": "feat-a"})
+    chat(client, manager["id"], hold)
+    wait_for(lambda: idle(client, pid))
+    land_tick(client)
+    assert [t.members for t in fake.train_specs] == [["feat-b"]]
+    finish_check(client, fake)
+
+    # Its author cannot release it; the ticket's flow and the manager show it held.
+    chat(client, dev1["id"], handed("feat-a"))
+    wait_for(lambda: idle(client, pid))
+    assert "the manager holds it (waits for the user's decision)" in tool_results(client, dev1["id"])[-1] and hold_of(client, "feat-a") == "manager"
+    live = client.get(f"/api/projects/{pid}/flow").json()
+    assert [(b["branch"], b["held"], b["held_reason"]) for b in live["branches"] if b["held"]] == [("feat-a", "manager", "waits for the user's decision")]
+    chat(client, manager["id"], "SAY ok")
+    wait_for(lambda: idle(client, pid))
+    assert "feat-a, Dev1: goes on the next train; held by you (waits for the user's decision): it does not land until release_branch" in last_update(fake)
+
+    chat(client, manager["id"], release)
+    wait_for(lambda: idle(client, pid) and hold_of(client, "feat-a") == "")
+    land_tick(client)
+    assert fake.train_specs[-1].members == ["feat-a"]
+    # Held and released again while its train runs: that train lands it.
+    chat(client, manager["id"], hold + "\n" + release)
+    wait_for(lambda: idle(client, pid))
+    finish_check(client, fake)
+    assert sorted(fake.land_specs[-1].delete_branches) == ["feat-a"]
+    chat(client, manager["id"], release)
+    wait_for(lambda: idle(client, pid))
+    assert "feat-a is not held" in tool_results(client, manager["id"])[-1]

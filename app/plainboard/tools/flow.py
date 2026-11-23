@@ -8,7 +8,7 @@ import shlex
 
 from pydantic import BaseModel, Field
 
-from ..models import Assignment, JobStatus, LandingStatus, Repository, Run
+from ..models import Assignment, JobStatus, Landing, LandingStatus, Repository, Run, utcnow
 from ..orchestration import prompts
 from ..orchestration.runner_client import RunnerError
 from ..services import flow_check as flow_check_service
@@ -142,8 +142,10 @@ async def merge_when_green(ctx: ToolContext, args: MergeWhenGreenArgs) -> str:
         raise ToolError(f"Branch {branch} failed with exactly this commit and went to the manager. Push a change first, or leave it to the manager.")
     # The manager hands over what others wrote, from a clone that is elsewhere: its call is a decision, not a check.
     quick = await _quick_check(ctx, repo, branch, head) if repo.quick_check_command.strip() and not ctx.agent.is_manager else ""
+    releases = bool(before and before.hold) and await _releases(ctx, before)
+    was_held = bool(before and landing_service.held(before))
     landing = await landing_service.hand_over(
-        ctx.session, repo, branch, head, agent_id=ctx.agent.id, task_id=task_id, fresh_start=ctx.agent.is_manager, assignment_id=ctx.run.assignment_id
+        ctx.session, repo, branch, head, agent_id=ctx.agent.id, task_id=task_id, fresh_start=ctx.agent.is_manager, assignment_id=ctx.run.assignment_id, releases=releases
     )
     # Repairing a failed train with a branch of one's own: that branch carries the train's branches.
     repairing = await ctx.session.get(Assignment, ctx.run.assignment_id) if ctx.run.assignment_id else None
@@ -155,6 +157,17 @@ async def merge_when_green(ctx: ToolContext, args: MergeWhenGreenArgs) -> str:
         carries=[c.branch for c in carried], land_first=repo.land_first,
     )  # fmt: skip
     base = repo.default_branch or "the base branch"
+    if landing_service.held(landing):
+        why = (
+            "the manager holds it" + (f" ({landing.hold_reason})" if landing.hold_reason else "") + ": it lands once the manager releases it"
+            if landing.hold == landing_service.MANAGER
+            else "you got a message after handing it over, which this turn had not read yet: hand it over again in your next turn, once you have read it"
+        )
+        return f"Branch {branch} is taken as pushed.{quick} It does not land yet: {why}. Finish and report."
+    if landing.hold == landing_service.NEXT:
+        return f"Branch {branch} is taken as pushed.{quick} It is not landed with the train that checks its earlier commit: it goes on the next one. Your part is done: finish and report."
+    if was_held and landing.status == LandingStatus.TRAIN:
+        return f"Branch {branch} is no longer held: it lands with the train that checks it now, if that passes. Your part is done: finish and report."
     if carried:
         return (
             f"Branch {branch} is with PlainBoard now.{quick} It carries {', '.join(c.branch for c in carried)}: they land with it and are not checked on their own any more. "
@@ -175,6 +188,17 @@ async def merge_when_green(ctx: ToolContext, args: MergeWhenGreenArgs) -> str:
         f"{repo.default_branch or 'the base branch'}. If that run fails, PlainBoard has it repaired; you may get it back as an assignment. "
         "Your part is done: open no pull request, start no checks and wait for none. Finish and report."
     )
+
+
+async def _releases(ctx: ToolContext, landing: Landing) -> bool:
+    """Whether this hand-over ends the branch's hold: the manager's always; its author's only for a
+    message it has read, i.e. in a turn that started after the message came."""
+    if ctx.agent.is_manager:
+        return True
+    if landing.agent_id != ctx.agent.id:
+        return False
+    run = await ctx.session.get(Run, ctx.run.run_id)
+    return landing.hold == landing_service.MESSAGE and bool(run and run.started_at and landing.held_at and run.started_at >= landing.held_at)
 
 
 @tool(
@@ -218,6 +242,40 @@ async def forget_branch(ctx: ToolContext, args: MergeWhenGreenArgs) -> str:
     timing_service.forget_cache()
     await flow_log.record(ctx.session, ctx.project.id, "landing.forgotten", landing_id=landing.id, agent_id=ctx.agent.id, branch=branch, was=was)
     return f"Branch {branch} is off the list (it was {was}). PlainBoard does nothing more with it; the branch itself is untouched."
+
+
+class HoldBranchArgs(BaseModel):
+    repository: str
+    branch: str
+    reason: str = Field(default="", max_length=300, description="Why, shown with the branch")
+
+
+@tool("hold_branch", "Keep a handed-over branch from landing (it stays on the list) until release_branch. Off a running train it is taken when that ends.", HoldBranchArgs, roles=(MANAGER,))
+async def hold_branch(ctx: ToolContext, args: HoldBranchArgs) -> str:
+    repo = await _repository(ctx, args.repository)
+    branch = args.branch.strip().removeprefix("origin/")
+    landing = await landing_service.find(ctx.session, repo.id, branch)
+    if landing is None or landing.status not in landing_service.ACTIVE:
+        raise ToolError(f"{branch} is not on its way to land (handed over, on a train or being repaired).")
+    landing_service.hold(landing, landing_service.MANAGER, args.reason.strip(), utcnow())
+    await ctx.session.commit()
+    await flow_log.record(ctx.session, ctx.project.id, "landing.hold", landing_id=landing.id, agent_id=ctx.agent.id, branch=branch, reason=args.reason, by="manager", was=str(landing.status))
+    on_train = " It is on a train now: when that ends, the train lands without it (the others go on the next one if it passed)." if landing.status == LandingStatus.TRAIN else ""
+    return f"Branch {branch} is held: it does not land until release_branch.{on_train}"
+
+
+@tool("release_branch", "Let a held branch land again.", MergeWhenGreenArgs, roles=(MANAGER,))
+async def release_branch(ctx: ToolContext, args: MergeWhenGreenArgs) -> str:
+    repo = await _repository(ctx, args.repository)
+    branch = args.branch.strip().removeprefix("origin/")
+    landing = await landing_service.find(ctx.session, repo.id, branch)
+    if landing is None or landing.status not in landing_service.ACTIVE or not landing_service.held(landing):
+        raise ToolError(f"{branch} is not held.")
+    was = landing.hold
+    landing_service.release(landing)
+    await ctx.session.commit()
+    await flow_log.record(ctx.session, ctx.project.id, "landing.released", landing_id=landing.id, agent_id=ctx.agent.id, branch=branch, was=was)
+    return f"Branch {branch} is released: it lands with its train" + (" if that passes." if landing.status == LandingStatus.TRAIN else ".")
 
 
 @tool("flow_check", "PlainBoard's own checks of what slows the team down, measured, heaviest first, each with what usually helps.", FlowCheckArgs, roles=(MANAGER,))

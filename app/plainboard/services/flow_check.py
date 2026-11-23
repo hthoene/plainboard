@@ -42,7 +42,7 @@ from ..models import (
     TrainStatus,
     utcnow,
 )
-from . import own_notes
+from . import landings, own_notes
 from . import settings as settings_service
 from .timing import duration
 from .util import truncate
@@ -64,6 +64,10 @@ def _age(since: datetime, now: datetime) -> str:
     return duration((now - since).total_seconds())
 
 
+def _name(agents: dict, agent_id: int | None) -> str:
+    return agents[agent_id].name if agent_id in agents else "?"
+
+
 def _listed(items: list[str], limit: int = 5) -> str:
     return ", ".join(items[:limit]) + (f" and {len(items) - limit} more" if len(items) > limit else "")
 
@@ -77,7 +81,7 @@ async def findings(session: AsyncSession, project_id: int, hours: int = 24, now:
     project = await session.get(Project, project_id)
     if project is not None and project.fast_checks:
         found += [finding for repo in repos if (finding := (await slow_checks(session, repo, now))[0])]
-    for check in (_red_base, _failing_checks, _slow_quick_check, _repairs, _waiting_repairs, _stuck, _long_assignments, _queue, _big_tickets):
+    for check in (_red_base, _failing_checks, _slow_quick_check, _repairs, _waiting_repairs, _stuck, _held, _long_assignments, _queue, _big_tickets):
         found += await check(session, project_id, repos, agents, since, now)
     for check in (_tool_errors, _full_notes, _schedules_off, _cost, _waiting_for_user, _job_waiting):
         found += await check(session, project_id, agents, since, now)
@@ -304,6 +308,22 @@ async def _stuck(session, project_id, repos, agents, since, now) -> list[Finding
             f"{len(stuck)} branch{'es are' if len(stuck) != 1 else ' is'} stuck: PlainBoard has stopped for {'them' if len(stuck) != 1 else 'it'}",
             f"{_listed([f'{b.branch} ({_age(b.updated_at, now)})' for b in stuck])}. They do not land by themselves: finished work may be lying there.",
             "For each one: hand it over again when it is fixed (merge_when_green), or take it off the list if its work landed another way or is dropped (forget_branch).",
+        )
+    ]
+
+
+async def _held(session, project_id, repos, agents, since, now) -> list[Finding]:
+    held = await landings.held_long(session, now, project_id)
+    if not held:
+        return []
+    return [
+        Finding(
+            "held",
+            55,
+            f"{len(held)} branch{'es are' if len(held) != 1 else ' is'} held for a message for over {landings.HOLD_TELL_SECONDS // 3600} h",
+            f"{_listed([f'{b.branch} ({_name(agents, b.agent_id)}, {_age(b.held_at or now, now)})' for b in held])}. "
+            "Their author got a message after handing them over and has neither handed them over again nor confirmed them: they do not land.",
+            "Ask the author (message_agent), let one land as it is (release_branch), or take it off the list (forget_branch).",
         )
     ]
 

@@ -414,7 +414,17 @@ async def in_flight(session: AsyncSession, project_id: int, now: datetime | None
             state = f"being checked with {train.size - 1} other branch{'es' if train.size != 2 else ''} ({age(train.created_at)})" if train.size > 1 else f"being checked ({age(train.created_at)})"
         else:
             state = "goes on the next train"
-        lines.append(f'- Branch {truncate(landing.branch, 60)}{ticket}, {names.get(landing.agent_id or 0, "?")}: {state}; PlainBoard lands it')
+        author = names.get(landing.agent_id or 0, "?")
+        why = f" ({truncate(landing.hold_reason, 80)})" if landing.hold_reason else ""
+        if landing.hold == "manager":
+            lands = f"held by you{why}: it does not land until release_branch"
+        elif landing.hold == "message":
+            lands = f"held{why}, {age(landing.held_at or now)}: it lands once {author} hands it over again or confirms it"
+        elif landing.hold == "next":
+            lands = "handed over again: it lands with the next train, not this one"
+        else:
+            lands = "PlainBoard lands it"
+        lines.append(f'- Branch {truncate(landing.branch, 60)}{ticket}, {author}: {state}; {lands}')
     return lines[:IN_FLIGHT_LINES], max(len(lines) - IN_FLIGHT_LINES, 0)
 
 
@@ -486,14 +496,14 @@ async def list_tasks(
 
 
 LANDING_PHASE = {LandingStatus.WAITING: "waiting", LandingStatus.TRAIN: "checking", LandingStatus.BACK: "repairing"}
-LANDING_ORDER = ["waiting", "checking", "repairing"]  # the one shown when a ticket has several branches: the furthest from done
+LANDING_ORDER = ["waiting", "checking", "repairing", "held"]  # the one shown when a ticket has several branches: the furthest from done
 
 
 @event.listens_for(Session, "before_flush")
 def _note_landing_changes(session: Session, _ctx, _instances) -> None:  # noqa: ANN001
     """A branch that starts or ends landing changes what its ticket's card shows: remember the ticket until the commit."""
     for obj in (*session.new, *session.dirty):
-        if isinstance(obj, Landing) and obj.task_id and (obj in session.new or inspect(obj).attrs.status.history.has_changes()):
+        if isinstance(obj, Landing) and obj.task_id and (obj in session.new or inspect(obj).attrs.status.history.has_changes() or inspect(obj).attrs.hold.history.has_changes()):
             session.info.setdefault("landing_tasks", set()).add(obj.task_id)
 
 
@@ -551,10 +561,11 @@ async def task_outs(session: AsyncSession, tasks: list[Task]) -> list[TaskOut]:
         ).all()
     )
     landing: dict[int, str] = {}
-    for task_id, status in (
-        await session.execute(select(Landing.task_id, Landing.status).where(Landing.task_id.in_(ids), Landing.status.in_(LANDING_IN_FLIGHT)))
+    for task_id, status, hold in (
+        await session.execute(select(Landing.task_id, Landing.status, Landing.hold).where(Landing.task_id.in_(ids), Landing.status.in_(LANDING_IN_FLIGHT)))
     ).all():
-        landing[task_id] = max(landing.get(task_id, "waiting"), LANDING_PHASE[status], key=LANDING_ORDER.index)
+        phase = "held" if hold in ("message", "manager") else LANDING_PHASE[status]
+        landing[task_id] = max(landing.get(task_id, "waiting"), phase, key=LANDING_ORDER.index)
     out = []
     for task in tasks:
         item = TaskOut.model_validate(task)

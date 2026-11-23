@@ -199,7 +199,7 @@ export interface Task {
   manager_active: boolean;
   open_decisions: number;
   /** Work is finished and only waits to land: its branch waits for a train, is checked, or is repaired. */
-  landing: "waiting" | "checking" | "repairing" | null;
+  landing: "waiting" | "checking" | "repairing" | "held" | null;
 }
 
 export interface Comment {
@@ -968,6 +968,9 @@ export interface FlowBranch {
   since: string;
   merged_at: string | null;
   conflict_files: string[];
+  /** It does not land until its author hands it over again ("message") or the manager releases it ("manager"). */
+  held: "message" | "manager" | null;
+  held_reason: string;
 }
 export interface FlowTrain {
   id: number;

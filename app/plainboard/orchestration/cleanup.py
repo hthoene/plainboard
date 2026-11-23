@@ -27,7 +27,9 @@ from ..models import Agent, Job, JobStatus, Project, utcnow
 from ..services import cleanup as cleanup_service
 from ..services import flow_log
 from ..services import jobs as job_service
+from ..services import board as board_service
 from ..services import preview as preview_service
+from ..services import retention
 from ..services import scratchpad as scratchpad_service
 from ..services import settings as settings_service
 from ..services import storage
@@ -86,6 +88,7 @@ class CleanupWatcher:
         if self._details_at is None or now - self._details_at >= DETAILS_EVERY:
             self._details_at = now
             await self._tool_details(settings, now)
+            await self._retention(now)
         hub = self._runs.runners
         waits = [self._interval]
         for runner_id in hub.in_use():
@@ -104,6 +107,33 @@ class CleanupWatcher:
                     await inbox.push(s, manager.id, tool_details.notice(count, size, kept))
         if found:
             log.info("Trimmed tool details of %d messages (%d bytes)", sum(n for n, _ in found.values()), sum(b for _, b in found.values()))
+
+    async def _retention(self, now: datetime) -> None:
+        """Files of done tickets past their project's retention go (services/retention.py), also the copies on
+        external runners; each project's manager hears it in one line, not woken."""
+        try:
+            async with self._sm() as s:
+                found = await retention.purge(s, now)
+                for project_id, due in found.items():
+                    manager = await s.scalar(select(Agent).where(Agent.project_id == project_id, Agent.is_manager))
+                    if manager is not None:
+                        project = await s.get(Project, project_id)
+                        await inbox.push(s, manager.id, retention.notice(len(due), sum(d.attachment.size for d in due), project.attachment_retention_days))
+                    for task_id in {d.attachment.task_id for d in due}:
+                        await board_service.publish_task_id(s, task_id)
+        except Exception:
+            log.exception("Attachment retention failed")
+        hub = self._runs.runners
+        for runner_id in hub.in_use():
+            if runner_id is None or not hub.connected(runner_id):
+                continue  # the built-in runner reads the app's uploads volume; one away gets it at the next run
+            async with self._sm() as s:
+                names = await retention.purged_names(s, list(await s.scalars(select(Project.id).where(_on(runner_id)))))
+            if names:
+                try:
+                    await hub.client(runner_id).delete_uploads(names)
+                except RunnerError as exc:
+                    log.warning("Deleted attachments not removed on runner %s: %s", runner_id, exc)
 
     async def _look(self, runner_id: int | None, client: Any, settings: dict, now: datetime) -> float:
         try:

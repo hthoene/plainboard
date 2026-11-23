@@ -514,6 +514,8 @@ async def get_attachment(attachment_id: int) -> str:
         attachment = await board_service.get_attachment(session, attachment_id)
         _project_of_call.set(attachment.project_id)
     head = f"{attachment.filename} ({attachment.content_type or 'unknown type'}, {attachment.size} bytes)"
+    if attachment.purged_at is not None:
+        return f"{head}: {board_service.purged_text(attachment)}"
     path = board_service.storage_path(attachment)
     textual = (attachment.content_type or mimetypes.guess_type(attachment.filename)[0] or "").startswith(("text/", "application/json")) or attachment.filename.endswith((".md", ".txt", ".log", ".csv", ".json", ".yaml", ".yml"))
     if textual and attachment.size <= TEXT_INLINE and path.exists():

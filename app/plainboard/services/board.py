@@ -655,6 +655,13 @@ def runner_path(attachment: Attachment) -> str:
     return f"{get_config().runner_uploads_dir}/{attachment.storage_name}"
 
 
+def purged_text(attachment: Attachment) -> str:
+    """An attachment whose file the project's retention deleted (services/retention.py)."""
+    from ..orchestration.prompts import _purged
+
+    return _purged(attachment).capitalize()
+
+
 def _remove_file(attachment: Attachment) -> None:
     storage_path(attachment).unlink(missing_ok=True)
 
@@ -763,6 +770,8 @@ async def project_attachments(session: AsyncSession, project_id: int, ids: list[
     found = {a.id: a for a in await session.scalars(select(Attachment).where(Attachment.project_id == project_id, Attachment.id.in_(ids)))}
     if missing := [i for i in ids if i not in found]:
         raise NotFound(f"Unknown attachment: {', '.join(map(str, missing))}")
+    if gone := [i for i in ids if found[i].purged_at is not None]:
+        raise ServiceError(f"File deleted by the retention: {', '.join(map(str, gone))}")
     return [found[i] for i in dict.fromkeys(ids)]
 
 

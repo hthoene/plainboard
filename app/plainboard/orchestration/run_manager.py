@@ -413,7 +413,7 @@ class RunManager:
         if runner_id is None:
             return
         async with self._sm() as s:
-            names = list(await s.scalars(select(Attachment.storage_name).where(Attachment.project_id == project_id).order_by(Attachment.id.desc())))
+            names = list(await s.scalars(select(Attachment.storage_name).where(Attachment.project_id == project_id, Attachment.purged_at.is_(None)).order_by(Attachment.id.desc())))
         have = self._uploads.setdefault(runner_id, set())
         if not (wanted := [n for n in names if n not in have]):
             return

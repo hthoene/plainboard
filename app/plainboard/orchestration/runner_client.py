@@ -361,6 +361,10 @@ class RunnerClient:
         """Which of these attachment files an external runner does not have (yet)."""
         return [str(n) for n in (await self._post_job("/uploads/missing", names)).json()]
 
+    async def delete_uploads(self, names: list[str]) -> int:
+        """Remove these attachment files from an external runner's copies (their retention ended). How many it had."""
+        return int((await self._post_job("/uploads/delete", names)).json())
+
     async def put_upload(self, name: str, content: bytes) -> None:
         try:
             resp = await self._client.put(f"/uploads/{name}", content=content, timeout=300)

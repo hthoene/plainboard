@@ -557,6 +557,10 @@ def now_line(tz_name: str) -> str:
     return datetime.now(UTC).astimezone(tz).strftime("Current time: %Y-%m-%d %H:%M %Z (%A)")
 
 
+def _purged(a: Attachment) -> str:
+    return f"file deleted on {a.purged_at:%Y-%m-%d} (retention {a.purged_after_days} days)"
+
+
 def ticket_brief(
     task: Task,
     attachments: list[Attachment],
@@ -580,7 +584,9 @@ def ticket_brief(
     decisions = decisions or []
     for_user ={i for d in decisions for i in [*d.attachment_ids, *(a for o in d.options for a in o["attachment_ids"])]}
     if attachments:
-        lines += ["", "Attachments:"] + [f"- {a.id} {a.filename}: {runner_path(a)}" + (" (for the user's review)" if a.id in for_user else "") for a in attachments]
+        lines += ["", "Attachments:"] + [
+            f"- {a.id} {a.filename}: " + (_purged(a) if a.purged_at else runner_path(a) + (" (for the user's review)" if a.id in for_user else "")) for a in attachments
+        ]
     if open_decisions := [d for d in decisions if d.status == DecisionStatus.OPEN]:
         lines += ["", "Waiting for the user's decision:"]
         for d in open_decisions:

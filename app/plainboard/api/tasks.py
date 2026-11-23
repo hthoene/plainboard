@@ -196,6 +196,8 @@ async def answer_decision(decision_id: int, body: DecisionAnswer, session: Sessi
 async def download(attachment_id: int, session: Session, inline: bool = True) -> FileResponse:
     attachment = await board_service.get_attachment(session, attachment_id)
     path = board_service.storage_path(attachment)
+    if attachment.purged_at is not None:
+        raise ServiceError(board_service.purged_text(attachment), 410)
     if not path.exists():
         raise NotFound("File missing on disk")
     # Inline only what is passive by its content (pictures, PDF, plain text); never a page or an SVG on this origin.

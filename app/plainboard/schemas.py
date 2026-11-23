@@ -539,6 +539,8 @@ class ProjectUpdate(BaseModel):
     account_id: int | None = None  # null: the subscription with the most room again
     auto_archive_days: int | None = Field(default=None, ge=0, le=3650)
     review_days: int | None = Field(default=None, ge=0, le=365)
+    attachment_retention_days: int | None = Field(default=None, ge=0, le=3650)  # files of done tickets; 0: never deleted
+    attachment_retention_min_mb: int | None = Field(default=None, ge=0, le=100000)  # only files from this size; 0: all
     ask_provider: str | None = Field(default=None, max_length=50)  # questions: "" the default again
     ask_model: str | None = Field(default=None, max_length=100)
     ask_effort: str | None = Field(default=None, max_length=20)
@@ -573,6 +575,8 @@ class ProjectOut(ORM):
     role: ProjectRole | None = None  # the asking user's role; not part of events, which go to everyone
     auto_archive_days: int
     review_days: int = 3
+    attachment_retention_days: int = 0
+    attachment_retention_min_mb: int = 0
     ask_provider: str = ""
     ask_model: str = ""
     ask_effort: str = ""
@@ -910,6 +914,21 @@ class AttachmentOut(ORM):
     size: int
     uploaded_by_agent_id: int | None
     created_at: UTCDateTime
+    purged_at: UTCDateTime | None = None  # its file was deleted by the project's retention; the entry stays
+    purged_after_days: int | None = None
+
+
+class RetentionCount(BaseModel):
+    count: int
+    bytes: int
+
+
+class RetentionPreviewOut(BaseModel):
+    """What a retention setting would delete: at once, and within the next ``soon_days``."""
+
+    now: RetentionCount
+    soon: RetentionCount
+    soon_days: int
 
 
 class AssignmentOut(ORM):

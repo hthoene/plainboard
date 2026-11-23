@@ -377,6 +377,20 @@ async def missing_uploads(names: list[str]) -> list[str]:
     return [name for name in names if _UPLOAD_NAME.fullmatch(name) and ".." not in name and not _upload(name).is_file()]
 
 
+@app.post("/uploads/delete")
+async def delete_uploads(names: list[str]) -> int:
+    """Attachment files whose retention ended in the app: this runner's copies go too. How many were here."""
+    gone = 0
+    for name in names:
+        if _UPLOAD_NAME.fullmatch(name) and ".." not in name and (path := _upload(name)).is_file():
+            try:
+                path.unlink()
+                gone += 1
+            except OSError:
+                pass  # read-only: the app's own volume, where the app deleted it
+    return gone
+
+
 @app.put("/uploads/{name}")
 async def put_upload(name: str, request: Request) -> dict[str, bool]:
     path = _upload(name)

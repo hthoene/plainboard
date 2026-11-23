@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Archive, ArchiveRestore, Bot, Check, ChevronDown, ChevronRight, CircleDashed, FileText, Play, Send, Trash2, Upload, UserRound, X } from "lucide-react";
+import { Archive, ArchiveRestore, Bot, Check, ChevronDown, ChevronRight, CircleDashed, FileText, FileX, Play, Send, Trash2, Upload, UserRound, X } from "lucide-react";
 import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { api, errorMessage } from "../../api/client";
@@ -69,7 +69,7 @@ export function TaskModal({ taskId, onClose }: { taskId: number; onClose: () => 
     );
   }
   const data = task.data;
-  const images = data.attachments.filter(isMedia);
+  const images = data.attachments.filter((a) => isMedia(a) && !a.purged_at);
 
   const handToManager = async () => {
     setError(null);
@@ -496,7 +496,12 @@ function Attachments({
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {attachments.map((a) => (
               <div key={a.id} className="group relative overflow-hidden rounded-sm ring-1 ring-line">
-                {isMedia(a) ? (
+                {a.purged_at ? (
+                  <div className="flex h-24 w-full flex-col items-center justify-center gap-1 bg-sunk px-2 text-center text-fg-3">
+                    <FileX className="size-7 text-line-2" />
+                    <span>{t("ticket.filePurged", { date: formatDateTime(a.purged_at), days: a.purged_after_days ?? 0 })}</span>
+                  </div>
+                ) : isMedia(a) ? (
                   <button type="button" onClick={() => onView(a.id)} className="block h-24 w-full cursor-zoom-in">
                     {isVideoFile(a) ? <VideoThumb src={`/api/attachments/${a.id}`} /> : <img src={`/api/attachments/${a.id}`} alt={a.filename} className="h-24 w-full object-cover" />}
                   </button>
@@ -505,11 +510,17 @@ function Attachments({
                     <FileText className="size-8 text-line-2" />
                   </AttachmentLink>
                 )}
-                <AttachmentLink file={a} className="block w-full truncate px-2 py-1">
-                  {a.filename} <span className="text-fg-3" title={formatDateTime(a.created_at)}>
-                    · {formatBytes(a.size)} · {chatTime(a.created_at)}
+                {a.purged_at ? (
+                  <span className="block w-full truncate px-2 py-1 text-fg-3" title={a.filename}>
+                    {a.filename} · {formatBytes(a.size)}
                   </span>
-                </AttachmentLink>
+                ) : (
+                  <AttachmentLink file={a} className="block w-full truncate px-2 py-1">
+                    {a.filename} <span className="text-fg-3" title={formatDateTime(a.created_at)}>
+                      · {formatBytes(a.size)} · {chatTime(a.created_at)}
+                    </span>
+                  </AttachmentLink>
+                )}
                 {reviewIds.has(a.id) && (
                   <Badge tone="amber" className="absolute top-1 left-1">
                     {t("ticket.forReview")}

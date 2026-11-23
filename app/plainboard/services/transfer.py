@@ -285,6 +285,8 @@ async def import_project(session: AsyncSession, source: IO[bytes], *, passphrase
                     values["slug"] = await project_service.unique_slug(session, str(values.get("name") or "project"))
                 elif spec.name == "assignments" and values.get("status") in (AssignmentStatus.QUEUED, AssignmentStatus.RUNNING):
                     values.update(status=AssignmentStatus.CANCELLED, finished_at=now, result=values.get("result") or MOVED)
+                elif spec.name == "attachments" and values.get("purged_at"):
+                    values["storage_name"] = uuid.uuid4().hex  # its file was deleted by the retention: the entry comes along
                 elif spec.name == "attachments":
                     stored = _store(archive, uploads, str(values.get("storage_name") or ""))
                     if stored is None:

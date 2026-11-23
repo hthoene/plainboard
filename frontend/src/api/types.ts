@@ -33,6 +33,8 @@ export interface Project {
   role: ProjectRole | null;
   auto_archive_days: number;
   review_days: number;
+  attachment_retention_days: number;
+  attachment_retention_min_mb: number;
   /** What answers quick questions (Ctrl+Enter in the chat); "" : the default, Claude Haiku with effort high. */
   ask_provider: string;
   ask_model: string;
@@ -247,6 +249,14 @@ export interface Attachment {
   size: number;
   uploaded_by_agent_id: number | null;
   created_at: string;
+  purged_at?: string | null;
+  purged_after_days?: number | null;
+}
+
+export interface RetentionPreview {
+  now: { count: number; bytes: number };
+  soon: { count: number; bytes: number };
+  soon_days: number;
 }
 
 export interface Assignment {

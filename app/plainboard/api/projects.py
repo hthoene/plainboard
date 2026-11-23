@@ -3,16 +3,16 @@ from __future__ import annotations
 import os
 import tempfile
 
-from fastapi import APIRouter, File, Form, UploadFile
+from fastapi import APIRouter, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse
 from plainboard_protocol import ProviderInfo
 from sqlalchemy import select
 from starlette.background import BackgroundTask
 
 from ..events import bus
-from ..models import ACTIVE_RUN_STATUSES, ProjectRole, Run
+from ..models import ACTIVE_RUN_STATUSES, ProjectRole, Run, utcnow
 from ..orchestration.runner_client import RunnerError
-from ..schemas import AgentCreate, AgentOut, AgentUpdate, CheckOut, ExportIn, ImportOut, PreviewOut, ProjectAccountBlockIn, ProjectAccountGiveIn, ProjectAccountOut, ProjectAccountsIn, ProjectCreate, ProjectOut, ProjectUpdate, PublicApiKeyIn, PublicApiKeyOut
+from ..schemas import AgentCreate, AgentOut, AgentUpdate, CheckOut, ExportIn, ImportOut, PreviewOut, ProjectAccountBlockIn, ProjectAccountGiveIn, ProjectAccountOut, ProjectAccountsIn, ProjectCreate, ProjectOut, ProjectUpdate, PublicApiKeyIn, PublicApiKeyOut, RetentionPreviewOut
 from ..services import accounts as account_service
 from ..services import agents as agent_service
 from ..services import api_keys as api_key_service
@@ -23,6 +23,7 @@ from ..services import permissions
 from ..services import preview as preview_service
 from ..services import projects as project_service
 from ..services import repositories as repo_service
+from ..services import retention as retention_service
 from ..services import transfer as transfer_service
 from ..services.errors import ServiceError
 from ..services import users as user_service
@@ -88,6 +89,12 @@ async def update_project(project_id: int, body: ProjectUpdate, session: Session,
     out = project_service.to_out(await project_service.update(session, project, body), role)
     runs.recheck()  # more parallel agents: waiting turns may start now
     return out
+
+
+@router.get("/projects/{project_id}/attachment-retention", response_model=RetentionPreviewOut)
+async def retention_preview(project_id: int, session: Session, days: int = Query(ge=0, le=3650), min_mb: int = Query(default=0, ge=0, le=100000)) -> RetentionPreviewOut:
+    """What a retention setting would delete, before it is saved."""
+    return await retention_service.preview(session, await project_service.get(session, project_id), days, min_mb, utcnow())
 
 
 @router.get("/projects/{project_id}/accounts", response_model=list[int])

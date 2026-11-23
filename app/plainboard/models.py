@@ -203,6 +203,9 @@ class Project(Timestamps, Base):
     label_colors: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)  # label name -> color name
     auto_archive_days: Mapped[int] = mapped_column(Integer, default=14)  # done tickets leave the board after this; 0 = never
     review_days: Mapped[int] = mapped_column(Integer, default=3)  # tickets left in review move to done after this; 0 = never
+    # Files of tickets done this long ago are deleted, their entries stay (services/retention.py); 0 = never.
+    attachment_retention_days: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    attachment_retention_min_mb: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # only files from this size; 0: all
     # What answers people's questions (orchestration/questions.py). Empty: the default (questions.DEFAULT_*).
     ask_provider: Mapped[str] = mapped_column(String(50), default="", server_default="")
     ask_model: Mapped[str] = mapped_column(String(100), default="", server_default="")
@@ -591,6 +594,9 @@ class Attachment(Base):
     storage_name: Mapped[str] = mapped_column(String(100), unique=True)
     uploaded_by_agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # Its file was deleted by the project's retention (services/retention.py); the entry stays with name and size.
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime)
+    purged_after_days: Mapped[int | None] = mapped_column(Integer)
 
 
 class Decision(Timestamps, Base):

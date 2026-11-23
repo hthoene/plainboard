@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, String, Table, Text, UniqueConstraint, false, true
+from sqlalchemy import JSON, BigInteger, Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, String, Table, Text, UniqueConstraint, false, true
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -594,8 +594,8 @@ class Conversation(Base):
     summary: Mapped[str | None] = mapped_column(Text)
     summary_until_message_id: Mapped[int] = mapped_column(Integer, default=0)
     compressions: Mapped[int] = mapped_column(Integer, default=0)
-    total_input_tokens: Mapped[int] = mapped_column(Integer, default=0)
-    total_output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    total_input_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    total_output_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
     total_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     session_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)  # provider's running total for the current session
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
@@ -640,10 +640,10 @@ class Run(Base):
     parts: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
     result_text: Mapped[str | None] = mapped_column(Text)
     error: Mapped[str | None] = mapped_column(Text)
-    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
-    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
-    cache_read_tokens: Mapped[int] = mapped_column(Integer, default=0)
-    cache_creation_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    input_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    output_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    cache_read_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    cache_creation_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     num_turns: Mapped[int] = mapped_column(Integer, default=0)
     context_tokens: Mapped[int] = mapped_column(Integer, default=0)

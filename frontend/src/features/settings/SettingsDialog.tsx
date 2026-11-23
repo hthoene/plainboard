@@ -284,6 +284,19 @@ export function SettingsDialog({ open, onClose, section }: { open: boolean; onCl
                 </p>
               </div>
               <SaveRow dirty={dirty(...GENERAL)} onSave={() => save(GENERAL)} />
+              {meta.data?.database && (
+                <div className="space-y-1">
+                  <p>{t(meta.data.database === "sqlite" ? "settings.databaseSqlite" : "settings.databasePostgres")}</p>
+                  {meta.data.database === "sqlite" && (
+                    <p className="text-fg-3">
+                      {t("settings.databaseMove")} <code className="font-mono">COMPOSE_PROFILES=postgres</code>, <code className="font-mono">PLAINBOARD_DATABASE=postgresql://plainboard:plainboard@db:5432/plainboard</code>. {t("settings.databaseMoveThen")}{" "}
+                      <a href="https://github.com/hthoene/plainboard/blob/main/docs/guide.md#postgresql" target="_blank" rel="noreferrer" className="underline underline-offset-[3px] hover:decoration-2">
+                        {t("settings.databaseGuide")}
+                      </a>
+                    </p>
+                  )}
+                </div>
+              )}
               <div className="flex justify-end">
                 <div className="rounded-lg border border-line bg-sunk p-4">
                   <img src={luchsApproved} alt={t("settings.luchsApproved")} width={150} draggable={false} className="pointer-events-none w-[150px] -rotate-3 select-none" />

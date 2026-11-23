@@ -372,7 +372,7 @@ def test_the_manager_reads_ideas_and_marks_what_went_into_tickets(client, projec
     wait_for(lambda: idle(client, pid))
     assert "Ideas: 3 open (list_ideas)." in runner.specs[-1].prompt
     listed, detail, _created, taken, left, twice = tool_results(client, manager["id"])[-6:]
-    assert "Payment" in listed and f"i{card['id']} Pay by card" in listed and "No topic" in listed
+    assert listed.startswith("Ideas 1-3 of 3:") and "## Payment" in listed and f"i{card['id']} (no title)\n  Pay by card" in listed and "## No topic" in listed
     assert detail.startswith(f"i{card['id']} (no title) — open") and "Pay by card" in detail
     assert taken == "2 idea(s) taken into #1." and left == "1 idea(s) left out." and "no longer open" in twice
 
@@ -408,3 +408,24 @@ def test_one_idea_becomes_a_ticket_and_the_project_moves_with_its_ideas(client, 
     assert [v["text"] for v in client.get(f"/api/projects/{other}/ideas/{texts['Much bigger fonts']['id']}/versions").json()] == ["Bigger fonts"]
     taken = texts["Dark mode\nfor the night"]
     assert taken["status"] == "taken" and taken["task_number"] == ticket["number"] and taken["task_id"] != ticket["id"]
+
+
+def test_list_ideas_gives_every_text_whole_and_pages_by_whole_ideas(client, project, monkeypatch):
+    from plainboard.db import sessionmaker
+
+    pid = project["id"]
+    answer(client)
+    long_text = "Line one\n" + "x" * 300
+    ids = [add(client, pid, text)["id"] for text in (long_text, "Short", "Also short")]
+    settled(client, pid)
+    monkeypatch.setattr(idea_service, "LIST_CHARS", 200)
+
+    async def page(offset: int) -> str:
+        async with sessionmaker()() as session:
+            return await idea_service.manager_list(session, pid, topic=None, query=None, status="open", offset=offset)
+
+    first = client.portal.call(page, 0)
+    assert first.startswith("Ideas 1-1 of 3:") and "  " + "x" * 300 in first and first.endswith("(continue with offset=1: 2 more)")
+    second = client.portal.call(page, 1)
+    assert f"i{ids[1]} (no title)\n  Short" in second and f"i{ids[2]}" in second and "continue" not in second
+    assert client.portal.call(page, 5) == "No ideas at offset 5 (3 in all)."

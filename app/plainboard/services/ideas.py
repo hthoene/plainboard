@@ -868,7 +868,12 @@ async def count_open(session: AsyncSession, project_id: int) -> int:
     return await session.scalar(select(func.count(Idea.id)).where(Idea.project_id == project_id, Idea.status == IdeaStatus.OPEN)) or 0
 
 
-async def manager_list(session: AsyncSession, project_id: int, *, topic: str | None, query: str | None, status: str, limit: int) -> str:
+LIST_CHARS = 150_000  # one page of list_ideas; never cut within an idea
+
+
+async def manager_list(session: AsyncSession, project_id: int, *, topic: str | None, query: str | None, status: str, offset: int = 0) -> str:
+    """The ideas in full (title, whole text, topic, links), by topic. Pages by whole ideas: a page ends before
+    the idea that would pass ``LIST_CHARS`` and says where the next one starts."""
     stmt = select(Idea).where(Idea.project_id == project_id).order_by(Idea.topic_id, Idea.id)
     if status != "all":
         stmt = stmt.where(Idea.status == status)
@@ -880,22 +885,33 @@ async def manager_list(session: AsyncSession, project_id: int, *, topic: str | N
         ideas = [i for i in ideas if query.casefold() in f"{i.title} {i.text}".casefold()]
     if not ideas:
         return "No ideas."
-    outs_by_id = {o.id: o for o in await outs(session, ideas[:limit])}
+    if offset >= len(ideas):
+        return f"No ideas at offset {offset} ({len(ideas)} in all)."
     lines: list[str] = []
-    current: int | None = -1
-    for idea in ideas[:limit]:
+    size, current, shown = 0, -1, 0
+    page = ideas[offset:]
+    outs_by_id = {o.id: o for o in await outs(session, page)}
+    for idea in page:
+        block: list[str] = []
         if idea.topic_id != current:
-            current = idea.topic_id
-            t = names.get(current) if current is not None else None
-            lines.append(f"{t.name}" + (f" ({t.hint})" if t.hint else "") if t else "No topic")
+            t = names.get(idea.topic_id) if idea.topic_id is not None else None
+            block.append(f"## {t.name}" + (f" ({t.hint})" if t.hint else "") if t else "## No topic")
         out = outs_by_id[idea.id]
         marks = [f"similar {', '.join(f'i{s}' for s in out.similar)}"] if out.similar else []
         marks += [f"duplicate of i{out.duplicate_of}"] if out.duplicate_of else []
         marks += [idea.status + (f" #{out.task_number}" if out.task_number else "")] if idea.status != IdeaStatus.OPEN else []
-        marks += ["open question"] if idea.question_status == QUESTION_OPEN else []
-        lines.append(f"  {_idea_line(idea, 160)}" + (f" [{'; '.join(marks)}]" if marks else ""))
-    more = f"\n(+{len(ideas) - limit} more)" if len(ideas) > limit else ""
-    return "\n".join(lines) + more
+        marks += [f"open question: {idea.question}"] if idea.question_status == QUESTION_OPEN else []
+        marks += [f"answered: {idea.question} → {idea.question_answer}"] if idea.question_status == QUESTION_ANSWERED else []
+        block.append(f"i{idea.id} {idea.title or '(no title)'}" + (f" [{'; '.join(marks)}]" if marks else ""))
+        block.append("\n".join(f"  {line}" for line in idea.text.splitlines()) or "  -")
+        text = "\n".join(block)
+        if shown and size + len(text) > LIST_CHARS:
+            break
+        lines.append(text)
+        size, current, shown = size + len(text) + 1, idea.topic_id, shown + 1
+    head = f"Ideas {offset + 1}-{offset + shown} of {len(ideas)}:"
+    tail = f"\n(continue with offset={offset + shown}: {len(ideas) - offset - shown} more)" if offset + shown < len(ideas) else ""
+    return head + "\n" + "\n".join(lines) + tail
 
 
 async def manager_detail(session: AsyncSession, idea: Idea) -> str:

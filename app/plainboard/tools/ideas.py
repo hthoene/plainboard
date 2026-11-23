@@ -15,7 +15,7 @@ class ListIdeasArgs(BaseModel):
     topic: str | None = Field(default=None, description="Part of a topic's name")
     query: str | None = Field(default=None, description="Text search")
     status: Literal["open", "taken", "dismissed", "merged", "all"] = "open"
-    limit: int = Field(default=150, ge=1, le=500)
+    offset: int = Field(default=0, ge=0, description="Start of the next page, as the last one says")
 
 
 class IdeaRef(BaseModel):
@@ -33,9 +33,9 @@ class LeaveOutArgs(BaseModel):
     duplicate_of: int | None = Field(default=None, description="The idea they duplicate")
 
 
-@tool("list_ideas", "The project's ideas by topic, with similar ones and duplicates.", ListIdeasArgs, roles=(MANAGER,))
+@tool("list_ideas", "The project's ideas in full (whole text) by topic, with similar ones and duplicates.", ListIdeasArgs, roles=(MANAGER,))
 async def list_ideas(ctx: ToolContext, args: ListIdeasArgs) -> str:
-    return await idea_service.manager_list(ctx.session, ctx.project.id, topic=args.topic, query=args.query, status=args.status, limit=args.limit)
+    return await idea_service.manager_list(ctx.session, ctx.project.id, topic=args.topic, query=args.query, status=args.status, offset=args.offset)
 
 
 @tool("get_idea", "One idea in full, with its earlier versions.", IdeaRef, roles=(MANAGER,))

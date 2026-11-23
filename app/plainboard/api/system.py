@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, Query, Request
 from pydantic import BaseModel
 
+from ..config import get_config
 from ..models import TaskStatus
 from ..orchestration.prompts import PINNED_BUDGET_CHARS
 from ..schemas import AccessKeyOut, CheckOut, LimitsOut, PauseOut, PublicApiKeyIn, SettingsOut, SettingsUpdate, UsageOut
@@ -55,6 +56,7 @@ async def meta(runner: Runner, session: Session) -> dict[str, Any]:
         "pinned_note_budget_chars": PINNED_BUDGET_CHARS,
         # The running commit and how far it is behind the newest PlainBoard; None: not known or not wanted.
         "version": version_service.current() if await settings_service.get(session, "update_check") else None,
+        "database": "postgresql" if get_config().postgres else "sqlite",
     }
 
 

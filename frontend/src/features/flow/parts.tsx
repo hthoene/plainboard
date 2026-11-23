@@ -1,8 +1,21 @@
 import clsx from "clsx";
 import { useEffect, useRef } from "react";
 import { GitBranch } from "lucide-react";
-import { AgentSquare } from "../../components/ui";
-import type { Agent } from "../../api/types";
+import { useTranslation } from "react-i18next";
+import { AgentSquare, Badge } from "../../components/ui";
+import type { Agent, FlowBranch } from "../../api/types";
+
+/** A branch that does not land until its author hands it over again or the manager releases it. */
+export function Held({ branch }: { branch?: Pick<FlowBranch, "held" | "held_reason"> }) {
+  const { t } = useTranslation();
+  if (!branch?.held) return null;
+  const hint = t(`flow.held.${branch.held}`) + (branch.held_reason ? ` (${branch.held_reason})` : "");
+  return (
+    <span title={hint} data-part="flow-held" className="shrink-0">
+      <Badge tone="amber">{t("flow.held.label")}</Badge>
+    </span>
+  );
+}
 
 export function Who({ agent, className }: { agent?: Agent; className?: string }) {
   if (!agent) return null;

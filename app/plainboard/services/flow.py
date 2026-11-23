@@ -56,6 +56,8 @@ def _branch(landing: Landing, numbers: dict[int, int]) -> FlowBranch:
         task_id=landing.task_id, task_number=numbers.get(landing.task_id or 0), status=PHASE[landing.status],  # type: ignore[arg-type]
         train_id=landing.train_id, failures=landing.failures, since=landing.updated_at, merged_at=landing.merged_at,
         conflict_files=list(landing.conflict_files or []),
+        held=landing.hold if landing.hold in ("message", "manager") and landing.status in (LandingStatus.WAITING, LandingStatus.TRAIN, LandingStatus.BACK) else None,
+        held_reason=landing.hold_reason or "",
     )  # fmt: skip
 
 

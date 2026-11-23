@@ -804,6 +804,16 @@ def chat_notice(text: str, files: int = 0) -> str:
 MESSAGE_CHARS = 6000
 
 
+def held_for_message(branches: list[str]) -> str:
+    """Right after a message to a member whose handed-over branches have not landed yet (#96)."""
+    named = ", ".join(branches)
+    one = len(branches) == 1
+    return (
+        f"PlainBoard holds your branch{'' if one else 'es'} {named} because of this message: {'it does' if one else 'they do'} not land until you hand "
+        f"{'it' if one else 'each'} over again with merge_when_green: after pushing what the message asks for, or unchanged to confirm it may land as it is."
+    )
+
+
 def message_update(from_agent: Agent, message: str) -> str:
     """A teammate's message as an update for the next turn: several arrive together, none costs a turn of its own."""
     return f"Message from {from_agent.name} ({from_agent.role or 'agent'}): {truncate(message.strip(), MESSAGE_CHARS)}"

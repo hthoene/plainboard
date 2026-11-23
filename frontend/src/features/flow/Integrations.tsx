@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useTaskFlow } from "../../api/queries";
 import { useSince } from "../../lib/time";
 import { clock, elapsedOf, typicalOf, useFlowModel } from "./flow";
-import { Branch, Mark, Progress } from "./parts";
+import { Branch, Held, Mark, Progress } from "./parts";
 
 /** The ticket's branches on their way to the base branch, as steps: handed over, check failed, repair, checked, landed. */
 export function FlowTicket({ taskId }: { taskId: number }) {
@@ -23,6 +23,7 @@ export function FlowTicket({ taskId }: { taskId: number }) {
             <div key={branch.id} className="rounded-sm ring-1 ring-line">
               <div className="flex items-center gap-2 border-b border-line px-3 py-2">
                 <Branch name={branch.branch} className="flex-1" />
+                <Held branch={branch} />
                 <span className="text-fg-3">{[repository, train ? t("flow.train", { n: train.id }) : null].filter(Boolean).join(" · ")}</span>
               </div>
               <ol className="px-3 py-2">

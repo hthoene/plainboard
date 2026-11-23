@@ -65,6 +65,7 @@ from ..services import decisions as decision_service
 from ..services import ticket_state
 from ..services import flow_log
 from ..services import jobs as job_service
+from ..services import landings as landing_service
 from ..services import mcp as mcp_service
 from ..services import skills as skill_service
 from ..services import mentions as mention_service
@@ -642,6 +643,8 @@ class RunManager:
             raise ServiceError("Unknown attachment")
         part = {"id": 1, "author": author, "text": text, "named": bool(author and several and text.strip()), "attachment_ids": list(attachment_ids or []), "at": _iso(utcnow())}
         text = _part_input(part)
+        if part["text"].strip() or attachment_ids:
+            await self.hold_for_message(s, agent, author or "the user", part["text"])  # before its turn can start: that turn reads it
         async with self._chat_locks.setdefault(agent.id, asyncio.Lock()):
             await s.commit()  # what is read next is the latest state, not that of a transaction begun before the wait
             run = await self._join_waiting_chat(s, agent, part) or await self.enqueue(
@@ -860,7 +863,21 @@ class RunManager:
         if not target.enabled:
             raise ServiceError(f"Agent '{target.name}' is disabled")
         await inbox.push(s, target.id, prompts.message_update(caller, text))
+        await self.hold_for_message(s, target, caller.name, text)
         await self.request_wake(s, target.id)
+
+    async def hold_for_message(self, s: AsyncSession, target: Agent, sender: str, text: str) -> list[str]:
+        """A member got a message (a teammate's, a question, the user's) while branches it handed over have
+        not landed: they are held until it has read the message and hands them over again or confirms
+        them (#96). Its next turn says so, right after the message."""
+        if target.is_manager:
+            return []
+        held = await landing_service.hold_for_message(s, target.id, text, f"message from {sender}", utcnow())
+        if held:
+            branches = [landing.branch for landing in held]
+            await inbox.push(s, target.id, prompts.held_for_message(branches))
+            await flow_log.record(s, target.project_id, "landing.held_for_message", agent_id=target.id, branches=branches, by=sender)
+        return [landing.branch for landing in held]
 
     async def cancel_assignment(self, s: AsyncSession, assignment: Assignment) -> bool:
         """Cancel an assignment, also one that has no turn right now because it waits for its job."""
@@ -911,6 +928,7 @@ class RunManager:
             raise ServiceError(f"{target.name} is waiting on you (directly or indirectly). Use message_agent instead.")
         async with self._sm() as s:
             busy_run = await s.scalar(select(Run.id).where(Run.agent_id == target.id, Run.status == RunStatus.RUNNING).limit(1))
+            await self.hold_for_message(s, target, caller.name, question)  # before its turn can start: that turn reads it
             run = await self.enqueue(
                 s, target, RunTrigger.ASK, prompts.ask_prompt(caller, question), source_agent_id=caller.id, parent_run_id=ctx.run_id
             )

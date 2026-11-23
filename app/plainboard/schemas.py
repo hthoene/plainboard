@@ -741,7 +741,7 @@ class TaskOut(ORM):
     manager_active: bool = False
     open_decisions: int = 0
     # Work is finished and only waits to land (no open assignment): its branch waits for a train, is checked, or is repaired.
-    landing: Literal["waiting", "checking", "repairing"] | None = None
+    landing: Literal["waiting", "checking", "repairing", "held"] | None = None
 
 
 class StatsDay(BaseModel):
@@ -1397,6 +1397,8 @@ class FlowBranch(BaseModel):
     since: UTCDateTime  # when it entered this state
     merged_at: UTCDateTime | None
     conflict_files: list[str] = Field(default_factory=list)
+    held: Literal["message", "manager"] | None = None  # it does not land until its author hands it over again / the manager releases it
+    held_reason: str = ""
 
 
 class FlowTrain(BaseModel):

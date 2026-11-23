@@ -667,6 +667,13 @@ class Landing(Timestamps, Base):
     # is back, branches that change these files wait (landings.busy); once it is, it goes first.
     conflict_at: Mapped[datetime | None] = mapped_column(DateTime)
     conflict_files: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # Held (#96): it does not land, but stays on the list. "message": its author got a message after handing
+    # it over and has to hand it over again (a new commit, or the same one to confirm it). "manager": held by
+    # hand until release_branch. "next": handed over again while on a train: not with that train, with the next.
+    hold: Mapped[str] = mapped_column(String(20), default="", server_default="")
+    held_at: Mapped[datetime | None] = mapped_column(DateTime)
+    hold_reason: Mapped[str] = mapped_column(String(300), default="", server_default="")
+    hold_told_at: Mapped[datetime | None] = mapped_column(DateTime)  # the manager heard it has been held for long
 
 
 class Train(Timestamps, Base):

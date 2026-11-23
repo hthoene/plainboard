@@ -61,6 +61,11 @@ BASE_CHECK_MAX_SECONDS = 3600  # checks of the base branch that take longer are 
 # checks): a short failure is waited out, after this the batch counts as unchecked and landing goes on.
 UNREADABLE_GRACE_SECONDS = 600
 ACTIVE = (LandingStatus.WAITING, LandingStatus.TRAIN, LandingStatus.BACK)
+# Held branches (#96): a message to the author after the hand-over (MESSAGE), or the manager by hand (MANAGER).
+# NEXT: released by a new hand-over while on a train that has the commit from before: it lands with the next one.
+MESSAGE, MANAGER, NEXT = "message", "manager", "next"
+HELD = (MESSAGE, MANAGER)
+HOLD_TELL_SECONDS = 2 * 3600  # held for a message this long without an answer: the manager hears it
 RUNNING_TRAINS = (TrainStatus.CHECKING, TrainStatus.BLOCKED)
 COMMAND, GITHUB = "command", "github"
 UNCHECKED = "none"  # a batch of a repository that has no checks PlainBoard could look at
@@ -106,12 +111,62 @@ async def find(session: AsyncSession, repository_id: int, branch: str) -> Landin
     return await session.scalar(q)
 
 
+def held(landing: Landing) -> bool:
+    """Whether it must not land now (see HELD)."""
+    return landing.hold in HELD
+
+
+def hold(landing: Landing, kind: str, reason: str, now: datetime) -> None:
+    landing.hold, landing.held_at, landing.hold_reason, landing.hold_told_at = kind, now, truncate(reason, 300), None
+
+
+def release(landing: Landing) -> None:
+    """No longer held. On a train with the commit it was held with, it lands with that train."""
+    landing.hold, landing.held_at, landing.hold_reason, landing.hold_told_at = "", None, "", None
+
+
+async def hold_for_message(session: AsyncSession, agent_id: int, text: str, reason: str, now: datetime) -> list[Landing]:
+    """Someone wrote to an agent while branches it handed over have not landed: they may be about to
+    change (#95: a correction arrived after the hand-over). Those branches are held until the agent
+    has read the message and hands them over again or confirms them. A message that names tickets
+    (#<number>) holds only the branches of those tickets, if it has any. A branch the manager holds
+    stays held by the manager."""
+    mine = list(await session.scalars(select(Landing).where(Landing.agent_id == agent_id, Landing.status.in_(ACTIVE), Landing.hold != MANAGER).order_by(Landing.id)))
+    named = {int(n) for n in re.findall(r"#(\d+)", text)}
+    if mine and named:
+        numbers = dict((await session.execute(select(Task.id, Task.number).where(Task.id.in_([m.task_id for m in mine if m.task_id])))).all())
+        about = [m for m in mine if numbers.get(m.task_id or 0) in named]
+        mine = about or mine
+    for landing in mine:
+        hold(landing, MESSAGE, reason, now)
+    if mine:
+        await session.commit()
+    return mine
+
+
+async def held_long(session: AsyncSession, now: datetime, project_id: int | None = None) -> list[Landing]:
+    """Branches held for a message for HOLD_TELL_SECONDS or more: their author has neither handed them over again nor confirmed them."""
+    q = select(Landing).where(Landing.hold == MESSAGE, Landing.status.in_(ACTIVE), Landing.held_at <= now - timedelta(seconds=HOLD_TELL_SECONDS))
+    if project_id is not None:
+        q = q.where(Landing.project_id == project_id)
+    return list(await session.scalars(q.order_by(Landing.id)))
+
+
 async def hand_over(
-    session: AsyncSession, repo: Repository, branch: str, head_sha: str, *, agent_id: int, task_id: int | None, fresh_start: bool, assignment_id: int | None = None
+    session: AsyncSession, repo: Repository, branch: str, head_sha: str, *, agent_id: int, task_id: int | None, fresh_start: bool, assignment_id: int | None = None,
+    releases: bool = False,
 ) -> Landing:
     """Put a branch on the list for the next train. ``fresh_start`` (the manager hands it over, or
-    it comes with new commits after it had landed) forgets its failed rounds."""
+    it comes with new commits after it had landed) forgets its failed rounds. ``releases``: a hold
+    ends with this hand-over (see ``held``); on a train with another commit, it lands with the next one."""
     landing = await find(session, repo.id, branch)
+    # A held branch on a train keeps the commit that train checks (head_sha): released with another one, it
+    # must not land with that train.
+    checked = landing.head_sha if landing is not None and landing.status == LandingStatus.TRAIN and landing.hold else None
+    if landing is not None and landing.hold in HELD and releases:
+        release(landing)
+        if checked is not None and checked != head_sha:
+            landing.hold = NEXT
     if landing is None or landing.status == LandingStatus.MERGED:
         landing = Landing(project_id=repo.project_id, repository_id=repo.id, branch=branch)
         session.add(landing)
@@ -119,7 +174,7 @@ async def hand_over(
         landing.failures, landing.failed_sha = 0, ""
     if landing.agent_id is None or not fresh_start:
         landing.agent_id = agent_id  # a manager that hands over someone's branch again does not become its author
-    landing.head_sha, landing.assignment_id = head_sha, assignment_id
+    landing.head_sha, landing.assignment_id = checked or head_sha, assignment_id
     if not (landing.title or "").startswith(f"{branch} carrying "):
         landing.title = branch[:300]
     landing.task_id = task_id or landing.task_id

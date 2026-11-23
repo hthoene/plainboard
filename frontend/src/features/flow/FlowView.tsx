@@ -9,7 +9,7 @@ import { formatDateTime } from "../../lib/format";
 import { useSince } from "../../lib/time";
 import { useShell } from "../layout/shell-context";
 import { clock, elapsedOf, ms, typicalOf, useFlowModel, type FlowModel } from "./flow";
-import { Branch, Mark, Progress, Who } from "./parts";
+import { Branch, Held, Mark, Progress, Who } from "./parts";
 
 const ROW = "grid grid-cols-[9px_minmax(0,1fr)_auto] items-baseline gap-x-2 border-b border-line px-2.5 py-2";
 
@@ -145,12 +145,15 @@ export function FlowView() {
                 <Lane title={t("flow.handed")} count={handed.length}>
                   {handed.map((l) => (
                     <button key={l.id} type="button" onClick={() => l.task_id && openTask(l.task_id)} className={clsx(ROW, "w-full text-left", l.status === "waiting" ? "hover:bg-sunk" : "bg-sunk")}>
-                      {l.status === "waiting" ? <Mark kind="plan" /> : <Mark kind="you" />}
+                      {l.status === "waiting" && !l.held ? <Mark kind="plan" /> : <Mark kind="you" />}
                       <span className="min-w-0">
                         <Branch name={l.branch} />
-                        <span className="block truncate text-fg-2">
-                          {l.task_number ? `#${l.task_number} · ` : ""}
-                          {t(`flow.state.${l.status}`, { count: l.failures })}
+                        <span className="flex min-w-0 items-center gap-1.5 text-fg-2">
+                          <Held branch={l} />
+                          <span className="truncate">
+                            {l.task_number ? `#${l.task_number} · ` : ""}
+                            {l.held ? t("flow.state.held") : t(`flow.state.${l.status}`, { count: l.failures })}
+                          </span>
                         </span>
                       </span>
                       <span className="text-fg-3">{since(l.since)}</span>
@@ -185,6 +188,7 @@ export function FlowView() {
                           <div key={name} className="flex min-w-0 items-center gap-2">
                             <Who agent={agentById(m.branchByName(repo.id, name)?.agent_id)} className="shrink-0" />
                             <Branch name={name} className="flex-1" />
+                            <Held branch={m.branchByName(repo.id, name)} />
                           </div>
                         ))}
                       </div>

@@ -62,6 +62,7 @@ from ..schemas import AssignmentOut, MessageOut, RunOut, TaskUpdate
 from ..services import agents as agent_service
 from ..services import board as board_service
 from ..services import decisions as decision_service
+from ..services import ideas as idea_service
 from ..services import ticket_state
 from ..services import flow_log
 from ..services import jobs as job_service
@@ -1556,6 +1557,7 @@ class RunManager:
                     prompts.review_line(await board_service.unmarked_in_review(s, project.id)),
                     prompts.capacity_line(capacity),
                     prompts.team_todos_line(todo_counts),
+                    prompts.ideas_line(await idea_service.count_open(s, project.id)),
                     timing_service.waiting_line(await timing_service.cached_overview(s, project.id, 24)),
                     prompts.language_note(project.language),
                 )

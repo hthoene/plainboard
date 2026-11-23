@@ -50,7 +50,7 @@ TOOLS = frozenset(
     {
         "get_board_summary", "list_tasks", "get_task", "get_comments", "list_assignments", "list_runs", "list_jobs", "read_chat",
         "list_agents", "get_agent", "member_notes", "list_notes", "get_note", "list_todos", "get_todo", "list_schedules",
-        "get_project", "list_repositories", "list_skills", "list_models", "search_history", "flow_check", "time_report",
+        "get_project", "list_repositories", "list_skills", "list_models", "search_history", "flow_check", "time_report", "list_ideas", "get_idea",
     }
 )  # fmt: skip
 MAX_TURNS = 40  # a question that needs more is not a short one

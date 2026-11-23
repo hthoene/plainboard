@@ -1465,9 +1465,15 @@ IDEA_TEXT_MAX = 10000
 class IdeaCreate(BaseModel):
     text: str = Field(min_length=1, max_length=IDEA_TEXT_MAX)
     title: str = Field(default="", max_length=200)
-    topic_id: int | None = None  # placed by a person: the model does not sort it
+    topic_id: int | None = None  # placed by a person: the model leaves its topic alone
     x: float | None = None
     y: float | None = None
+
+
+class IdeaInput(BaseModel):
+    """What a person typed into the field of the board of ideas: the model reads what they mean."""
+
+    text: str = Field(min_length=1, max_length=IDEA_TEXT_MAX)
 
 
 class IdeaUpdate(BaseModel):
@@ -1479,16 +1485,23 @@ class IdeaUpdate(BaseModel):
     votes: int | None = Field(default=None, ge=0, le=1000000)
 
 
+class IdeaOption(BaseModel):
+    label: str
+    description: str = ""
+
+
 class IdeaOut(ORM):
     id: int
     project_id: int
     title: str
     text: str
     author: str
-    status: str  # open | taken | dismissed
+    status: str  # open | taken | dismissed | merged
     topic_id: int | None
+    topic_manual: bool
     task_id: int | None
     task_number: int | None = None
+    merged_into_id: int | None
     hint: str
     sort_state: str  # pending | sorted | failed
     x: float | None
@@ -1496,10 +1509,29 @@ class IdeaOut(ORM):
     votes: int
     similar: list[int] = Field(default_factory=list)  # open ideas the model found similar (either way round)
     duplicate_of: int | None = None
+    question: str  # the model's question to the person; "" none
+    question_options: list[IdeaOption]  # the first is recommended; a free answer is possible too
+    question_status: str  # "" | open | answered | withdrawn
+    question_answer: str
+    question_at: UTCDateTime | None
     closed_at: UTCDateTime | None
     closed_reason: str
     created_at: UTCDateTime
     updated_at: UTCDateTime
+
+
+class IdeaVersionOut(ORM):
+    id: int
+    idea_id: int
+    title: str
+    text: str
+    source: str  # who replaced it: user | ai | undo
+    created_at: UTCDateTime
+
+
+class IdeaAnswer(BaseModel):
+    option_index: int | None = Field(default=None, ge=0)
+    text: str = Field(default="", max_length=IDEA_TEXT_MAX)
 
 
 class IdeaTopicIn(BaseModel):
@@ -1515,8 +1547,23 @@ class IdeaTopicOut(ORM):
     name: str
     color: int
     hint: str
+    manual: bool
     x: float | None
     y: float | None
+
+
+class IdeaChangeOut(ORM):
+    """One step on the board of ideas, to show ("added to 'Booking'") and undo (POST .../changes/{id}/undo)."""
+
+    id: int
+    project_id: int
+    kind: str  # new | several | amend | merge | question | edit | reorder
+    source: str  # input | answer | user | auto | button
+    author: str
+    summary: dict[str, Any]
+    created_at: UTCDateTime
+    undone_at: UTCDateTime | None
+    ideas: list[IdeaOut] = Field(default_factory=list)  # the ideas it touched, as they are now (with an answer only)
 
 
 class IdeasOut(BaseModel):
@@ -1535,50 +1582,6 @@ class IdeaTicketIn(BaseModel):
     labels: list[str] = Field(default_factory=list)
 
 
-class IdeaPlanIn(BaseModel):
-    """Which ideas to plan tickets from: these ids, or a topic's, or (neither) all open ones."""
-
-    idea_ids: list[int] | None = Field(default=None, max_length=500)
-    topic_id: int | None = None
-
-
-class PlannedTicket(BaseModel):
-    title: str = Field(min_length=1, max_length=300)
-    description: str = ""
-    priority: Priority = "medium"
-    labels: list[str] = Field(default_factory=list)
-    customer_title: str = Field(default="", max_length=CUSTOMER_TITLE_MAX)
-    customer_description: str = Field(default="", max_length=CUSTOMER_DESCRIPTION_MAX)
-    customer_texts: dict[LanguageCode, CustomerTextIn] = Field(default_factory=dict)
-    idea_ids: list[int] = Field(default_factory=list)  # the ideas that went into it
-
-
-class LeftOutIdea(BaseModel):
-    idea_id: int
-    reason: str = Field(default="", max_length=300)
-
-
-class IdeaPlanOut(BaseModel):
-    id: str
-    project_id: int
-    status: Literal["running", "ready", "failed"]
-    idea_ids: list[int]
-    tickets: list[PlannedTicket] = Field(default_factory=list)
-    left_out: list[LeftOutIdea] = Field(default_factory=list)
-    error: str = ""
-    created_at: UTCDateTime
-
-
-class IdeaPlanApply(BaseModel):
-    """The proposal as the person left it: these tickets are created; ``dismiss``: ideas left out on purpose
-    (they leave the board of ideas, kept with their reason). Ideas in neither stay open."""
-
-    status: Literal["backlog", "todo"] = "backlog"
-    tickets: list[PlannedTicket] = Field(min_length=1, max_length=100)
-    dismiss: list[LeftOutIdea] = Field(default_factory=list)
-    plan_id: str | None = None  # the proposal it came from: forgotten once applied
-
-
-class IdeaPlanApplied(BaseModel):
-    tickets: list[TaskOut]
-    ideas: list[IdeaOut]
+class IdeaTicketOut(BaseModel):
+    ticket: TaskOut
+    idea: IdeaOut

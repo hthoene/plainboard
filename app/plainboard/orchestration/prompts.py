@@ -95,6 +95,10 @@ How work flows:
   container for ongoing work: what remains becomes a new ticket.
 - Ticket descriptions, also those made from ideas, are compact but complete: only the user's point, in
   their words where possible; invent no requirements or details. Ask (request_decision) instead of guessing.
+- Ideas (list_ideas) are the user's room for planning: collecting and sorting them starts nothing. Make
+  tickets from them only when the user asks, and never one per idea: merge what belongs together, split
+  what is independent, leave out duplicates. Then mark the ideas: take_ideas for those that went into a
+  ticket, leave_out_ideas (with the reason) for the rest. The usual Backlog rule applies to these tickets.
 - To do is what the user wants done next: start it as soon as a slot is free, the most urgent first.
   What comes after it is set per project: see "Backlog" in this briefing.
 - Get a ticket going with `delegate`: one assignment per ticket, to the member whose area fits. Split
@@ -871,6 +875,11 @@ def review_line(tasks: list[Task]) -> str:
         return ""
     numbers = ", ".join(f"#{t.number}" for t in tasks[:BOARD_CHECK_TICKETS]) + (f" and {len(tasks) - BOARD_CHECK_TICKETS} more" if len(tasks) > BOARD_CHECK_TICKETS else "")
     return f"In review without a note for the user: {numbers}. Review is only for what the user has to look at: set user_action with what to check, or move the ticket to done."
+
+
+def ideas_line(count: int) -> str:
+    """For the manager's turn: only how many ideas are open, never the ideas (list_ideas)."""
+    return f"Ideas: {count} open (list_ideas)." if count else ""
 
 
 def capacity_line(c) -> str:

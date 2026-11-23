@@ -253,7 +253,9 @@
     "askModelHint": "What answers questions asked with Ctrl+Enter in the chat. It only reads, so a small model is usually enough. Empty: Claude Haiku with effort high.",
     "askProvider": "Runs on",
     "askEffortDefault": "Effort: high (default)",
-    "askModelSmall": "{{model}} (default)"
+    "askModelSmall": "{{model}} (default)",
+    "ideaModel": "Ideas",
+    "ideaModelHint": "What reads, sorts and rearranges the ideas of this project. A small model is enough. Empty: the provider's small model."
   },
   "board": {
     "filter": "Filter tickets…",

@@ -53,6 +53,9 @@ export function ProjectSettings({ onOpenTeam, onDeleted }: { onOpenTeam: () => v
     ask_provider: project.ask_provider ?? "",
     ask_model: project.ask_model ?? "",
     ask_effort: project.ask_effort ?? "",
+    idea_provider: project.idea_provider ?? "",
+    idea_model: project.idea_model ?? "",
+    idea_effort: project.idea_effort ?? "",
   });
   const [check, setCheck] = useState<CheckResult | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -76,7 +79,7 @@ export function ProjectSettings({ onOpenTeam, onDeleted }: { onOpenTeam: () => v
       await api.put(`/projects/${project.id}/accounts`, { account_ids: form.account_ids });
       await qc.invalidateQueries({ queryKey: ["project-accounts", project.id] });
     }
-    await save("parallel_agents", "account_id", "auto_wake_manager", "continue_with_backlog", "ask_provider", "ask_model", "ask_effort");
+    await save("parallel_agents", "account_id", "auto_wake_manager", "continue_with_backlog", "ask_provider", "ask_model", "ask_effort", "idea_provider", "idea_model", "idea_effort");
   };
   // Quick questions: the provider's small model with effort high, unless chosen here.
   const providers = meta.data?.providers ?? [];
@@ -85,6 +88,11 @@ export function ProjectSettings({ onOpenTeam, onDeleted }: { onOpenTeam: () => v
   const askSmall = askModels.filter((m) => m.tier === "small");
   const askDefault = askSmall.find((m) => m.id.includes("haiku")) ?? askSmall[0] ?? askModels[askModels.length - 1];
   const askEfforts = askProvider?.efforts ?? [];
+  const ideaProvider = providers.find((p) => p.name === (form.idea_provider || "claude_code"));
+  const ideaModels = ideaProvider?.models ?? [];
+  const ideaSmall = ideaModels.filter((m) => m.tier === "small");
+  const ideaDefault = ideaSmall.find((m) => m.id.includes("haiku")) ?? ideaSmall[0] ?? ideaModels[ideaModels.length - 1];
+  const ideaEfforts = ideaProvider?.efforts ?? [];
   const refreshRepos = () => qc.invalidateQueries({ queryKey: qk.repos(project.id) });
   // Deleting asks first, and asks what happens to the folders the agents worked in.
   const [deleting, setDeleting] = useState(false);
@@ -282,8 +290,48 @@ export function ProjectSettings({ onOpenTeam, onDeleted }: { onOpenTeam: () => v
               </div>
             </div>
           </Field>
+          <Field group label={t("projects.ideaModel")} hint={t("projects.ideaModelHint")}>
+            <div data-part="idea-model" className="flex flex-wrap items-start gap-2">
+              {providers.length > 1 && (
+                <div className="w-full sm:w-44">
+                  <Select
+                    aria-label={t("projects.ideaProvider")}
+                    value={form.idea_provider || "claude_code"}
+                    onChange={(e) => set({ idea_provider: e.target.value === "claude_code" ? "" : e.target.value, idea_model: "", idea_effort: "" })}
+                  >
+                    {providers.map((p) => (
+                      <option key={p.name} value={p.name}>
+                        {p.label}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+              )}
+              <div className="min-w-0 flex-1 basis-48">
+                <Select aria-label={t("projects.ideaModel")} value={form.idea_model} onChange={(e) => set({ idea_model: e.target.value })}>
+                  <option value="">{t("projects.askModelSmall", { model: ideaDefault?.label ?? "Claude Haiku" })}</option>
+                  {ideaModels.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                  {form.idea_model && !ideaModels.some((m) => m.id === form.idea_model) && <option value={form.idea_model}>{form.idea_model}</option>}
+                </Select>
+              </div>
+              <div className="w-full sm:w-48">
+                <Select aria-label={t("settings.defaultEffort")} value={form.idea_effort} onChange={(e) => set({ idea_effort: e.target.value })}>
+                  <option value="">{t("settings.effortOwn")}</option>
+                  {ideaEfforts.map((e) => (
+                    <option key={e} value={e}>
+                      {t("settings.effortOption", { effort: e })}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            </div>
+          </Field>
           <SaveRow
-            dirty={accountsDirty || dirty("parallel_agents", "account_id", "auto_wake_manager", "continue_with_backlog", "ask_provider", "ask_model", "ask_effort")}
+            dirty={accountsDirty || dirty("parallel_agents", "account_id", "auto_wake_manager", "continue_with_backlog", "ask_provider", "ask_model", "ask_effort", "idea_provider", "idea_model", "idea_effort")}
             onSave={saveTeam}
           >
             <Button variant="ghost" onClick={onOpenTeam}>

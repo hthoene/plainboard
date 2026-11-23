@@ -456,7 +456,8 @@ class Task(Timestamps, Base):
 class IdeaStatus(StrEnum):
     OPEN = "open"
     TAKEN = "taken"  # became (part of) a ticket: task_id
-    DISMISSED = "dismissed"  # left out on purpose when tickets were planned from it (closed_reason)
+    DISMISSED = "dismissed"  # left out on purpose (closed_reason), or its creation was undone
+    MERGED = "merged"  # went into another idea (merged_into_id)
 
 
 class IdeaTopic(Timestamps, Base):
@@ -471,6 +472,7 @@ class IdeaTopic(Timestamps, Base):
     hint: Mapped[str] = mapped_column(String(300), default="")  # the model's short note, e.g. "3 ideas about payment"
     x: Mapped[float | None] = mapped_column(Float)  # where the island lies; None: the UI places it
     y: Mapped[float | None] = mapped_column(Float)
+    manual: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())  # made or renamed by a person: the model keeps its name
 
 
 class Idea(Timestamps, Base):
@@ -491,8 +493,17 @@ class Idea(Timestamps, Base):
     x: Mapped[float | None] = mapped_column(Float)  # where the card lies; None: the UI places it
     y: Mapped[float | None] = mapped_column(Float)
     votes: Mapped[int] = mapped_column(Integer, default=0)
-    closed_at: Mapped[datetime | None] = mapped_column(DateTime)  # taken or dismissed
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime)  # taken, dismissed or merged
     closed_reason: Mapped[str] = mapped_column(String(300), default="")
+    # Placed by a person (moved to a topic or on the board): the model leaves its topic alone.
+    topic_manual: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    merged_into_id: Mapped[int | None] = mapped_column(ForeignKey("ideas.id", ondelete="SET NULL"))
+    # The model's question about it, as a decision for the person: options [{label, description}], the first recommended.
+    question: Mapped[str] = mapped_column(Text, default="", server_default="")
+    question_options: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, server_default="[]")
+    question_status: Mapped[str] = mapped_column(String(10), default="", server_default="")  # "" | open | answered | withdrawn
+    question_answer: Mapped[str] = mapped_column(Text, default="", server_default="")
+    question_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
 class IdeaLink(Base):
@@ -504,6 +515,35 @@ class IdeaLink(Base):
     idea_id: Mapped[int] = mapped_column(ForeignKey("ideas.id", ondelete="CASCADE"), index=True)
     other_id: Mapped[int] = mapped_column(ForeignKey("ideas.id", ondelete="CASCADE"), index=True)
     kind: Mapped[str] = mapped_column(String(10), default="similar")  # similar | duplicate
+
+
+class IdeaVersion(Base):
+    """An earlier title and text of an idea, kept whenever they change: by a person, the model, or an undo."""
+
+    __tablename__ = "idea_versions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    idea_id: Mapped[int] = mapped_column(ForeignKey("ideas.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(200), default="")
+    text: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str] = mapped_column(String(10), default="user")  # who replaced it: user | ai | undo
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class IdeaChange(Base):
+    """What happened to the ideas in one step (an input read by the model, an edit, a rearrangement of the
+    topics), for the UI to show and to undo. ``undo`` holds the state before it (services/ideas.undo)."""
+
+    __tablename__ = "idea_changes"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(20))  # new | several | amend | merge | question | edit | reorder
+    source: Mapped[str] = mapped_column(String(10), default="input")  # input | answer | user | auto | button
+    author: Mapped[str] = mapped_column(String(100), default="")
+    summary: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    undo: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    undone_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
 class TicketState(Base):

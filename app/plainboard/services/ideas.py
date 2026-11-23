@@ -71,6 +71,12 @@ async def listed(session: AsyncSession, project_id: int, *, closed: bool = False
     return list((await session.scalars(query)).all())
 
 
+async def open_questions(session: AsyncSession, project_id: int) -> list[Idea]:
+    """The open ideas the model asked about and nobody answered yet ("for you")."""
+    query = select(Idea).where(Idea.project_id == project_id, Idea.status == IdeaStatus.OPEN, Idea.question_status == QUESTION_OPEN).order_by(Idea.id)
+    return list((await session.scalars(query)).all())
+
+
 async def versions(session: AsyncSession, idea: Idea) -> list[IdeaVersion]:
     return list((await session.scalars(select(IdeaVersion).where(IdeaVersion.idea_id == idea.id).order_by(IdeaVersion.id.desc()))).all())
 

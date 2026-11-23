@@ -28,6 +28,12 @@ async def list_ideas(project_id: int, session: Session, runs: Runs, closed: bool
     return IdeasOut(topics=topics, ideas=ideas, sorting=runs.ideas.sorting(project_id))
 
 
+@router.get("/questions", response_model=list[IdeaOut])
+async def open_questions(project_id: int, session: Session) -> list[IdeaOut]:
+    """The model's open questions about ideas, for "for you"."""
+    return await idea_service.outs(session, await idea_service.open_questions(session, project_id))
+
+
 @router.post("", response_model=IdeaOut, status_code=201)
 async def create_idea(project_id: int, body: IdeaCreate, session: Session, runs: Runs, who: Who) -> IdeaOut:
     """An idea exactly as typed (the field of the board uses ``/input``)."""

@@ -1,0 +1,108 @@
+/* The board of ideas (#91): topic islands in the design's chart colours (--c). */
+
+.idea-dots {
+  background-image: radial-gradient(color-mix(in oklab, var(--fg) 13%, transparent) 1px, transparent 1.2px);
+  background-size: 22px 22px;
+}
+
+/* A topic island: a soft, uneven outline in the topic's colour. */
+.idea-island::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: 46% 54% 42% 58% / 38% 46% 54% 62%;
+  background: color-mix(in oklab, var(--c) 10%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--c) 22%, transparent),
+    0 0 70px 6px color-mix(in oklab, var(--c) 10%, transparent);
+  transition:
+    background-color 0.2s,
+    box-shadow 0.2s;
+}
+.idea-island:nth-child(2n)::before {
+  border-radius: 58% 42% 55% 45% / 52% 38% 62% 48%;
+}
+.idea-island:nth-child(3n)::before {
+  border-radius: 40% 60% 48% 52% / 58% 44% 56% 42%;
+}
+.idea-island-loose::before {
+  background: color-mix(in oklab, var(--fg) 4%, transparent);
+  box-shadow: none;
+  outline: 1.5px dashed color-mix(in oklab, var(--fg) 18%, transparent);
+  outline-offset: -1.5px;
+}
+.idea-island-over::before {
+  background: color-mix(in oklab, var(--c) 20%, transparent);
+  box-shadow:
+    0 0 0 2px color-mix(in oklab, var(--c) 60%, transparent),
+    0 0 70px 6px color-mix(in oklab, var(--c) 16%, transparent);
+}
+@media (max-width: 639px) {
+  .idea-island::before,
+  .idea-island:nth-child(n)::before {
+    border-radius: 28px 36px 30px 40px;
+  }
+}
+
+.idea-ghost-island {
+  border-radius: 46% 54% 42% 58% / 38% 46% 54% 62%;
+  border: 1.5px dashed color-mix(in oklab, var(--fg) 16%, transparent);
+}
+
+/* A new idea appears, a taken or merged one shows where it went and leaves. */
+@keyframes idea-enter {
+  from { opacity: 0; transform: scale(0.92) translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.idea-enter {
+  animation: idea-enter 0.45s cubic-bezier(0.2, 0.8, 0.3, 1) both;
+}
+@keyframes idea-leave {
+  0%, 55% { opacity: 1; transform: scale(1); filter: none; }
+  100% { opacity: 0; transform: scale(0.85) translateY(-8px); filter: blur(3px); }
+}
+.idea-leaving {
+  animation: idea-leave 1.6s ease-in forwards;
+  pointer-events: none;
+}
+@keyframes idea-flash {
+  0%, 60% { box-shadow: 0 0 0 3px var(--fg); }
+  100% { box-shadow: 0 0 0 3px transparent; }
+}
+.idea-flash > [data-part="idea-card"] {
+  animation: idea-flash 1.6s ease-out;
+}
+
+@keyframes idea-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.idea-sorting {
+  background-image: linear-gradient(100deg, transparent 30%, color-mix(in oklab, var(--fg) 12%, transparent) 50%, transparent 70%);
+  background-size: 200% 100%;
+  animation: idea-shimmer 2.2s linear infinite;
+}
+@keyframes idea-notice {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+.idea-notice {
+  animation: idea-notice 0.25s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .idea-enter,
+  .idea-sorting,
+  .idea-notice,
+  .idea-flash > [data-part="idea-card"] {
+    animation: none;
+  }
+  .idea-leaving {
+    animation: none;
+    opacity: 0.5;
+  }
+  .idea-island::before {
+    transition: none;
+  }
+}

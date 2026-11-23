@@ -7,6 +7,7 @@ import {
   CalendarClock,
   FolderKanban,
   GitMerge,
+  Lightbulb,
   MessageSquare,
   NotebookPen,
   Palette,
@@ -67,10 +68,12 @@ const SchedulesView = lazy(() => import("../schedules/SchedulesView").then((m) =
 const SettingsDialog = lazy(() => import("../settings/SettingsDialog").then((m) => ({ default: m.SettingsDialog })));
 const FlowView = lazy(() => import("../flow/FlowView").then((m) => ({ default: m.FlowView })));
 const StatsView = lazy(() => import("../stats/StatsView").then((m) => ({ default: m.StatsView })));
+const IdeasView = lazy(() => import("../ideas/IdeasView").then((m) => ({ default: m.IdeasView })));
 const TeamView = lazy(() => import("../team/TeamView").then((m) => ({ default: m.TeamView })));
 
 export type View =
   | "board"
+  | "ideas"
   | "chat"
   | "team"
   | "notes"
@@ -82,6 +85,7 @@ export type View =
 
 const VIEWS: { id: View; icon: (cls: string) => ReactNode }[] = [
   { id: "board", icon: (c) => <FolderKanban className={c} /> },
+  { id: "ideas", icon: (c) => <Lightbulb className={c} /> },
   { id: "flow", icon: (c) => <GitMerge className={c} /> },
   { id: "chat", icon: (c) => <MessageSquare className={c} /> },
   { id: "team", icon: (c) => <Users className={c} /> },
@@ -92,8 +96,10 @@ const VIEWS: { id: View; icon: (cls: string) => ReactNode }[] = [
   // The project's own settings, with its tools (MCP servers): for its owners; a member sees its own part.
   { id: "project", icon: (c) => <SlidersHorizontal className={c} /> },
 ];
-/** The main navigation: daily work, in the sidebar and as the phone's tabs. Ideas (#91) joins here. */
-const MAIN: View[] = ["board", "flow", "chat", "team"];
+/** The main navigation: daily work, in the sidebar and as the phone's tabs. */
+const MAIN: View[] = ["board", "ideas", "flow", "chat", "team"];
+/** On phones the tabs have room for four views and the search: the team moves to the "…" menu. */
+const PHONE_MAIN: View[] = ["board", "ideas", "flow", "chat"];
 /** The rest: in the "…" menu at the project name and in the palette (Ctrl+K). */
 const RARE: View[] = ["notes", "schedules", "browser", "stats", "project"];
 
@@ -345,6 +351,7 @@ function ProjectWorkspace({
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [lookOpen, setLookOpen] = useState(false);
   const [noteRequest, setNoteRequest] = useState<{ id?: number; n: number }>({ n: 0 });
+  const [ideaRequest, setIdeaRequest] = useState<{ id: number; n: number }>();
   const [panelOpen, setPanelOpen] = useStored<boolean>(
     "plainboard.chatOpen",
     true,
@@ -393,6 +400,10 @@ function ProjectWorkspace({
         toggle: () => setPanelOpen(!panelOpen),
       },
       openTask: setOpenTaskId,
+      openIdea: (id) => {
+        setIdeaRequest((last) => ({ id, n: (last?.n ?? 0) + 1 }));
+        setView("ideas");
+      },
       openSettings,
       openBrowser: (address) => {
         setBrowserRequest((last) => ({ url: address, n: last.n + 1 }));
@@ -432,7 +443,7 @@ function ProjectWorkspace({
     marked: marked(id),
   });
   const reachable = views.map((v) => v.id);
-  const rare = RARE.filter((id) => reachable.includes(id));
+  const rare = [...(isDesktop ? [] : MAIN.filter((id) => !PHONE_MAIN.includes(id))), ...RARE].filter((id) => reachable.includes(id));
   // The browser joins the main navigation while a preview runs, the open rare view while it is open.
   const mainIds = [...MAIN, ...rare.filter((id) => (id === "browser" && marked(id)) || id === view)];
   useEffect(() => {
@@ -619,6 +630,7 @@ function ProjectWorkspace({
                 }
               >
                 {view === "team" && <TeamView />}
+                {view === "ideas" && <IdeasView focus={ideaRequest} />}
                 {view === "notes" && <NotesView key={noteRequest.n} initial={noteRequest.id} />}
                 {view === "schedules" && <SchedulesView />}
                 {view === "browser" && <BrowserView request={browserRequest} />}
@@ -660,7 +672,7 @@ function ProjectWorkspace({
 
           {!isDesktop && (
             <PhoneTabs
-              entries={MAIN.map(entry)}
+              entries={PHONE_MAIN.map(entry)}
               view={view}
               setView={setView}
               search={paletteOpen}

@@ -1047,3 +1047,82 @@ export interface ProjectSearch {
   state: "ok" | "preparing" | "off" | "unavailable";
   hits: SearchHit[];
 }
+
+/** The project's ideas (#91): a planning space, nothing in it starts work. */
+export interface IdeaOption {
+  label: string;
+  description: string;
+}
+
+export interface Idea {
+  id: number;
+  project_id: number;
+  title: string;
+  text: string;
+  author: string;
+  status: "open" | "taken" | "dismissed" | "merged";
+  topic_id: number | null;
+  /** Placed by a person: the AI leaves its topic alone. */
+  topic_manual: boolean;
+  task_id: number | null;
+  task_number: number | null;
+  merged_into_id: number | null;
+  hint: string;
+  sort_state: "pending" | "sorted" | "failed";
+  x: number | null;
+  y: number | null;
+  votes: number;
+  similar: number[];
+  duplicate_of: number | null;
+  question: string;
+  /** The first is recommended; a free answer is possible too. */
+  question_options: IdeaOption[];
+  question_status: "" | "open" | "answered" | "withdrawn";
+  question_answer: string;
+  question_at: string | null;
+  closed_at: string | null;
+  closed_reason: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IdeaTopic {
+  id: number;
+  project_id: number;
+  name: string;
+  /** 0–9: the design's --chart-1 … --chart-10. */
+  color: number;
+  hint: string;
+  manual: boolean;
+  x: number | null;
+  y: number | null;
+}
+
+export interface IdeaChange {
+  id: number;
+  project_id: number;
+  kind: "new" | "several" | "amend" | "merge" | "question" | "edit" | "reorder";
+  source: "input" | "answer" | "user" | "auto" | "button";
+  author: string;
+  summary: Record<string, any>;
+  created_at: string;
+  undone_at: string | null;
+  /** The ideas it touched, as they are now (only in the answer to an action). */
+  ideas: Idea[];
+}
+
+export interface IdeaVersion {
+  id: number;
+  idea_id: number;
+  title: string;
+  text: string;
+  source: "user" | "ai" | "undo";
+  created_at: string;
+}
+
+export interface IdeasData {
+  topics: IdeaTopic[];
+  ideas: Idea[];
+  /** The AI is sorting ideas right now. */
+  sorting: boolean;
+}

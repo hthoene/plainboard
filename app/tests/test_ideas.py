@@ -268,6 +268,7 @@ def test_an_unclear_input_becomes_a_question_and_the_answer_is_worked_in(client,
     (idea,) = change["ideas"]
     assert idea["question_status"] == "open" and idea["question_options"] == [{"label": "Invoices", "description": "PDF"}, {"label": "Customers", "description": ""}]
     assert client.post(f"/api/projects/{pid}/ideas/{idea['id']}/answer", json={"option_index": 7}).status_code == 400
+    assert [i["id"] for i in client.get(f"/api/projects/{pid}/ideas/questions").json()] == [idea["id"]]
 
     resolved = {"action": "amend", "target": idea["id"], "title": "Export invoices", "text": "Export invoices as PDF"}
     asked = answer(client, intent=[json.dumps(resolved)])
@@ -277,6 +278,7 @@ def test_an_unclear_input_becomes_a_question_and_the_answer_is_worked_in(client,
     (after,) = resp.json()["ideas"]
     assert after["text"] == "Export invoices as PDF" and after["question_status"] == "answered" and after["question_answer"] == "Invoices — monthly"
     assert client.post(f"/api/projects/{pid}/ideas/{idea['id']}/answer", json={"text": "again"}).status_code == 409
+    assert client.get(f"/api/projects/{pid}/ideas/questions").json() == []
 
     # The model may also ask while sorting, rarely: once per idea at most.
     settled(client, pid)

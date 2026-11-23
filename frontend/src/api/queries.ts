@@ -27,6 +27,9 @@ import type {
   FlowHistory,
   FlowLive,
   FlowTicketBranch,
+  Idea,
+  IdeasData,
+  IdeaVersion,
   Stats,
   Task,
   TaskDetail,
@@ -65,6 +68,9 @@ export const qk = {
   pause: ["pause"] as const,
   secrets: (pid: number | null) => ["secrets", pid ?? "global"] as const,
   stats: (pid: number, days: number) => ["stats", pid, days] as const,
+  ideas: (pid: number) => ["ideas", pid] as const,
+  ideaQuestions: (pid: number) => ["ideaQuestions", pid] as const,
+  ideaVersions: (id: number) => ["ideaVersions", id] as const,
 };
 
 export interface AuthStatus {
@@ -148,6 +154,13 @@ export const useSchedules = (pid: number) =>
   useQuery({ queryKey: qk.schedules(pid), queryFn: () => api.get<Schedule[]>(`/projects/${pid}/schedules`) });
 export const useMcpServers = (pid: number) =>
   useQuery({ queryKey: qk.mcp(pid), queryFn: () => api.get<McpServer[]>(`/projects/${pid}/mcp-servers`) });
+
+export const useIdeas = (pid: number) => useQuery({ queryKey: qk.ideas(pid), queryFn: () => api.get<IdeasData>(`/projects/${pid}/ideas`) });
+/** The AI's open questions about ideas, for "for you". */
+export const useIdeaQuestions = (pid: number, enabled = true) =>
+  useQuery({ queryKey: qk.ideaQuestions(pid), queryFn: () => api.get<Idea[]>(`/projects/${pid}/ideas/questions`), enabled });
+export const useIdeaVersions = (pid: number, id: number, enabled = true) =>
+  useQuery({ queryKey: qk.ideaVersions(id), queryFn: () => api.get<IdeaVersion[]>(`/projects/${pid}/ideas/${id}/versions`), enabled });
 
 export const useRepositories = (pid: number) =>
   useQuery({ queryKey: qk.repos(pid), queryFn: () => api.get<Repository[]>(`/projects/${pid}/repositories`) });

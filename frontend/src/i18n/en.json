@@ -31,6 +31,7 @@
   },
   "nav": {
     "board": "Board",
+    "ideas": "Ideas",
     "team": "Team",
     "notes": "Notes",
     "schedules": "Schedules",
@@ -1638,6 +1639,89 @@
       "unavailable": "Search by meaning needs PostgreSQL; this installation has none.",
       "preparing": "Search by meaning is getting ready: these matches are by words only.",
       "empty": "Nothing in the history matches."
+    }
+  },
+  "ideas": {
+    "planningOnly": "Planning only",
+    "planningOnlyLong": "A place to plan: collecting and sorting ideas starts no work and creates no tickets. Tickets come when you ask the manager.",
+    "count_one": "{{count}} idea",
+    "count_other": "{{count}} ideas",
+    "topics_one": "{{count}} topic",
+    "topics_other": "{{count}} topics",
+    "rearrange": "Rearrange",
+    "placeholder": "Add an idea, or add to one: one sentence is enough",
+    "placeholderFirst": "What comes to mind? One sentence is enough, the AI sorts it in.",
+    "add": "Add",
+    "readingInput": "the AI reads it…",
+    "sorting": "The AI sorts ideas into topics…",
+    "reading": "Being sorted in…",
+    "unsorted": "Not in a topic",
+    "unsortedHint": "The AI sorts these in shortly.",
+    "notSorted": "Not sorted in",
+    "renameTopic": "Rename topic",
+    "duplicateOf": "Duplicate of “{{title}}”",
+    "duplicateHere": "Duplicate: “{{title}}”",
+    "similarTo": "Similar to “{{title}}”",
+    "merged": "merged",
+    "undo": "Undo",
+    "managerHint": "Tickets from these ideas? Write to the manager, e.g. “turn the ideas into tickets”.",
+    "writeManager": "Write to the manager",
+    "notice": {
+      "new": "New idea “{{title}}”",
+      "newSimilar": "New idea “{{title}}”, similar to others",
+      "kept": "Kept as a new idea",
+      "amend": "Added to “{{title}}”",
+      "merge": "{{count}} ideas merged into “{{title}}”",
+      "several_one": "Split into {{count}} idea",
+      "several_other": "Split into {{count}} ideas",
+      "question": "The AI has a question about it",
+      "reorder": "The AI rearranged the topics",
+      "moved_one": "{{count}} idea moved",
+      "moved_other": "{{count}} ideas moved",
+      "newTopics_one": "{{count}} new topic",
+      "newTopics_other": "{{count}} new topics",
+      "renamed_one": "{{count}} renamed",
+      "renamed_other": "{{count}} renamed"
+    },
+    "question": {
+      "recommended": "Recommended",
+      "own": "Answer in your own words",
+      "ownPlaceholder": "Your answer",
+      "send": "Send answer",
+      "withdraw": "Dismiss the question"
+    },
+    "edit": {
+      "title": "Edit idea",
+      "name": "Title",
+      "namePlaceholder": "The AI names it if empty",
+      "text": "Idea",
+      "topic": "Topic",
+      "topicHint": "Chosen by the AI. If you choose one, the AI leaves it there.",
+      "pinned": "Placed by you: the AI leaves it there.",
+      "by": "By {{author}}, {{when}}",
+      "someone": "someone",
+      "history": "Earlier versions",
+      "noHistory": "No earlier versions yet.",
+      "untitled": "Untitled",
+      "restore": "Restore",
+      "source": {
+        "user": "Replaced by an edit",
+        "ai": "Replaced by the AI",
+        "undo": "Replaced by an undo"
+      },
+      "delete": "Delete",
+      "deleteConfirm": "Delete this idea?"
+    },
+    "empty": {
+      "title": "Collect ideas for your project",
+      "text": "Write down whatever comes to mind, roughly is fine. The AI sorts the ideas into topics, notices duplicates and asks when something is unclear. Nothing starts here: it is only for planning, also before there is a repository.",
+      "starters": "Not sure where to start?"
+    },
+    "starter": {
+      "who": "Who is it for? ",
+      "must": "It must be able to ",
+      "special": "What makes it special: ",
+      "annoys": "What annoys people today: "
     }
   }
 }

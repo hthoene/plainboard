@@ -480,6 +480,7 @@ class ProjectUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = None
     language: str | None = Field(default=None, max_length=50)  # "" : the language each person writes in
+    customer_languages: list[LanguageCode] | None = Field(default=None, min_length=1, max_length=30)  # the first is the default
     workspace_path: WorkspacePath = None
     setup_script: str | None = None
     github_token: str | None = None  # "" clears the override
@@ -506,6 +507,7 @@ class ProjectOut(ORM):
     slug: str
     description: str
     language: str = ""
+    customer_languages: list[str] = Field(default_factory=lambda: ["en"])  # the first is the default
     paused_at: UTCDateTime | None = None  # paused for good by a person, since then
     paused_by: str = ""
     workspace_path: str | None
@@ -639,6 +641,19 @@ class AgentOut(ORM):
 CUSTOMER_TITLE_MAX = 150
 CUSTOMER_DESCRIPTION_MAX = 400
 USER_ACTION_MAX = 500
+LanguageCode = Annotated[str, Field(pattern=r"^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$")]
+
+
+class CustomerTextIn(BaseModel):
+    title: str | None = Field(default=None, max_length=CUSTOMER_TITLE_MAX)
+    description: str | None = Field(default=None, max_length=CUSTOMER_DESCRIPTION_MAX)
+
+
+class CustomerText(BaseModel):
+    title: str = ""
+    description: str = ""
+
+
 LabelColor = Literal["gray", "red", "orange", "amber", "green", "teal", "blue", "indigo", "purple", "pink"]
 
 
@@ -647,6 +662,7 @@ class TaskCreate(BaseModel):
     description: str = ""
     customer_title: str = Field(default="", max_length=CUSTOMER_TITLE_MAX)
     customer_description: str = Field(default="", max_length=CUSTOMER_DESCRIPTION_MAX)
+    customer_texts: dict[LanguageCode, CustomerTextIn] = Field(default_factory=dict)  # per customer language; the default's = the two above
     status: Status = "backlog"
     priority: Priority = "medium"
     labels: list[str] = Field(default_factory=list)
@@ -657,6 +673,7 @@ class TaskUpdate(BaseModel):
     description: str | None = None
     customer_title: str | None = Field(default=None, max_length=CUSTOMER_TITLE_MAX)
     customer_description: str | None = Field(default=None, max_length=CUSTOMER_DESCRIPTION_MAX)
+    customer_texts: dict[LanguageCode, CustomerTextIn] | None = None  # merged per language and field
     status: Status | None = None
     priority: Priority | None = None
     labels: list[str] | None = None
@@ -677,6 +694,7 @@ class TaskOut(ORM):
     description: str
     customer_title: str
     customer_description: str
+    customer_texts: dict[str, CustomerText] = Field(default_factory=dict)  # the other customer languages
     status: str
     position: float
     priority: str
@@ -763,6 +781,7 @@ class StatsOut(BaseModel):
 
 class PublicTask(BaseModel):
     number: int
+    lang: str  # the language of title and description: the one asked for, else the default
     title: str
     description: str
     status: str
@@ -771,6 +790,8 @@ class PublicTask(BaseModel):
 
 class PublicBoard(BaseModel):
     project: str
+    languages: list[str]  # the customer languages, the default first
+    default_language: str
     tasks: list[PublicTask]
 
 

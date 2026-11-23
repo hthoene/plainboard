@@ -42,7 +42,7 @@ from ..models import (
     utcnow,
 )
 from ..schemas import AssignmentOut, AttachmentOut, CommentOut, DecisionOut, PublicBoard, PublicTask, TaskCreate, TaskDetail, TaskOut, TaskUpdate
-from . import flow_log, ticket_state
+from . import customer_texts, flow_log, ticket_state
 from . import mentions as mention_service
 from .errors import NotFound, ServiceError
 from .timing import duration
@@ -82,7 +82,10 @@ async def create_tasks(session: AsyncSession, project_id: int, items: list[TaskC
             labels=data.labels,
             position=await _next_position(session, project_id, data.status),
             created_by_agent_id=by_agent_id,
+            customer_texts={},
         )
+        if data.customer_texts:
+            customer_texts.apply(task, project, {lang: t.model_dump(exclude_unset=True) for lang, t in data.customer_texts.items()})
         session.add(task)
         session.add(TaskTransition(project_id=project_id, task_number=task.number, from_status=None, status=task.status))
         await session.flush()  # the next ticket's position counts this one
@@ -93,16 +96,22 @@ async def create_tasks(session: AsyncSession, project_id: int, items: list[TaskC
     return tasks
 
 
-async def public_board(session: AsyncSession, project: Project) -> PublicBoard:
-    """What customers may see: only tickets with a customer title, and nothing else about them."""
-    tasks = [t for t in await list_tasks(session, project.id) if t.customer_title.strip()]
-    return PublicBoard(
-        project=project.name,
-        tasks=[
-            PublicTask(number=t.number, title=t.customer_title.strip(), description=t.customer_description.strip(), status=t.status, updated_at=t.updated_at)
-            for t in tasks
-        ],
-    )
+async def public_board(session: AsyncSession, project: Project, lang: str | None = None) -> PublicBoard:
+    """What customers may see: only tickets with a customer title in the default language, and nothing
+    else about them. Texts in ``lang`` where a ticket has them, else in the default language."""
+    languages = customer_texts.languages(project)
+    first = languages[0]
+    out = []
+    for t in await list_tasks(session, project.id):
+        if not t.customer_title.strip():
+            continue
+        served, (title, description) = first, (t.customer_title, t.customer_description)
+        if lang and lang != first and lang in languages:
+            other = customer_texts.texts(t, lang, project)
+            if other[0].strip():
+                served, (title, description) = lang, other
+        out.append(PublicTask(number=t.number, lang=served, title=title.strip(), description=description.strip(), status=t.status, updated_at=t.updated_at))
+    return PublicBoard(project=project.name, languages=languages, default_language=first, tasks=out)
 
 
 async def update_task(session: AsyncSession, task: Task, data: TaskUpdate) -> tuple[Task, str]:
@@ -149,6 +158,9 @@ async def _apply_update(session: AsyncSession, task: Task, fields: dict) -> str:
         task.archived_at = (task.archived_at or utcnow()) if archived else None
     elif fields.get("status", previous) != previous:
         task.archived_at = None  # moved again: back on the board
+    if given := fields.pop("customer_texts", None):
+        project = await session.get(Project, task.project_id)
+        customer_texts.apply(task, project, given)
     for key, value in fields.items():
         setattr(task, key, value)
     if task.status != previous:
@@ -790,7 +802,8 @@ async def ticket_text(session: AsyncSession, task: Task, comment_limit: int = CO
     decisions = await list_decisions(session, task.id)
     comments = await recent_comments(session, task.id, comment_limit)
     total = await count_comments(session, task.id)
-    brief = ticket_brief(task, await list_attachments(session, task.id), comments, names, path or runner_path, decisions, comment_total=total)
+    project = await session.get(Project, task.project_id)
+    brief = ticket_brief(task, await list_attachments(session, task.id), comments, names, path or runner_path, decisions, comment_total=total, project=project)
     stands = ticket_state.lines(await ticket_state.get(session, task.id))
     work = await work_lines(session, task, names)
     return "\n\n".join(part for part in (brief, "\n".join(stands), "\n".join(work)) if part)

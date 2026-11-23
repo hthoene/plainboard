@@ -12,6 +12,7 @@ from ..security import decrypt, encrypt
 from . import accounts as account_service
 from . import agents as agent_service
 from . import board as board_service
+from . import customer_texts
 from . import repositories as repo_service
 from . import schedules as schedule_service
 from . import permissions
@@ -152,10 +153,20 @@ async def update(session: AsyncSession, project: Project, data: ProjectUpdate) -
         await permissions.check_account(session, project, fields["account_id"])
     if "language" in fields:
         fields["language"] = (fields["language"] or "").strip()
+    changed = []
+    if fields.get("customer_languages") is not None:
+        # Removing a language keeps its texts (customer_texts): they come back with the language.
+        fields["customer_languages"] = list(dict.fromkeys(fields["customer_languages"]))
+        if fields["customer_languages"][0] != customer_texts.default(project):
+            changed = await customer_texts.switch_default(session, project, fields["customer_languages"][0])
+    else:
+        fields.pop("customer_languages", None)
     for key, value in fields.items():
         setattr(project, key, value)
     await session.commit()
     bus.publish(project.id, "project.updated", to_out(project))
+    for task in changed:
+        await board_service.publish_task(session, task)
     return project
 
 

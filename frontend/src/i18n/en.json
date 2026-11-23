@@ -144,7 +144,7 @@
     "localFolderHint": "Normally every agent works in its own copy of the code. Name a folder inside the workspaces directory here to have all agents work in the same one instead, for example a project folder of your own machine that is mounted there. Repositories are cloned into sub folders of it.",
     "githubToken": "GitHub token for this project",
     "publicApi": "Public API",
-    "publicApiHint": "Lets a website load tickets that have a customer title, with their customer texts and nothing else. Create one key per place that uses it, so you can revoke one without breaking the others.",
+    "publicApiHint": "Lets a website load tickets that have a customer title, with their customer texts and nothing else. Create one key per place that uses it, so you can revoke one without breaking the others. Add ?lang=de to get the texts in one of the customer languages; a ticket without them there comes in the default language, and each ticket says which one it is in (lang).",
     "publicApiCreate": "Create key",
     "publicApiRevoke": "Revoke",
     "publicApiCopy": "Copy this key now, it is only shown once:",
@@ -327,6 +327,10 @@
     "customerTitle": "Title",
     "customerDescription": "Description",
     "customerHint": "Public on your website, in simple words. Without a title, customers don't see this ticket.",
+    "customerLanguage": "Customer language",
+    "customerMissing": "Missing in: {{languages}}",
+    "customerMissingTab": "Not written in this language yet",
+    "customerDefaultHint": "Default language: without a title here, customers don't see this ticket in any language.",
     "handToManager": "Hand to manager",
     "withManager": "Manager is on it",
     "handToManagerHint": "The manager splits the ticket into clear assignments for the right agents.",
@@ -1554,5 +1558,14 @@
       "waiting": "{{count}} handed over",
       "repairing": "{{count}} being repaired"
     }
+  },
+  "customerLanguages": {
+    "label": "Customer languages",
+    "description": "The languages of the customer texts on tickets. The first is the default: a ticket is public when it has a customer title in it, and the public API falls back to it. Agents write the customer texts in all of them.",
+    "default": "Default",
+    "makeDefault": "Make default",
+    "add": "Add language",
+    "hint": "Every change is saved at once. Removing a language keeps its texts on the tickets: they come back when you add it again.",
+    "confirmRemove": "{{count}} tickets have customer texts in {{language}}. Remove the language anyway? The texts stay stored and come back when you add {{language}} again."
   }
 }

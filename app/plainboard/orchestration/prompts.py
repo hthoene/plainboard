@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 from ..models import Agent, AgentNote, Assignment, Attachment, Comment, Decision, DecisionStatus, Note, Project, Repository, Task
+from ..services import customer_texts as customer_text_service
 from ..services.timing import duration
 from ..services.util import truncate
 
@@ -147,9 +148,9 @@ How work flows:
   archived automatically after a while; archived tickets keep their history (list_tasks archived=true).
   sort_tickets puts a column in priority order; color_label gives a label one color across the board.
 - Customer texts are public, e.g. on the project's website. If a ticket matters to the product's end
-  users, set them with create_tasks or update_task, in simple words and the user's language:
-  customer_title says clearly what the point is, customer_description adds one or two short sentences on
-  what they get. No internal names, technical details or security issues. Tickets that don't matter to
+  users, set them with create_tasks or update_task, in simple words and in every customer language of
+  the project (see "Customer languages"): customer_title says clearly what the point is,
+  customer_description adds one or two short sentences on what they get. No internal names, technical details or security issues. Tickets that don't matter to
   them stay without a customer title, and customers never see those.
 
 The team:
@@ -438,6 +439,7 @@ def system_prompt(
 SECTION_TITLES = {
     "identity": "Your role and the project",
     "guide": "How you work",
+    "customer_languages": "Customer languages",
     "backlog": "Backlog",
     "checks": "Check runs",
     "environment": "Environment",
@@ -480,6 +482,7 @@ def system_prompt_sections(
     sections["guide"] = MANAGER_GUIDE if agent.is_manager else WORKER_GUIDE
     sections["language"] = language_rule(project.language)
     if agent.is_manager:
+        sections["customer_languages"] = customer_languages_rule(project)
         sections["backlog"] = BACKLOG_NEXT if project.continue_with_backlog else BACKLOG_LATER
     elif my_repos and project.fast_checks:
         sections["checks"] = FAST_CHECKS
@@ -551,12 +554,16 @@ def ticket_brief(
     runner_path,
     decisions: list[Decision] | None = None,
     comment_total: int | None = None,
+    project: Project | None = None,
 ) -> str:
     lines = [f"Ticket #{task.number}: {task.title}", f"Status: {task.status}{' (archived)' if task.archived_at else ''} | Priority: {task.priority}" + (f" | Labels: {', '.join(task.labels)}" if task.labels else "")]
     if task.description:
         lines += ["", task.description.strip()]
     if task.customer_title:
-        lines += ["", f"For customers (public): {task.customer_title}" + (f" - {task.customer_description}" if task.customer_description else "")]
+        lang = f", {customer_text_service.default(project)}" if project else ""
+        lines += ["", f"For customers (public{lang}): {task.customer_title}" + (f" - {task.customer_description}" if task.customer_description else "")]
+        if project and (missing := customer_text_service.missing(task, project)):
+            lines.append(f"Customer texts missing in: {', '.join(missing)}")
     if task.user_action:
         lines += ["", f"Waiting for the user to do: {task.user_action}"]
     decisions = decisions or []
@@ -916,6 +923,18 @@ def todo_block(todos: list, total: int) -> str:
 
 
 TODOS_CLEARED = "Your task list has no open tasks now."
+
+
+def customer_languages_rule(project: Project) -> str:
+    langs = customer_text_service.languages(project)
+    named = ", ".join(f"{customer_text_service.name(code)} ({code})" for code in langs)
+    if len(langs) == 1:
+        return f"Customer languages: {named}. Write customer_title and customer_description in it."
+    return (
+        f"Customer languages: {named}. The first is the default: customer_title and customer_description are in it, "
+        f'the others go into customer_texts, e.g. {{"{langs[1]}": {{"title": "...", "description": "..."}}}}. '
+        "Write each ticket's customer texts in all of them."
+    )
 
 
 def language_rule(language: str) -> str:

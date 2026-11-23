@@ -17,6 +17,7 @@ import { ProjectAccounts, allowedAccounts, sameAccounts, useUsableAccounts } fro
 import { ProjectPauseSwitch } from "./ProjectPause";
 import { ProjectRunnerEditor } from "./ProjectRunner";
 import { ExportProject } from "./MoveProject";
+import { CustomerLanguages } from "./CustomerLanguages";
 import { RepositoriesEditor, toBody, toDraft } from "./RepositoriesEditor";
 import { SkillsEditor } from "./SkillsEditor";
 
@@ -338,6 +339,12 @@ export function ProjectSettings({ onOpenTeam, onDeleted }: { onOpenTeam: () => v
       label: t("projectSettings.members.label"),
       description: t("projectSettings.members.description"),
       content: <MembersEditor projectId={project.id} />,
+    },
+    {
+      id: "customerLanguages",
+      label: t("customerLanguages.label"),
+      description: t("customerLanguages.description"),
+      content: <CustomerLanguages project={project} />,
     },
     {
       id: "publicApi",

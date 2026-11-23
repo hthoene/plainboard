@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from pydantic import BaseModel, Field
 
 from ..models import Assignment, Task
-from ..schemas import CUSTOMER_DESCRIPTION_MAX, CUSTOMER_TITLE_MAX, USER_ACTION_MAX, DecisionOption, LabelColor, Priority, Status, TaskCreate, TaskUpdate
+from ..schemas import CUSTOMER_DESCRIPTION_MAX, CUSTOMER_TITLE_MAX, USER_ACTION_MAX, CustomerTextIn, DecisionOption, LanguageCode, LabelColor, Priority, Status, TaskCreate, TaskUpdate
 from ..services import board as board_service
 from ..services import decisions as decision_service
 from ..services import projects as project_service
@@ -29,11 +29,15 @@ class TicketRef(BaseModel):
     number: int = Field(description="Ticket number (#)")
 
 
+CUSTOMER_TEXTS = "The other customer languages: code -> {title, description}; customer_title/description are the default language's"
+
+
 class CreateTaskArgs(BaseModel):
     title: str
     description: str = ""
     customer_title: str = Field(default="", max_length=CUSTOMER_TITLE_MAX, description="Public, for end users: says clearly what this is, simple words; empty = hidden")
     customer_description: str = Field(default="", max_length=CUSTOMER_DESCRIPTION_MAX, description="Public, for end users: 1-2 short sentences on what they get")
+    customer_texts: dict[LanguageCode, CustomerTextIn] = Field(default_factory=dict, description=CUSTOMER_TEXTS)
     status: Status = "backlog"
     priority: Priority = "medium"
     labels: list[str] = Field(default_factory=list)
@@ -61,6 +65,7 @@ class UpdateTaskArgs(BaseModel):
     description: str | None = None
     customer_title: str | None = Field(default=None, max_length=CUSTOMER_TITLE_MAX, description="Public, for end users: says clearly what this is, simple words; empty = hidden")
     customer_description: str | None = Field(default=None, max_length=CUSTOMER_DESCRIPTION_MAX, description="Public, for end users: 1-2 short sentences on what they get")
+    customer_texts: dict[LanguageCode, CustomerTextIn] | None = Field(default=None, description=CUSTOMER_TEXTS)
     status: Status | None = None
     priority: Priority | None = None
     labels: list[str] | None = None

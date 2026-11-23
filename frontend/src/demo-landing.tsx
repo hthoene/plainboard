@@ -25,7 +25,7 @@ const agent = { id: 1, name: "Frontend Engineer", color: "#3b82f6" } as Agent;
 const project = { id: 1, label_colors: { ui: "blue", backend: "green" } } as unknown as Project;
 const shell = { project, canWrite: false, agents: [agent], agentById: (id: number) => (id === 1 ? agent : undefined), openTask: () => {} } as unknown as ShellApi;
 const now = new Date().toISOString();
-const base = { project_id: 1, description: "", customer_title: "", customer_description: "", status: "in_progress", position: 0, priority: "medium", labels: [], user_action: "", archived_at: null, created_by_agent_id: null, created_at: now, updated_at: now, comment_count: 0, attachment_count: 0, active_agent_ids: [], manager_active: false, open_decisions: 0 } as unknown as Task;
+const base = { project_id: 1, description: "", customer_title: "", customer_description: "", customer_texts: {}, status: "in_progress", position: 0, priority: "medium", labels: [], user_action: "", archived_at: null, created_by_agent_id: null, created_at: now, updated_at: now, comment_count: 0, attachment_count: 0, active_agent_ids: [], manager_active: false, open_decisions: 0 } as unknown as Task;
 const tasks = [
   { ...base, id: 1, number: 61, title: "Retry failed webhook deliveries", labels: ["backend"], comment_count: 2 },
   { ...base, id: 2, number: 70, title: "Ticket card shows that the work is finished and only checked", priority: "high", labels: ["ui"], comment_count: 3, attachment_count: 1, landing: { phase: "checking", since: now } },

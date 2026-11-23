@@ -11,6 +11,8 @@ export interface Project {
   description: string;
   /** What agents write to people in, e.g. "German". Empty: the language each person writes in. */
   language: string;
+  /** Languages of the customer texts (codes like "en"); the first is the default. */
+  customer_languages: string[];
   workspace_path: string | null;
   has_github_token: boolean;
   auto_wake_manager: boolean;
@@ -174,6 +176,8 @@ export interface Task {
   description: string;
   customer_title: string;
   customer_description: string;
+  /** Customer texts of the other customer languages; customer_title/description are the default language's. */
+  customer_texts: Record<string, { title: string; description: string }>;
   status: TaskStatus;
   position: number;
   priority: Priority;

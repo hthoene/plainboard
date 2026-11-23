@@ -16,6 +16,7 @@ from ..schemas import AgentCreate, AgentOut, AgentUpdate, CheckOut, ExportIn, Im
 from ..services import accounts as account_service
 from ..services import agents as agent_service
 from ..services import api_keys as api_key_service
+from ..services import customer_texts
 from ..services import jobs as job_service
 from ..services import ownership
 from ..services import permissions
@@ -141,6 +142,12 @@ async def check_project_github(project_id: int, session: Session, runs: Runs) ->
     repos = repo_service.specs(await repo_service.list_for_project(session, project_id))
     result = await runs.runners.of(project_id).check_github(credentials, repos)
     return CheckOut(ok=result.ok, detail=result.detail)
+
+
+@router.get("/projects/{project_id}/customer-texts")
+async def customer_text_counts(project_id: int, session: Session) -> dict[str, int]:
+    """How many tickets have customer texts per language (also in languages no longer in the list)."""
+    return await customer_texts.counts(session, await project_service.get(session, project_id))
 
 
 @router.get("/projects/{project_id}/public-api-keys", response_model=list[PublicApiKeyOut])

@@ -35,6 +35,7 @@ from starlette.types import Receive, Scope, Send
 
 from ..db import sessionmaker
 from ..models import Attachment, Decision, DecisionStatus, Project, Run, RunStatus, Task
+from ..schemas import CustomerTextIn
 from ..services import access
 from ..services import agents as agent_service
 from ..services import board as board_service
@@ -216,7 +217,9 @@ async def get_ticket(project: ProjectRef, number: Number) -> str:
         task = await ticket_of(session, p, number)
         text = await board_service.ticket_text(session, task, comment_limit=10, path=attachment_url)
         customer = "\n".join(f"Customer {k}: {v}" for k, v in (("title", task.customer_title), ("description", task.customer_description)) if v)
-        return text + (f"\n\n{customer}" if customer else "")
+        for lang, other in (task.customer_texts or {}).items():
+            customer += "".join(f"\nCustomer {k} ({lang}): {v}" for k, v in (("title", other.get("title")), ("description", other.get("description"))) if v)
+        return text + (f"\n\n{customer.strip()}" if customer.strip() else "")
 
 
 @tool("Older ticket comments, page by page (newest first by offset).")
@@ -237,10 +240,13 @@ async def create_ticket(
     labels: list[str] | None = None,
     customer_title: Annotated[str, Field(description="Public title for end users")] = "",
     customer_description: Annotated[str, Field(description="Public text for end users")] = "",
+    customer_texts: Annotated[dict[str, CustomerTextIn] | None, Field(description=board_tools.CUSTOMER_TEXTS)] = None,
 ) -> str:
     async with sessionmaker()() as session:
         p = await project_of(session, project)
     body = {"title": title, "description": description, "status": status, "priority": priority, "labels": labels or [], "customer_title": customer_title, "customer_description": customer_description}
+    if customer_texts:
+        body["customer_texts"] = {lang: t.model_dump(exclude_none=True) for lang, t in customer_texts.items()}
     t = await api("POST", f"/api/projects/{p.id}/tasks", json=body)
     return f"Created #{t['number']} [{t['status']}] {t['title']}"
 
@@ -256,11 +262,14 @@ async def update_ticket(
     labels: Annotated[list[str] | None, Field(description="The full new list")] = None,
     customer_title: str | None = None,
     customer_description: str | None = None,
+    customer_texts: Annotated[dict[str, CustomerTextIn] | None, Field(description=board_tools.CUSTOMER_TEXTS)] = None,
     archived: bool | None = None,
 ) -> str:
     async with sessionmaker()() as session:
         task = await ticket_of(session, await project_of(session, project), number)
     fields = {"title": title, "description": description, "status": status, "priority": priority, "labels": labels, "customer_title": customer_title, "customer_description": customer_description, "archived": archived}
+    if customer_texts:
+        fields["customer_texts"] = {lang: t.model_dump(exclude_none=True) for lang, t in customer_texts.items()}
     body = {k: v for k, v in fields.items() if v is not None}
     if not body:
         raise ToolError("Nothing to change.")

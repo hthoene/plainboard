@@ -261,7 +261,7 @@ def test_public_api_shows_only_customer_texts(client, project):
     body = resp.json()
     assert body["project"] == project["name"]
     assert len(body["tasks"]) == 1
-    assert set(body["tasks"][0]) == {"number", "title", "description", "status", "updated_at"}
+    assert set(body["tasks"][0]) == {"number", "lang", "title", "description", "status", "updated_at"}
     assert body["tasks"][0]["title"] == "Faster opening of books" and body["tasks"][0]["number"] == shown["number"]
     assert body["tasks"][0]["description"] == "Large books open sooner."
     assert "secret" not in resp.text and "Refactor" not in resp.text

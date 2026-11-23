@@ -159,6 +159,8 @@ class Project(Timestamps, Base):
     description: Mapped[str] = mapped_column(Text, default="")
     # What agents write to people in, e.g. "German". Empty: the language each person writes in.
     language: Mapped[str] = mapped_column(String(50), default="", server_default="")
+    # Languages of the customer texts (codes), the first is the default (services/customer_texts.py).
+    customer_languages: Mapped[list[str]] = mapped_column(JSON, default=lambda: ["en"], server_default='["en"]')
     # Optional shared working directory (relative to the workspaces root, e.g. a bind-mounted
     # host folder). Unset = every agent gets its own directory/clone.
     workspace_path: Mapped[str | None] = mapped_column(String(500))
@@ -425,6 +427,8 @@ class Task(Timestamps, Base):
     # Public via the API. No title = hidden from customers.
     customer_title: Mapped[str] = mapped_column(String(150), default="")
     customer_description: Mapped[str] = mapped_column(Text, default="")
+    # The other customer languages: code -> {"title", "description"}. The default language's are the two above.
+    customer_texts: Mapped[dict[str, dict[str, str]]] = mapped_column(JSON, default=dict, server_default="{}")
     status: Mapped[str] = mapped_column(String(20), default=TaskStatus.BACKLOG)
     position: Mapped[float] = mapped_column(Float, default=0.0)
     priority: Mapped[str] = mapped_column(String(10), default="medium")

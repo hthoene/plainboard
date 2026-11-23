@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Archive, ArchiveRestore, Bot, Check, ChevronDown, ChevronRight, FileText, Play, Send, Trash2, Upload, UserRound, X } from "lucide-react";
+import { Archive, ArchiveRestore, Bot, Check, ChevronDown, ChevronRight, CircleDashed, FileText, Play, Send, Trash2, Upload, UserRound, X } from "lucide-react";
 import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { api, errorMessage } from "../../api/client";
@@ -12,7 +12,7 @@ import { VideoThumb } from "../../components/VideoThumb";
 import { isVideoFile } from "../../lib/media";
 import { Markdown, TicketText } from "../../components/Markdown";
 import { useMentionPicker, useReadMentionsOf } from "../../components/Mentions";
-import { AgentSquare, AgentDot, Badge, Button, ErrorText, IconButton, Input, Modal, Select, Spinner, Textarea } from "../../components/ui";
+import { AgentSquare, AgentDot, Badge, Button, ErrorText, IconButton, Input, Modal, Segmented, Select, Spinner, Textarea } from "../../components/ui";
 import { chatTime, formatBytes, formatDateTime, timeAgo } from "../../lib/format";
 import { useShell } from "../layout/shell-context";
 import { STATUSES } from "./Board";
@@ -30,7 +30,7 @@ export function TaskModal({ taskId, onClose }: { taskId: number; onClose: () => 
   const [error, setError] = useState<unknown>(null);
   const [viewing, setViewing] = useState<number | null>(null);
 
-  const patch = async (body: Partial<TaskDetail> & { archived?: boolean }) => {
+  const patch = async (body: Omit<Partial<TaskDetail>, "customer_texts"> & { archived?: boolean; customer_texts?: CustomerBody["customer_texts"] }) => {
     setError(null);
     try {
       await api.patch(`/tasks/${taskId}`, body);
@@ -119,7 +119,7 @@ export function TaskModal({ taskId, onClose }: { taskId: number; onClose: () => 
         <div className="min-w-0 space-y-6">
           <FlowTicket taskId={taskId} />
           <DescriptionEditor value={data.description} onSave={(description) => patch({ description })} canWrite={canWrite} />
-          <CustomerTexts title={data.customer_title} description={data.customer_description} onSave={patch} canWrite={canWrite} />
+          <CustomerTexts task={data} languages={project.customer_languages?.length ? project.customer_languages : ["en"]} onSave={patch} canWrite={canWrite} />
           <Attachments attachments={data.attachments} reviewIds={reviewAttachmentIds(data.decisions)} onUpload={upload} onView={setViewing} canWrite={canWrite} />
           {data.state && (
             <section>
@@ -272,32 +272,71 @@ function TitleEditor({ value, onSave, canWrite }: { value: string; onSave: (v: s
   );
 }
 
-function CustomerTexts({ title, description, onSave, canWrite }: { title: string; description: string; onSave: (body: { customer_title?: string; customer_description?: string }) => void; canWrite: boolean }) {
+type CustomerBody = { customer_title?: string; customer_description?: string; customer_texts?: Record<string, { title?: string; description?: string }> };
+
+/** The ticket's public texts, one tab per customer language of the project (the default first). With one
+ * language there are no tabs. Tabs without a title are marked: customers get the default language there. */
+function CustomerTexts({ task, languages, onSave, canWrite }: { task: TaskDetail; languages: string[]; onSave: (body: CustomerBody) => void; canWrite: boolean }) {
+  const { t } = useTranslation();
+  const [lang, setLang] = useState(languages[0]);
+  const active = languages.includes(lang) ? lang : languages[0];
+  const textsOf = (code: string) => (code === languages[0] ? { title: task.customer_title, description: task.customer_description } : { title: task.customer_texts?.[code]?.title ?? "", description: task.customer_texts?.[code]?.description ?? "" });
+  const missing = task.customer_title ? languages.filter((code) => !textsOf(code).title.trim()) : [];
+  const save = (field: "title" | "description", value: string) =>
+    onSave(active === languages[0] ? { [`customer_${field}`]: value } : { customer_texts: { [active]: { [field]: value } } });
+  const { title, description } = textsOf(active);
+  if (!canWrite && !languages.some((code) => textsOf(code).title || textsOf(code).description)) return null;
+  return (
+    <section className="space-y-2" data-part="customer-texts">
+      <SectionTitle>{t("ticket.customerSection")}</SectionTitle>
+      {languages.length > 1 && (
+        <div className="scroll-thin -mx-1 overflow-x-auto px-1">
+          <Segmented
+            aria-label={t("ticket.customerLanguage")}
+            value={active}
+            onChange={setLang}
+            options={languages.map((code) => ({
+              value: code,
+              label: (
+                <span className="inline-flex items-center gap-1" title={missing.includes(code) ? t("ticket.customerMissingTab") : undefined}>
+                  {code.toUpperCase()}
+                  {missing.includes(code) && <CircleDashed className="size-3" aria-label={t("ticket.customerMissingTab")} />}
+                </span>
+              ),
+            }))}
+          />
+        </div>
+      )}
+      <CustomerFields key={active} title={title} description={description} onSave={save} canWrite={canWrite} />
+      {missing.length > 0 && languages.length > 1 && <p className="text-fg-3">{t("ticket.customerMissing", { languages: missing.map((code) => code.toUpperCase()).join(", ") })}</p>}
+      {canWrite && <p className="text-fg-3">{t(languages.length > 1 && active === languages[0] ? "ticket.customerDefaultHint" : "ticket.customerHint")}</p>}
+    </section>
+  );
+}
+
+function CustomerFields({ title, description, onSave, canWrite }: { title: string; description: string; onSave: (field: "title" | "description", value: string) => void; canWrite: boolean }) {
   const { t } = useTranslation();
   const [draftTitle, setDraftTitle] = useState(title);
   const [draftDescription, setDraftDescription] = useState(description);
   useEffect(() => setDraftTitle(title), [title]);
   useEffect(() => setDraftDescription(description), [description]);
   if (!canWrite) {
-    if (!title && !description) return null;
     return (
-      <section className="space-y-1">
-        <SectionTitle>{t("ticket.customerSection")}</SectionTitle>
+      <div className="space-y-1">
         {title && <p className="font-medium">{title}</p>}
         {description && <p className="whitespace-pre-wrap">{description}</p>}
-      </section>
+      </div>
     );
   }
   return (
-    <section className="space-y-2">
-      <SectionTitle>{t("ticket.customerSection")}</SectionTitle>
+    <>
       <Input
         aria-label={t("ticket.customerTitle")}
         placeholder={t("ticket.customerTitle")}
         maxLength={150}
         value={draftTitle}
         onChange={(e) => setDraftTitle(e.target.value)}
-        onBlur={() => draftTitle !== title && onSave({ customer_title: draftTitle })}
+        onBlur={() => draftTitle !== title && onSave("title", draftTitle)}
       />
       <Textarea
         aria-label={t("ticket.customerDescription")}
@@ -306,10 +345,9 @@ function CustomerTexts({ title, description, onSave, canWrite }: { title: string
         maxLength={400}
         value={draftDescription}
         onChange={(e) => setDraftDescription(e.target.value)}
-        onBlur={() => draftDescription !== description && onSave({ customer_description: draftDescription })}
+        onBlur={() => draftDescription !== description && onSave("description", draftDescription)}
       />
-      <p className="text-fg-3">{t("ticket.customerHint")}</p>
-    </section>
+    </>
   );
 }
 

@@ -520,6 +520,7 @@
     "placeholder": "Ask a quick question…",
     "send": "Ask",
     "followUp": "Ask a follow-up…",
+    "about": "About this window",
     "private": "Only you see this. A fast agent looks it up in the code, tickets and history; it changes nothing, and the manager neither waits for it nor learns of it.",
     "thinking": "Looking it up…",
     "steps_one": "{{count}} look-up",

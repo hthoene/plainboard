@@ -1,4 +1,4 @@
-import { ArrowUp } from "lucide-react";
+import { ArrowUp, Info } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../../api/client";
@@ -21,6 +21,38 @@ type Line =
   | { type: "done"; text: string }
   | { type: "error"; message: string }
   | { type: "ping" };
+
+/** A small info icon whose text shows on hover and focus, and on tap/click (no hover on phones). */
+function InfoTip({ text, label }: { text: string; label: string }) {
+  const [open, setOpen] = useState(false);
+  const [hover, setHover] = useState(false);
+  const box = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: Event) => !box.current?.contains(e.target as Node) && setOpen(false);
+    document.addEventListener("pointerdown", away);
+    return () => document.removeEventListener("pointerdown", away);
+  }, [open]);
+  const shown = open || hover;
+  return (
+    <span ref={box} className="relative inline-flex self-center" onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
+      <button
+        type="button"
+        aria-label={label}
+        aria-expanded={shown}
+        onClick={() => setOpen((v) => !v)}
+        className="flex size-5 items-center justify-center rounded-sm text-fg-3 transition-colors hover:text-fg touch:size-8"
+      >
+        <Info className="size-4" />
+      </button>
+      {shown && (
+        <span role="tooltip" className="absolute top-full left-0 z-10 mt-1 w-72 rounded-sm max-sm:fixed max-sm:inset-x-4 max-sm:top-[calc(env(safe-area-inset-top)+3.25rem)] max-sm:mt-0 max-sm:w-auto bg-bg p-2.5 text-sm font-normal text-fg-2 shadow-lg ring-1 ring-line-2">
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
 
 /** A short question about the project, answered beside the chat by a read-only agent of its own. Nobody
  * else sees it, and the manager neither waits for it nor learns of it. Closing the window ends it. */
@@ -140,6 +172,7 @@ export function AskDialog({ projectId, question, onClose }: { projectId: number;
       title={
         <span className="flex items-baseline gap-2">
           <span>{t("ask.title")}</span>
+          <InfoTip text={t("ask.private")} label={t("ask.about")} />
           {model && <span className="truncate font-normal text-fg-3">{model}</span>}
         </span>
       }
@@ -167,7 +200,6 @@ export function AskDialog({ projectId, question, onClose }: { projectId: number;
       }
     >
       <div data-part="ask" className="space-y-4">
-        <p className="text-fg-3">{t("ask.private")}</p>
         {entries.map((entry, i) => (
           <section key={i} className="space-y-2 border-t border-line pt-3">
             <p className="font-semibold whitespace-pre-wrap">{entry.question}</p>

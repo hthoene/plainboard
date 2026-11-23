@@ -222,7 +222,7 @@ async def test_codex_app_server_loads_the_board_tools(tmp_path):
 
 
 LISTED = [
-    {"id": "gpt-6.2-sol", "displayName": "GPT-6.2-Sol", "hidden": False},
+    {"id": "gpt-6.2-sol", "displayName": "GPT-6.2-Sol", "hidden": False, "supportedReasoningEfforts": [{"reasoningEffort": e} for e in ("low", "max", "ultra")]},
     {"id": "gpt-6.1-sol", "displayName": "GPT-6.1-Sol", "hidden": False},
     {"id": "gpt-daybreak-blue-latest", "displayName": "Daybreak Blue", "hidden": True, "modelSpecialty": "cyber"},
     {"id": "gpt-daybreak-red-latest", "displayName": "Daybreak Red", "hidden": True, "modelSpecialty": "cyber", "availableAccessPrograms": {"cyber": ["standard"]}},
@@ -246,7 +246,8 @@ async def test_every_page_of_the_model_list_is_read():
             return {"data": LISTED[:2], "nextCursor": "p2"} if not params.get("cursor") else {"data": LISTED[2:], "nextCursor": None}
 
     server = Pages()
-    assert [m.id for m in await codex.list_models(server)] == ["gpt-6.2-sol", "gpt-6.1-sol", "gpt-daybreak-blue-latest"]
+    models, efforts = await codex.list_models(server)
+    assert [m.id for m in models] == ["gpt-6.2-sol", "gpt-6.1-sol", "gpt-daybreak-blue-latest"] and efforts == ["low", "max", "ultra"]
     assert server.asked == [{"includeHidden": True}, {"includeHidden": True, "cursor": "p2"}]
 
 
@@ -277,4 +278,6 @@ async def test_a_subscription_s_limits_bring_the_models_it_may_use(monkeypatch):
     assert await provider.limits(creds) == []
     assert [m.id for m in await provider.offered(creds)] == ["gpt-6.2-sol", "gpt-6.1-sol", "gpt-daybreak-blue-latest"]
     assert await provider.offered(creds) is None  # once
-    assert "gpt-daybreak-blue-latest" in [m.id for m in provider.info().models]  # labels for the app's catalog
+    info = provider.info()
+    assert "gpt-daybreak-blue-latest" in [m.id for m in info.models]  # labels for the app's catalog
+    assert info.efforts == ["low", "medium", "high", "xhigh", "max", "ultra"]  # a level Codex names is taken over

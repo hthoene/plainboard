@@ -84,6 +84,9 @@ class EndpointProvider(ClaudeCodeProvider):
         self.endpoint = endpoint
         self.name = endpoint.name
 
+    async def catalog(self) -> ProviderInfo:
+        return self.info()  # its accounts name the models, not Claude Code's own list
+
     def info(self) -> ProviderInfo:
         e = self.endpoint
         return ProviderInfo(name=e.name, label=e.label, models=list(e.models), efforts=[], endpoint=EndpointInfo(url=e.url, key=e.key, hint=e.hint))

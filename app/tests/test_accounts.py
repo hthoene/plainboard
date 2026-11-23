@@ -281,6 +281,31 @@ def test_codex_subscriptions_list_the_models_they_may_use(client, project):
     # A model no list names (typed by hand) is not held back: it may run anywhere.
     client.patch(f"/api/agents/{dev['id']}", json={"model": "gpt-9-new"})
     assert turn(client, pid, dev["id"]).codex_account == "default"
+    # In use, its list is still asked for every hour: a new model shows up without anything else.
+    import time
+
+    from plainboard.db import sessionmaker
+    from plainboard.models import Account
+    from plainboard.services import limits as limits_service
+    from sqlalchemy import select
+
+    async def in_use(checked_ago: float) -> None:
+        async with sessionmaker()() as s:
+            key = await s.scalar(select(Account.key).where(Account.label == "Team"))
+            await limits_service.record(s, key, [LimitWindow(name="codex_seven_day", utilization=0.1)])
+            await limits_service.record_plan(s, key, None, None)
+            row, plans = await limits_service._plans(s)
+            plans[key]["checked_at"] = int(time.time() - checked_ago)
+            row.value = json.dumps(plans)
+            await s.commit()
+
+    fake.limit_models["own_login"] = [sol, daybreak, ModelInfo(id="gpt-7-sol", label="GPT-7-Sol")]
+    client.portal.call(in_use, 600)
+    client.portal.call(runs._refresh_limits)
+    assert "gpt-7-sol" not in accounts(client)["Team"]["models"]
+    client.portal.call(in_use, 3700)
+    client.portal.call(runs._refresh_limits)
+    assert accounts(client)["Team"]["models"][-1] == "gpt-7-sol"
     # Another kind of sign-in may offer other models: its list is asked anew.
     assert client.patch(f"/api/accounts/{team['id']}", json={"auth_mode": "api_key", "secret": "sk-o"}).json()["models"] == []
 

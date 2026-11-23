@@ -19,6 +19,7 @@ from plainboard_protocol import ACCOUNT_KEY_PATTERN, DEFAULT_ACCOUNT, BranchRef,
 from pydantic import BaseModel, Field
 
 from . import cleanup
+from . import codex_cli
 from . import config
 from . import connect
 from . import errors
@@ -51,6 +52,7 @@ async def lifespan(_app: FastAPI):
     signins.remove(signins.ROOT)  # private sign-in folders a former process left (killed mid-run): nothing uses them now
     _background.add(asyncio.create_task(usage.keep_measured()))
     _background.add(asyncio.create_task(usage.keep_sampling()))
+    _background.add(asyncio.create_task(codex_cli.keep_current()))  # a newer Codex CLI, for new models
     # An external runner connects out to PlainBoard (connect.py); the built-in one is called by the app.
     tasks = [asyncio.create_task(connect.serve(), name="connect"), asyncio.create_task(_tend_logs(), name="run-logs")] if connect.enabled() else []
     try:

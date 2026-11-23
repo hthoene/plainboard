@@ -1026,11 +1026,14 @@ class RunManager:
             values = await settings_service.get_all(s)
             # An account in use reports its limits with every turn, but not its plan.
             reported, planned = await limits_service.fresh(s), await limits_service.plan_checked(s)
-            # An account whose models are not known yet (account_service.LISTED) is asked even while in use.
+            # One that lists its models (account_service.LISTED) is asked every hour even while in use: new models.
+            listed = await limits_service.plan_checked(s, account_service.MODELS_CHECK_SECONDS)
             accounts = [
                 a
                 for a in await account_service.list_accounts(s)
-                if a.enabled and account_service.has_plan(a) and not (a.key in reported and a.key in planned and (a.provider not in account_service.LISTED or a.models))
+                if a.enabled
+                and account_service.has_plan(a)
+                and not (a.key in reported and a.key in (listed if a.provider in account_service.LISTED else planned) and (a.provider not in account_service.LISTED or a.models))
             ]
             found = await asyncio.gather(
                 *(self.runner.limits(a.provider, settings_service.credentials(values, account=account_service.fields(a))) for a in accounts)

@@ -105,6 +105,7 @@ def _models(names: list[str]) -> list[str]:
 # Providers whose subscriptions each list the models they may use (LimitsEvent.models): kept in Account.models,
 # where an endpoint's account has the models its owner named.
 LISTED = {"codex"}
+MODELS_CHECK_SECONDS = 3600  # how often such a list is asked for again, also while the subscription is in use
 
 
 def record_models(account: Account, models: list[ModelInfo] | None) -> bool:

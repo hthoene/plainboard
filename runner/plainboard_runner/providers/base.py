@@ -13,6 +13,16 @@ class ProviderError(RuntimeError):
     """A failed turn whose text already names the error that caused it."""
 
 
+def merge_efforts(known: list[str], *more: list[str]) -> list[str]:
+    """``known`` with the levels the other lists add, each after the level it follows there (``ultra`` after ``max``)."""
+    out = list(known)
+    for levels in more:
+        for i, level in enumerate(levels):
+            if level and level not in out:
+                out.insert(out.index(levels[i - 1]) + 1 if i and levels[i - 1] in out else len(out), level)
+    return out
+
+
 class Provider(ABC):
     """An LLM backend able to run agentic turns.
 

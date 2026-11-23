@@ -54,17 +54,17 @@ from plainboard_protocol import (
     UsageEvent,
 )
 
-from .. import notices, signins
+from .. import codex_cli, notices, signins
 from ..config import TOOL_RESULT_PREVIEW_CHARS
 from ..mcp_stdio import BRIDGE_FILE_ENV, write_bridge_file
 from ..signins import SIGN_INS
 from ..tool_bridge import ToolBridge
 from ..workspace import tool_env
-from .base import Provider
+from .base import Provider, merge_efforts
 
 log = logging.getLogger(__name__)
 
-CODEX_BIN = os.environ.get("PLAINBOARD_CODEX_BIN", "codex")
+CODEX_BIN = codex_cli.own_bin() or codex_cli.IMAGE_BIN  # the image's; newer ones come by codex_cli
 SUBSCRIPTION_HOME = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
 API_KEY_HOME = Path.home() / ".plainboard" / "codex-api-key"
 ACCOUNTS_HOME = Path.home() / ".plainboard" / "codex-accounts"  # further accounts, one home each
@@ -115,8 +115,8 @@ def model_infos(listed: list[dict[str, Any]]) -> list[ModelInfo]:
     return list(out.values())
 
 
-async def list_models(server: AppServer) -> list[ModelInfo]:
-    """Every page of ``model/list``, hidden models included (model_infos picks)."""
+async def list_models(server: AppServer) -> tuple[list[ModelInfo], list[str]]:
+    """Every page of ``model/list``, hidden models included (model_infos picks), and the effort levels they have."""
     listed: list[dict[str, Any]] = []
     cursor = None
     for _ in range(MODEL_PAGES):
@@ -127,7 +127,10 @@ async def list_models(server: AppServer) -> list[ModelInfo]:
         listed += answer.get("data") or []
         if not (cursor := answer.get("nextCursor")):
             break
-    return model_infos(listed)
+    models = model_infos(listed)
+    ids = {m.id for m in models}
+    levels = [[e.get("reasoningEffort") for e in m.get("supportedReasoningEfforts") or [] if isinstance(e, dict)] for m in listed if isinstance(m, dict) and m.get("id") in ids]
+    return models, merge_efforts([], *levels)
 
 
 def toml_value(value: Any) -> str:
@@ -237,7 +240,10 @@ COMPLETION_CONFIG: dict[str, Any] = {"mcp_servers": {}, "web_search": "disabled"
 class AppServer:
     """One ``codex app-server`` process. Notifications and the server's requests arrive in :meth:`next`."""
 
-    def __init__(self, home: Path, env: dict[str, str] | None = None, config: dict[str, Any] | None = None, cwd: Path | None = None) -> None:
+    def __init__(
+        self, home: Path, env: dict[str, str] | None = None, config: dict[str, Any] | None = None, cwd: Path | None = None, binary: str | None = None
+    ) -> None:
+        self.binary = binary or codex_cli.binary()
         self.home = home
         self.env = env or {}
         self.config = config or {}
@@ -252,7 +258,7 @@ class AppServer:
     async def __aenter__(self) -> AppServer:
         self.home.mkdir(parents=True, exist_ok=True)
         share_sessions(self.home)
-        args = [CODEX_BIN, "app-server"]
+        args = [self.binary, "app-server"]
         for key, value in {**BASE_CONFIG, **self.config}.items():
             args += ["-c", f"{key}={toml_value(value)}"]
         try:
@@ -632,6 +638,7 @@ class CodexProvider(Provider):
         self._models: tuple[float, list[ModelInfo]] | None = None
         self._offered: dict[str, list[ModelInfo]] = {}  # each account's own list from its last read of the limits
         self._seen: dict[str, ModelInfo] = {}  # every model an account's list named, for the catalog's labels
+        self._efforts: list[str] = []  # the levels the lists name, unknown ones (ultra) too
         self._logins: dict[str, DeviceLogin] = {}
         self._own_logins: dict[str, DeviceLogin] = {}  # people's own sign-ins in progress, each in a private home
         self._api_key_lock = asyncio.Lock()
@@ -640,18 +647,19 @@ class CodexProvider(Provider):
         models = list(self._models[1] if self._models else MODELS)
         ids = {m.id for m in models}
         models += [m for m in self._seen.values() if m.id not in ids]  # what accounts' own lists added (offered)
-        return ProviderInfo(name=self.name, label="Codex", models=models, efforts=EFFORTS)
+        return ProviderInfo(name=self.name, label="Codex", models=models, efforts=merge_efforts(EFFORTS, self._efforts))
 
     async def catalog(self) -> ProviderInfo:
         if not self._models or time.monotonic() - self._models[0] > MODELS_TTL_SECONDS:
             try:
                 if signins.taken(self.name, DEFAULT_ACCOUNT):  # never the home's copy of a sign-in the app keeps
                     async with AppServer(CATALOG_HOME) as server:
-                        models = await list_models(server)
+                        models, efforts = await list_models(server)
                 else:
                     with SIGN_INS.in_home(self.name, DEFAULT_ACCOUNT, "This ChatGPT sign-in"):
                         async with AppServer(SUBSCRIPTION_HOME) as server:
-                            models = await list_models(server)
+                            models, efforts = await list_models(server)
+                self._efforts = merge_efforts(self._efforts, efforts)
                 self._models = (time.monotonic(), models or MODELS)
             except Exception as exc:
                 log.warning("Could not list Codex models: %s", exc)
@@ -787,12 +795,13 @@ class CodexProvider(Provider):
                 return []
             answer = await server.request("account/rateLimits/read", None, timeout=30)
             try:  # what this subscription may use, asked with its sign-in in the same server (offered)
-                listed = await list_models(server)
+                listed, efforts = await list_models(server)
             except (CodexError, TimeoutError) as exc:
                 log.info("Could not list the models of Codex account %s: %s", credentials.codex_account, str(exc)[:200])
             else:
                 self._offered[credentials.codex_account] = listed
                 self._seen.update({m.id: m for m in listed})
+                self._efforts = merge_efforts(self._efforts, efforts)
         return limit_windows((answer or {}).get("rateLimits"))
 
     async def offered(self, credentials: Credentials) -> list[ModelInfo] | None:

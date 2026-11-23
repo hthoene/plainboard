@@ -24,7 +24,7 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
 # Codex CLI for the Codex provider. Pinned: PlainBoard talks to its app server protocol.
-ARG CODEX_VERSION=0.171.0
+ARG CODEX_VERSION=0.166.0
 RUN npm install -g --no-audit --no-fund @openai/codex@${CODEX_VERSION} && codex --version
 
 # Chromium for the browser window: pages of the agents' servers shown in PlainBoard as they are at

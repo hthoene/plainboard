@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 import time
 from pathlib import Path
 from datetime import UTC, datetime, timedelta
@@ -67,7 +68,7 @@ from ..config import TOOL_RESULT_PREVIEW_CHARS
 from ..signins import SIGN_INS
 from ..tool_bridge import ToolBridge
 from ..workspace import tool_env
-from .base import Provider, ProviderError
+from .base import Provider, ProviderError, merge_efforts
 
 log = logging.getLogger(__name__)
 
@@ -118,6 +119,8 @@ MODELS = [
     ModelInfo(id="claude-fable-5-1", label="Claude Fable 5.1", tier="xlarge"),
 ]
 EFFORTS = ["low", "medium", "high", "xhigh", "max"]
+TIER_HINTS = {"fable": "xlarge", "opus": "large", "sonnet": "medium", "haiku": "small"}
+CLI_MODELS_TTL_SECONDS = 3600  # how long Claude Code's own list of models (cli_models) is kept
 # What Claude Code says when a turn is turned away because a plan limit is used up, e.g. "You've hit
 # your 5-hour limit · resets 7:10pm (UTC)", or in older versions "Claude AI usage limit reached|<unix time>".
 LIMIT_HIT = re.compile(r"hit your (?P<kind>[\w -]*?)\s*limit|usage limit reached(?:\|(?P<at>\d+))?", re.IGNORECASE)
@@ -130,6 +133,29 @@ PLAN_TIERS = {"default_claude_max_5x": ("Max 5x", 5.0), "default_claude_max_20x"
 PLAN_TYPES = {"pro": ("Pro", 1.0), "max": ("Max", None)}
 PROFILE_URL = "https://api.anthropic.com/api/oauth/profile"
 PLAN_KEEP_SECONDS = 6 * 3600  # a plan rarely changes; asking for it costs a request, no tokens
+
+
+def guess_tier(model_id: str) -> str:
+    return next((tier for hint, tier in TIER_HINTS.items() if hint in model_id), "medium")
+
+
+def cli_models(listed: list[Any] | None) -> tuple[list[ModelInfo], list[str]]:
+    """The models Claude Code offers (``models`` of its initialize answer) beyond MODELS, and their effort levels."""
+    known = {m.id for m in MODELS}
+    out: dict[str, ModelInfo] = {}
+    levels: list[list[str]] = []
+    entries = [m for m in listed or [] if isinstance(m, dict)]
+    for m in sorted(entries, key=lambda m: m.get("value") == "default"):  # "default" is another one's alias: its label last
+        model_id = str(m.get("resolvedModel") or m.get("value") or "")
+        if not model_id.startswith("claude-"):
+            continue
+        levels.append([str(e) for e in m.get("supportedEffortLevels") or []])
+        if model_id in known or model_id in out:
+            continue
+        name = str(m.get("description") or "").split(" · ")[0].strip() or str(m.get("displayName") or "")
+        label = name if name.lower().startswith("claude") else f"Claude {name}" if name else model_id
+        out[model_id] = ModelInfo(id=model_id, label=label, tier=guess_tier(model_id))  # type: ignore[arg-type]
+    return list(out.values()), merge_efforts([], *levels)
 
 
 def plan_of(subscription: str | None, tier: str | None) -> tuple[str | None, float | None]:
@@ -711,9 +737,33 @@ class ClaudeCodeProvider(Provider):
     def __init__(self) -> None:
         self._plans: dict[str, tuple[float, str | None, str | None]] = {}  # sign-in -> (when, subscription, tier)
         self._logins: dict[str, ClaudeLogin] = {}  # people's own sign-ins, by account key
+        self._listed: tuple[float, list[ModelInfo], list[str]] = (0.0, [], [])  # Claude Code's own list (cli_models)
+        self._listing: asyncio.Task[None] | None = None
 
     def info(self) -> ProviderInfo:
-        return ProviderInfo(name=self.name, label="Claude Agent", models=MODELS, efforts=EFFORTS)
+        _when, models, efforts = self._listed
+        return ProviderInfo(name=self.name, label="Claude Agent", models=[*MODELS, *models], efforts=merge_efforts(EFFORTS, efforts))
+
+    async def catalog(self) -> ProviderInfo:
+        """With the models of Claude Code's own list, asked again in the background once it is an hour old."""
+        if time.monotonic() - self._listed[0] > CLI_MODELS_TTL_SECONDS and not (self._listing and not self._listing.done()):
+            self._listing = asyncio.create_task(self._list())
+        return self.info()
+
+    async def _list(self) -> None:
+        try:
+            self._listed = (time.monotonic(), *await self._cli_models())
+        except Exception as exc:
+            log.info("Claude Code's list of models could not be read: %s", str(exc)[:200])
+            self._listed = (time.monotonic() - CLI_MODELS_TTL_SECONDS + 300, self._listed[1], self._listed[2])  # again in 5 minutes
+
+    async def _cli_models(self) -> tuple[list[ModelInfo], list[str]]:
+        """Claude Code's list, from a start without a sign-in in an empty home: no account is touched, no token used."""
+        with tempfile.TemporaryDirectory(prefix="plainboard-claude-models-") as home:
+            env = {"HOME": home, "CLAUDE_CONFIG_DIR": str(Path(home) / ".claude"), "ANTHROPIC_API_KEY": "", "CLAUDE_CODE_OAUTH_TOKEN": "", "ANTHROPIC_AUTH_TOKEN": ""}
+            async with ClaudeSDKClient(ClaudeAgentOptions(tools=[], setting_sources=[], cwd=home, env=env)) as client:
+                info = await client.get_server_info() or {}
+        return cli_models(info.get("models"))
 
     def auth_env(self, creds: Credentials, model: str = "", home: Path | None = None) -> dict[str, str]:
         """What tells Claude Code where the model is and how to sign in. ``model``: what the request

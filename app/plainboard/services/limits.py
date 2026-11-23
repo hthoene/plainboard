@@ -145,11 +145,11 @@ async def record_plan(session: AsyncSession, account_key: str, name: str | None,
     await session.commit()
 
 
-async def plan_checked(session: AsyncSession) -> set[str]:
-    """Accounts (by key) whose plan was asked for a moment ago."""
+async def plan_checked(session: AsyncSession, seconds: float = PLAN_CHECK_SECONDS) -> set[str]:
+    """Accounts (by key) whose plan (and with it their list of models) was asked for within ``seconds``."""
     _row, plans = await _plans(session)
     now = time.time()
-    return {key for key, plan in plans.items() if now - (plan.get("checked_at") or 0) < PLAN_CHECK_SECONDS}
+    return {key for key, plan in plans.items() if now - (plan.get("checked_at") or 0) < seconds}
 
 
 async def plan_sizes(session: AsyncSession) -> dict[str, float]:

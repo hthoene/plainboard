@@ -49,6 +49,11 @@ class Credentials(BaseModel):
     codex_auth_mode: Literal["chatgpt", "api_key"] = "chatgpt"
     # Which of the runner's Codex sign-ins to use: every account has its own Codex home.
     codex_account: str = Field(default=DEFAULT_ACCOUNT, pattern=ACCOUNT_KEY_PATTERN)
+    # "google": Google account OAuth signed in on the runner; "api_key": gemini_api_key.
+    antigravity_auth_mode: Literal["google", "api_key"] = "google"
+    # Which of the runner's Antigravity sign-ins to use: every account has its own isolated GEMINI_HOME.
+    antigravity_account: str = Field(default=DEFAULT_ACCOUNT, pattern=ACCOUNT_KEY_PATTERN)
+    gemini_api_key: str | None = None
     # A provider that is an endpoint (ProviderInfo.endpoint): the account's address, empty for the usual one, and its key.
     endpoint_url: str = ""
     endpoint_key: str | None = None
@@ -168,8 +173,9 @@ class ProviderAccount(BaseModel):
 
     signed_in: bool = False
     detail: str = ""  # e.g. the account's email and plan
-    login_url: str | None = None  # device sign-in: open this ...
-    login_code: str | None = None  # ... and enter this code
+    login_url: str | None = None  # device or browser sign-in: open this ...
+    login_code: str | None = None  # ... and enter this code (device sign-in, e.g. Codex)
+    login_input: bool = False  # ... and paste back the code/URL from the page (e.g. Antigravity)
     login_error: str | None = None
 
 

@@ -9,8 +9,8 @@ import { Button, ErrorText, IconButton, Input, Toggle } from "../../components/u
 import { formatBytes, timeAgo } from "../../lib/format";
 
 const skillsKey = (pid: number) => ["skills", pid] as const;
-/** Claude Code loads skills only with the full toolset (the project's settings). */
-const usesSkills = (agent: Agent) => agent.provider === "claude_code" && agent.toolset === "full";
+/** Claude Code and Antigravity load project skills when running with the full toolset. */
+const usesSkills = (agent: Agent) => (agent.provider === "claude_code" || agent.provider === "antigravity") && agent.toolset === "full";
 
 /** Claude skills of a project: uploaded (a zip of the folder or a SKILL.md) or from git, for all or chosen agents. Saved at once. */
 export function SkillsEditor({ projectId }: { projectId: number }) {

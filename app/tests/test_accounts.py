@@ -352,7 +352,7 @@ def test_a_model_server_of_one_s_own_is_an_account_with_its_address_and_models(c
     that offers the agent's model."""
     pid = project["id"]
     meta = client.get("/api/meta").json()
-    assert [p["name"] for p in meta["providers"]] == ["claude_code", "codex"]
+    assert [p["name"] for p in meta["providers"]] == ["claude_code", "codex", "antigravity"]
     assert [p["name"] for p in meta["endpoints"]] == ["ollama", "gemini"] and meta["endpoints"][0]["endpoint"]["key"] is False
     assert client.post("/api/accounts", json={"provider": "nowhere", "auth_mode": "api_key"}).status_code == 400
     assert client.post("/api/accounts", json={"provider": "ollama", "auth_mode": "chatgpt"}).status_code == 400
@@ -360,7 +360,7 @@ def test_a_model_server_of_one_s_own_is_an_account_with_its_address_and_models(c
     home = client.post("/api/accounts", json={"provider": "ollama", "auth_mode": "api_key"}).json()
     assert (home["label"], home["endpoint_url"], home["models"], home["context_tokens"]) == ("Ollama", "", [], 0)
     # No model named yet: nothing an agent could run on.
-    assert [p["name"] for p in client.get("/api/meta").json()["providers"]] == ["claude_code", "codex"]
+    assert [p["name"] for p in client.get("/api/meta").json()["providers"]] == ["claude_code", "codex", "antigravity"]
     assert client.post(f"/api/accounts/{home['id']}/models").json() == {"models": ["a-model", "b-model"]}
     assert runner(client).models_asked[0] == "ollama"
 
@@ -393,7 +393,8 @@ def test_a_model_server_of_one_s_own_is_an_account_with_its_address_and_models(c
     wait_for(lambda: idle(client, pid))
     messages = client.get(f"/api/agents/{manager['id']}/conversation").json()["messages"]
     listed = next(m["meta"]["result"] for m in messages if m["kind"] == "tool" and m["content"] == "list_models")
-    assert "ollama: coder (medium), small-one (medium), large-one (medium)" in listed and "gemini" not in listed
+    assert "ollama: coder (medium), small-one (medium), large-one (medium)" in listed
+    assert not any(line.startswith("gemini") for line in listed.splitlines())
 
 
 def test_a_project_can_be_limited_to_some_subscriptions(client, project):
@@ -538,3 +539,38 @@ def test_a_turn_without_a_single_step_is_not_a_finished_assignment(client, proje
     assert second["status"] == "failed"
     run = next(r for r in client.get(f"/api/projects/{pid}/runs").json() if r["assignment_id"] == second["id"])
     assert run["status"] == "failed" and "without a single step" in run["error"]
+
+
+def test_antigravity_accounts_signin_credentials_and_cleanup(client, project):
+    from plainboard.orchestration.run_manager import _session_lost
+
+    pid = project["id"]
+    google = client.post("/api/accounts", json={"provider": "antigravity", "label": "Google Work", "auth_mode": "google"}).json()
+    assert google["provider"] == "antigravity" and google["auth_mode"] == "google"
+    assert client.post("/api/accounts", json={"provider": "antigravity", "auth_mode": "chatgpt"}).status_code == 400
+
+    # Headless Google OAuth flow: start returns login_url + login_input, submitting code signs in and invalidates cached models.
+    started = client.post(f"/api/accounts/{google['id']}/signin").json()
+    assert started["login_input"] is True and started["login_url"].startswith("https://accounts.google.com/")
+    finished = client.post(f"/api/accounts/{google['id']}/signin", json={"code": "4/0A-code"}).json()
+    assert finished["signed_in"] is True and finished["detail"] == "user@example.com"
+    assert getattr(runner(client), "providers_forgotten", 0) >= 1
+
+    # Agent on Antigravity receives isolated account key and equivalent models.
+    dev = make_dev(client, pid, provider="antigravity")
+    assert (dev["provider"], dev["model"], dev["summary_model"]) == ("antigravity", "gemini-4-argon", "gemini-3.8-flash")
+    creds = turn(client, pid, dev["id"])
+    assert creds.antigravity_auth_mode == "google" and creds.antigravity_account != ""
+
+    # API key mode sends gemini_api_key without runner sign-in.
+    key_acc = client.post("/api/accounts", json={"provider": "antigravity", "label": "AI Studio", "auth_mode": "api_key", "secret": "AIza-secret"}).json()
+    client.patch(f"/api/agents/{dev['id']}", json={"account_id": key_acc["id"]})
+    api_creds = turn(client, pid, dev["id"])
+    assert (api_creds.antigravity_auth_mode, api_creds.gemini_api_key) == ("api_key", "AIza-secret")
+
+    # Deleting a Google account logs it out on the runner.
+    assert client.delete(f"/api/accounts/{google['id']}").status_code == 204
+    assert any(p == "antigravity" and act == "logout" for p, _k, act, _c in runner(client).account_actions)
+
+    # Broken thinking signature error clears provider_session_id via _session_lost.
+    assert _session_lost("Antigravity session can no longer be resumed (invalid thinking signature).")

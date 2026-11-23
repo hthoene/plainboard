@@ -162,12 +162,21 @@ async def provider_account(name: str, key: str = AccountKey) -> ProviderAccount:
     return account
 
 
+class LoginInput(BaseModel):
+    code: str = ""
+
+
 @app.post("/providers/{name}/login", response_model=ProviderAccount)
-async def provider_login(name: str, key: str = AccountKey) -> ProviderAccount:
+async def provider_login(name: str, key: str = AccountKey, body: LoginInput | None = None) -> ProviderAccount:
+    provider = _signin_provider(name)
     try:
-        return await _signin_provider(name).login(key)
+        if body and body.code.strip():
+            return await provider.submit_login(key, body.code.strip())
+        return await provider.login(key)
     except NotImplementedError as exc:
         raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)[:1000]) from exc
     except Exception as exc:
         raise HTTPException(502, str(exc)[:1000]) from exc
 

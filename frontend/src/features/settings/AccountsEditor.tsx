@@ -9,22 +9,29 @@ import type { Account, CheckResult } from "../../api/types";
 import { Button, ErrorText, IconButton, Input, Toggle } from "../../components/ui";
 import { smallModel } from "../../lib/models";
 import { CheckBadge } from "./SettingsDialog";
+import { AntigravitySignIn } from "./AntigravitySignIn";
 import { CodexSignIn } from "./CodexSignIn";
 
 const MODES: Record<string, string[]> = {
   claude_code: ["api_key", "oauth_token", "runner_login"],
   codex: ["chatgpt", "api_key"],
+  antigravity: ["google", "api_key"],
 };
 // A person's own subscription takes a token or a key: a sign-in on the runner is the installation's (services/accounts.OWN_MODES).
 const OWN_MODES = ["oauth_token", "api_key"];
 const modesOf = (provider: string, own: boolean) => MODES[provider].filter((mode) => !own || OWN_MODES.includes(mode));
 const SHARES = ["private", "people", "everyone"] as const;
 // i18n group of the sign-in kinds per provider
-const MODE_TEXTS: Record<string, string> = { claude_code: "settings.auth", codex: "settings.codexAuth" };
+const MODE_TEXTS: Record<string, string> = {
+  claude_code: "settings.auth",
+  codex: "settings.codexAuth",
+  antigravity: "settings.antigravityAuth",
+};
 const SECRET_LABELS: Record<string, string> = {
   "claude_code:oauth_token": "settings.oauthToken",
   "claude_code:api_key": "settings.apiKey",
   "codex:api_key": "settings.openaiApiKey",
+  "antigravity:api_key": "settings.geminiApiKey",
 };
 
 /** The accounts of one provider: the installation's, or with ``own`` people's own ones (a non-admin:
@@ -160,6 +167,7 @@ function AccountCard({ account, onChange }: { account: Account; onChange: (actio
         </p>
       )}
       {account.provider === "codex" && account.auth_mode === "chatgpt" && <CodexSignIn accountId={account.id} />}
+      {account.provider === "antigravity" && account.auth_mode === "google" && <AntigravitySignIn accountId={account.id} />}
       {account.auth_mode !== "api_key" && (
         <label className="block space-y-1">
           <span className="block font-medium text-fg-2">{t("accounts.planSize")}</span>
@@ -180,7 +188,15 @@ function AccountCard({ account, onChange }: { account: Account; onChange: (actio
         </label>
       )}
       {account.auth_mode !== "api_key" && (
-        <p className="text-fg-2">{t(account.provider === "codex" ? "settings.codexOwnLoginNotice" : "settings.ownLoginNotice")}</p>
+        <p className="text-fg-2">
+          {t(
+            account.provider === "codex"
+              ? "settings.codexOwnLoginNotice"
+              : account.provider === "antigravity"
+                ? "settings.antigravityOwnLoginNotice"
+                : "settings.ownLoginNotice",
+          )}
+        </p>
       )}
       <div className="flex items-center gap-3">
         <Button size="sm" onClick={test}>

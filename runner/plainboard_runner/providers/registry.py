@@ -23,6 +23,7 @@ def list_providers() -> list[Provider]:
 
 
 def _register_builtin() -> None:
+    from .antigravity import AntigravityProvider
     from .claude_code import ClaudeCodeProvider
     from .codex import CodexProvider
     from .endpoints import providers as endpoint_providers
@@ -30,6 +31,7 @@ def _register_builtin() -> None:
 
     register_provider(ClaudeCodeProvider())
     register_provider(CodexProvider())
+    register_provider(AntigravityProvider())
     for provider in endpoint_providers():
         register_provider(provider)
     register_provider(MockProvider())

@@ -125,6 +125,12 @@ export function SettingsDialog({ open, onClose, section }: { open: boolean; onCl
           <AccountsEditor provider="codex" own />
         </div>
       )}
+      {providers.some((p) => p.name === "antigravity") && (
+        <div className="space-y-2">
+          <h3 className="font-semibold">{t("settings.antigravity")}</h3>
+          <AccountsEditor provider="antigravity" own />
+        </div>
+      )}
     </>
   );
   const own: SettingsSection[] = me.is_admin
@@ -163,6 +169,13 @@ export function SettingsDialog({ open, onClose, section }: { open: boolean; onCl
                   <h3 className="font-semibold">{t("settings.codex")}</h3>
                   <p className="text-fg-3">{t("settings.codexHint")}</p>
                   <AccountsEditor provider="codex" />
+                </div>
+              )}
+              {providers.some((p) => p.name === "antigravity") && (
+                <div className="space-y-2">
+                  <h3 className="font-semibold">{t("settings.antigravity")}</h3>
+                  <p className="text-fg-3">{t("settings.antigravityHint")}</p>
+                  <AccountsEditor provider="antigravity" />
                 </div>
               )}
               {!!meta.data?.endpoints?.length && (

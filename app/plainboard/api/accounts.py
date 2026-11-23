@@ -48,7 +48,7 @@ async def update(account_id: int, body: AccountUpdate, session: Session, who: Wh
 @router.delete("/{account_id}", status_code=204)
 async def delete(account_id: int, session: Session, runner: Runner, who: Who) -> None:
     account = await account_service.managed(session, account_id, who.user)
-    if account.provider == "codex" and account.auth_mode == "chatgpt":
+    if (account.provider == "codex" and account.auth_mode == "chatgpt") or (account.provider == "antigravity" and account.auth_mode == "google"):
         try:  # don't leave the subscription signed in on the runner
             await runner.provider_account(account.provider, account.key, "logout")
         except RunnerError:
@@ -89,12 +89,19 @@ async def offered_models(account_id: int, session: Session, runner: Runner, who:
         raise ServiceError(str(exc), 502) from exc
 
 
-async def _signin(session: Session, runner: Runner, account_id: int, action: str | None = None) -> ProviderAccount:
+class SignInIn(BaseModel):
+    code: str = ""
+
+
+async def _signin(session: Session, runner: Runner, account_id: int, action: str | None = None, code: str = "") -> ProviderAccount:
     account = await account_service.get(session, account_id)
     try:
-        return await runner.provider_account(account.provider, account.key, action)
+        result = await runner.provider_account(account.provider, account.key, action, code=code)
     except RunnerError as exc:
         raise ServiceError(str(exc), 502) from exc
+    if action in ("login", "logout") and (code or action == "logout"):
+        runner.forget_providers()
+    return result
 
 
 @router.get("/{account_id}/signin", response_model=ProviderAccount)
@@ -103,9 +110,9 @@ async def signin_state(account_id: int, session: Session, runner: Runner) -> Pro
 
 
 @router.post("/{account_id}/signin", response_model=ProviderAccount)
-async def signin(account_id: int, session: Session, runner: Runner) -> ProviderAccount:
-    """Starts a device sign-in: the answer has the URL to open and the code to enter."""
-    return await _signin(session, runner, account_id, "login")
+async def signin(account_id: int, session: Session, runner: Runner, body: SignInIn | None = None) -> ProviderAccount:
+    """Starts a runner sign-in (returns URL and optional device code), or submits the pasted code/URL."""
+    return await _signin(session, runner, account_id, "login", code=body.code if body else "")
 
 
 @router.delete("/{account_id}/signin", response_model=ProviderAccount)

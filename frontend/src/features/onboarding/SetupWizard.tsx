@@ -17,11 +17,11 @@ import { Advice, Wizard, type WizardStep } from "./Wizard";
 
 type Values = Record<string, any>;
 
-const SUBSCRIPTIONS = ["claude_code", "codex"];
+const SUBSCRIPTIONS = ["claude_code", "codex", "antigravity"];
 /** An account agents can work with: it has its secret, or is signed in on the runner itself. An
     endpoint may need no key (a model server of one's own); whether it answers, the check says. */
 export const usable = (a: Account) =>
-  a.enabled && (a.secret_set || a.secret_from_env || a.auth_mode === "runner_login" || a.auth_mode === "chatgpt" || !SUBSCRIPTIONS.includes(a.provider));
+  a.enabled && (a.secret_set || a.secret_from_env || a.auth_mode === "runner_login" || a.auth_mode === "chatgpt" || a.auth_mode === "google" || !SUBSCRIPTIONS.includes(a.provider));
 
 const byTier = (provider: ProviderInfo | undefined, tier: string) => provider?.models.find((m) => m.tier === tier)?.id;
 /** The models PlainBoard would choose: the manager plans and decides, members do the work, summaries are routine. */
@@ -105,6 +105,12 @@ export function SetupWizard() {
             <div className="space-y-2">
               <h2 className="font-semibold">{t("settings.codex")}</h2>
               <AccountsEditor provider="codex" />
+            </div>
+          )}
+          {providers.some((p) => p.name === "antigravity") && (
+            <div className="space-y-2">
+              <h2 className="font-semibold">{t("settings.antigravity")}</h2>
+              <AccountsEditor provider="antigravity" />
             </div>
           )}
           {!!meta.data?.endpoints?.length && (

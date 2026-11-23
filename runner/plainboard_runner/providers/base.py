@@ -63,6 +63,9 @@ class Provider(ABC):
     async def login(self, key: str) -> ProviderAccount:
         raise NotImplementedError(f"{self.name} has no sign-in")
 
+    async def submit_login(self, key: str, code: str) -> ProviderAccount:
+        raise NotImplementedError(f"{self.name} has no code sign-in")
+
     async def logout(self, key: str) -> ProviderAccount:
         raise NotImplementedError(f"{self.name} has no sign-in")
 

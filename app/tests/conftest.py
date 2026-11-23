@@ -227,8 +227,13 @@ class FakeRunner:
     async def limits(self, provider, credentials) -> LimitsEvent:
         self.limit_calls.append((provider, credentials))
         plan, size = self.limit_plans.get(credentials.claude_oauth_token or "", (None, None))
-        windows = [w for w in self.limit_windows if w.name.startswith("codex_") == (provider == "codex")]
-        return LimitsEvent(windows=windows, complete=provider == "codex", plan=plan, plan_size=size)
+        if provider == "codex":
+            windows = [w for w in self.limit_windows if w.name.startswith("codex_")]
+        elif provider == "antigravity":
+            windows = [w for w in self.limit_windows if w.name.startswith("antigravity_")]
+        else:
+            windows = [w for w in self.limit_windows if not w.name.startswith(("codex_", "antigravity_"))]
+        return LimitsEvent(windows=windows, complete=provider in ("codex", "antigravity"), plan=plan, plan_size=size)
 
     async def notify_run(self, run_id: int, text: str, urgent: bool = False) -> bool:
         self.notices.append((run_id, text))
@@ -344,10 +349,42 @@ class FakeRunner:
                 label="Codex",
                 models=[ModelInfo(id="gpt-6.1-sol", label="Sol", tier="large"), ModelInfo(id="gpt-6.1-terra", label="Terra", tier="medium"), ModelInfo(id="gpt-6-luna", label="Luna", tier="small")],
             ),
+            ProviderInfo(
+                name="antigravity",
+                label="Antigravity",
+                models=[
+                    ModelInfo(id="gemini-4-neon", label="Gemini 4 Neon", tier="xlarge"),
+                    ModelInfo(id="gemini-4-carbon", label="Gemini 4 Carbon", tier="large"),
+                    ModelInfo(id="gemini-4-argon", label="Gemini 4 Argon", tier="medium"),
+                    ModelInfo(id="gemini-3.8-flash", label="Gemini 3.8 Flash", tier="small"),
+                ],
+                efforts=["minimal", "low", "medium", "high", "xhigh", "max"],
+            ),
             # Providers that are an address. Agents can be given them once an account names a model.
             ProviderInfo(name="ollama", label="Ollama", models=[], endpoint=EndpointInfo(url="http://host.docker.internal:11434", key=False, hint="A model server of your own.")),
             ProviderInfo(name="gemini", label="Gemini (Google)", models=[], endpoint=EndpointInfo(url="https://generativelanguage.googleapis.com/v1beta/openai")),
         ]
+
+    def forget_providers(self) -> None:
+        self.providers_forgotten = getattr(self, "providers_forgotten", 0) + 1
+
+    async def provider_account(self, provider: str, key: str, action: str | None = None, *, code: str = ""):
+        from plainboard_protocol import ProviderAccount
+
+        self.account_actions = getattr(self, "account_actions", []) + [(provider, key, action, code)]
+        signed = getattr(self, "signed_in_accounts", set())
+        self.signed_in_accounts = signed
+        if action == "logout":
+            signed.discard((provider, key))
+            return ProviderAccount()
+        if action == "login":
+            if code:
+                signed.add((provider, key))
+                return ProviderAccount(signed_in=True, detail="user@example.com")
+            if provider == "antigravity":
+                return ProviderAccount(signed_in=False, login_url="https://accounts.google.com/o/oauth2/auth?state=test", login_input=True)
+            return ProviderAccount(signed_in=False, login_url="https://auth.openai.com/device", login_code="ABCD-1234")
+        return ProviderAccount(signed_in=(provider, key) in signed, detail="user@example.com" if (provider, key) in signed else "")
 
     async def provider_models(self, provider, credentials):
         self.models_asked = (provider, credentials)

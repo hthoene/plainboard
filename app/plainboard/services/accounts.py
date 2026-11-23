@@ -30,14 +30,23 @@ from . import permissions
 from . import users as user_service
 from .errors import NotFound, ServiceError
 
-AUTH_MODES = {"claude_code": ("oauth_token", "api_key", "runner_login"), "codex": ("chatgpt", "api_key")}
+AUTH_MODES = {
+    "claude_code": ("oauth_token", "api_key", "runner_login"),
+    "codex": ("chatgpt", "api_key"),
+    "antigravity": ("google", "api_key"),
+}
 # Every other provider is an endpoint (ProviderInfo.endpoint): which ones exist is the runner's list, not the app's.
 ENDPOINT_MODES = ("api_key",)
 # What a person who is no admin may add: a token or key that travels with the run. A sign-in on the runner
-# (runner_login, Codex's ChatGPT sign-in) lives in the runner's home, which every agent on it can read: not one's own.
+# (runner_login, Codex's ChatGPT sign-in, Antigravity's Google sign-in) lives in the runner's home, which every agent on it can read: not one's own.
 OWN_MODES = ("oauth_token", "api_key")
-LABELS = {"claude_code": "Claude", "codex": "Codex"}
-ENV_SECRETS = {("claude_code", "oauth_token"): "CLAUDE_CODE_OAUTH_TOKEN", ("claude_code", "api_key"): "ANTHROPIC_API_KEY", ("codex", "api_key"): "OPENAI_API_KEY"}
+LABELS = {"claude_code": "Claude", "codex": "Codex", "antigravity": "Antigravity"}
+ENV_SECRETS = {
+    ("claude_code", "oauth_token"): "CLAUDE_CODE_OAUTH_TOKEN",
+    ("claude_code", "api_key"): "ANTHROPIC_API_KEY",
+    ("codex", "api_key"): "OPENAI_API_KEY",
+    ("antigravity", "api_key"): "GEMINI_API_KEY",
+}
 SWITCH_AT = 0.95  # an account this full hands new turns to one with more room; its rest is used last
 # The prompt cache lives an hour (Claude Code's ENABLE_PROMPT_CACHING_1H): a conversation that had no
 # turn for longer loses nothing by moving to the account with the most room.
@@ -401,6 +410,8 @@ def fields(account: Account | None) -> dict[str, Any]:
         return {"claude_auth_mode": account.auth_mode, "claude_oauth_token" if account.auth_mode == "oauth_token" else "anthropic_api_key": value}
     if account.provider == "codex":
         return {"codex_auth_mode": account.auth_mode, "codex_account": account.key, "openai_api_key": value}
+    if account.provider == "antigravity":
+        return {"antigravity_auth_mode": account.auth_mode, "antigravity_account": account.key, "gemini_api_key": value}
     return {"endpoint_url": account.endpoint_url, "endpoint_key": value, "endpoint_context": account.context_tokens}
 
 

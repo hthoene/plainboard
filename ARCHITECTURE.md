@@ -342,6 +342,18 @@ for a running turn go in with `turn/steer`, and the thread id is the session id.
 sign-in lives in `~/.codex` (agent-home volume), further accounts in `~/.plainboard/codex-accounts/<key>`;
 an API key is signed in to a separate Codex home.
 
+**Antigravity.** `providers/antigravity.py` drives Google's Antigravity CLI (`agy acp`: ACP JSON-RPC over stdio;
+pinned with sha512 and installed read-only in the runner's Dockerfile, auto-updater disabled via
+`AGY_CLI_DISABLE_AUTO_UPDATE=1`, minimum version 1.5.0), one process per run with an isolated per-run `TMPDIR`.
+Board tools reach it via `mcp_stdio`, project skills go to `<workspace>/.gemini/skills` (`toolset="full"`),
+and mid-turn messages steer via `session/prompt` (urgent notices interrupt via `session/cancel`). Each account
+has its own isolated `GEMINI_HOME` under `~/.plainboard/antigravity-accounts/<key>` with `SSH_CONNECTION`
+forcing file-backed OAuth tokens so Google accounts never collide in a shared keyring; sign-in uses
+`agy acp --login` (browser link + pasted code/URL). After every turn the provider inspects the session's
+SQLite trajectory (`conversations/<session_id>.db`) read-only to surface upstream API errors (502s,
+429/QUOTA_EXHAUSTED with reset times, mid-turn 404s, broken thinking signatures) that Antigravity otherwise
+reports as `end_turn`, and reads quota limits via `v1internal:retrieveUserQuotaSummary` (`antigravity/hub/2.24.0`).
+
 The UI picks up models from `/api/meta`. If the provider has no server-side sessions, return no
 `session_id`: the context manager then rebuilds every turn from summary + recent messages.
 

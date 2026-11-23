@@ -209,11 +209,15 @@ class RunnerClient:
         self._providers = (time.monotonic(), providers)
         return providers
 
-    async def provider_account(self, provider: str, key: str, action: str | None = None) -> ProviderAccount:
+    def forget_providers(self) -> None:
+        self._providers = None
+
+    async def provider_account(self, provider: str, key: str, action: str | None = None, *, code: str = "") -> ProviderAccount:
         """The subscription of account ``key`` signed in on the runner; ``action`` "login" or "logout" changes it first."""
         try:
             if action:
-                resp = await self._client.post(f"/providers/{provider}/{action}", params={"key": key}, timeout=60)
+                payload = {"code": code} if action == "login" and code else None
+                resp = await self._client.post(f"/providers/{provider}/{action}", params={"key": key}, json=payload, timeout=120)
             else:
                 resp = await self._client.get(f"/providers/{provider}/account", params={"key": key}, timeout=60)
         except httpx.HTTPError as exc:

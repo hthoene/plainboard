@@ -465,5 +465,5 @@ class RateLimit:
 
 # Embedding a query costs the server real work: per doc site at most this many vector searches a minute, for all its
 # visitors and its assistant together (one process: the app runs a single uvicorn worker).
-VECTOR_SEARCHES_PER_MINUTE = 10
+VECTOR_SEARCHES_PER_MINUTE = 15
 VECTOR_SEARCHES = RateLimit(VECTOR_SEARCHES_PER_MINUTE)

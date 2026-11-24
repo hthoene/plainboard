@@ -24,6 +24,10 @@ COPY --from=frontend /frontend/dist /app/static
 # Empty when the build context has no git data: then there is no notice. -I: the script's own folder is not
 # on the import path, so a module next to it (secrets.py, settings.py) can never stand in for Python's own.
 RUN --mount=type=bind,target=/ctx python -I /src/app/plainboard/services/version.py /ctx/.git > /app/commit
+# The release ("X.Y.Z") when the image is built for a tag vX.Y.Z (.github/workflows/publish.yml, RELEASING.md);
+# empty for a build of a commit (:edge, a local build): then the app calls itself edge-<commit>.
+ARG PLAINBOARD_VERSION=""
+RUN echo "$PLAINBOARD_VERSION" > /app/version
 RUN useradd --create-home --uid 1000 plainboard && mkdir -p /data /uploads && chown plainboard:plainboard /data /uploads
 USER plainboard
 EXPOSE 8080

@@ -475,8 +475,8 @@ export interface Meta {
   pinned_note_budget_chars: number;
   /** Semantic search can exist here: PostgreSQL with pgvector. */
   semantic_search: boolean;
-  /** The running commit and how many newer ones exist; null: the build does not know, or the check is off. */
-  version: { commit: string; behind: number | null; url: string } | null;
+  /** The running version ("X.Y.Z" or "edge-<commit>" in `name`) and how many newer ones exist (commits; for a release: releases, the newest in `latest`); null: the build does not know, or the check is off. */
+  version: { commit: string; name: string; release: boolean; behind: number | null; latest: string; url: string } | null;
   database: "sqlite" | "postgresql";
 }
 

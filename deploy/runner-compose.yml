@@ -2,6 +2,7 @@
 # Settings > Runners in PlainBoard shows this file with your URL and token filled in.
 # Save it as docker-compose.yml in an empty folder, then: docker compose up -d
 # It updates itself to PlainBoard's version. Should PlainBoard ask for it: docker compose pull && docker compose up -d
+# :latest for a PlainBoard on releases, :edge for one on :edge (PlainBoard fills in the right one).
 services:
   runner:
     image: thoenehannes/plainboard-runner:latest

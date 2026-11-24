@@ -831,6 +831,22 @@ async def test_how_far_the_running_plainboard_is_behind_its_upstream():
         await github.upstream(Credentials(), "acme/limited", "main", "abc1234", transport=transport)
 
 
+async def test_how_many_newer_releases_there_are():
+    from plainboard_runner import github
+
+    refs = ["refs/tags/v1.2.0", "refs/tags/v1.10.0", "refs/tags/v1.3.1", "refs/tags/v1.3.1-rc1", "refs/tags/v0.9.0", "refs/tags/vnext"]
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/repos/acme/app/git/matching-refs/tags/v"
+        return httpx.Response(200, json=[{"ref": r} for r in refs])
+
+    transport = httpx.MockTransport(answer)
+    state = await github.upstream(Credentials(), "acme/app", "main", "abc1234", version="1.2.0", transport=transport)
+    assert (state.behind, state.latest, state.url) == (2, "1.10.0", "https://github.com/acme/app/compare/v1.2.0...v1.10.0")
+    state = await github.upstream(Credentials(), "acme/app", "main", "abc1234", version="1.10.0", transport=transport)
+    assert (state.behind, state.latest, state.url) == (0, "", "")
+
+
 def test_the_checks_of_a_commit_on_a_branch():
     from plainboard_runner.github import parse_check_runs
 

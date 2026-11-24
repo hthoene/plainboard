@@ -23,7 +23,7 @@ from . import cleanup as cleanup_service
 from . import version as version_service
 from .errors import NotFound, ServiceError
 
-IMAGE = "thoenehannes/plainboard-runner:latest"
+IMAGE = "thoenehannes/plainboard-runner"
 TOKEN_PREFIX = "pbr_"
 BUILTIN = "Built-in runner"
 UNPUSHED_SECONDS = 90  # the old runner's look at the workspaces' clones
@@ -40,13 +40,19 @@ def new_token() -> str:
     return TOKEN_PREFIX + secrets.token_urlsafe(32)
 
 
+def image() -> str:
+    """The runner image of PlainBoard's own channel: :latest for a release, :edge for a build of a commit,
+    so that ``docker compose pull`` brings the runner what PlainBoard's version needs."""
+    return f"{IMAGE}:{'latest' if version_service.running_version() else 'edge'}"
+
+
 def command(url: str, token: str) -> str:
     return (
         "docker run -d --name plainboard-runner --restart unless-stopped \\\n"
         f"  -e PLAINBOARD_URL={url} \\\n"
         f"  -e PLAINBOARD_RUNNER_TOKEN={token} \\\n"
         "  -v plainboard-workspaces:/workspaces -v plainboard-home:/home/agent -v plainboard-uploads:/uploads \\\n"
-        f"  {IMAGE}"
+        f"  {image()}"
     )
 
 
@@ -54,7 +60,7 @@ def compose(url: str, token: str) -> str:
     return (
         "services:\n"
         "  runner:\n"
-        f"    image: {IMAGE}\n"
+        f"    image: {image()}\n"
         "    container_name: plainboard-runner\n"
         "    restart: unless-stopped\n"
         "    environment:\n"

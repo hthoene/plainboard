@@ -252,7 +252,10 @@ the folder must be writable by UID 1000.
 
 ## Updating
 
-PlainBoard shows a notice in the sidebar when a newer version exists.
+PlainBoard shows a notice in the sidebar when a newer version exists. `:latest` is the newest release
+(Settings shows its number, e.g. "Running 0.1.0"); `:edge` is every commit of main as it lands
+(Settings shows "edge-<commit>"). Set `PLAINBOARD_TAG=edge` next to `docker-compose.yml` (in `.env`)
+for edge, or `PLAINBOARD_TAG=0.1.0` to stay on one release. How releases are made: `RELEASING.md`.
 
 ```bash
 docker compose pull

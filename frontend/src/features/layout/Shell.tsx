@@ -39,6 +39,7 @@ import {
 import type { Agent, Project } from "../../api/types";
 import { Button, EmptyState, IconButton, Spinner } from "../../components/ui";
 import { useIsDesktop, useMediaQuery, useStored } from "../../lib/hooks";
+import { updateHow } from "../../lib/version";
 import { Logo } from "../auth/Login";
 import { Board } from "../board/Board";
 import type { BrowserRequest } from "../browser/BrowserView";
@@ -290,7 +291,7 @@ function UpdateNotice({ wide }: { wide: boolean }) {
   const { t } = useTranslation();
   const version = useMeta().data?.version;
   if (!version?.behind) return null;
-  const how = t("update.how", { count: version.behind });
+  const how = updateHow(t, version);
   const cls = clsx(
     "flex shrink-0 items-center gap-2.5 rounded-sm text-fg-2 hover:bg-sunk hover:text-fg",
     wide ? "mx-2 h-8 px-2" : "mx-auto size-8 justify-center",

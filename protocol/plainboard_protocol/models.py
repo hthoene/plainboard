@@ -654,11 +654,14 @@ class UpstreamRef(BaseModel):
     repository: str = Field(pattern=r"^[\w.-]+/[\w.-]+$")  # owner/name on GitHub
     branch: str = Field(pattern=r"^[\w./-]+$")
     commit: str = Field(pattern=r"^[0-9a-f]{7,64}$")
+    # The running release ("X.Y.Z"); "" for a build of a commit (:edge, a local build): then it is compared with the branch.
+    version: str = Field(default="", pattern=r"^(\d+\.\d+\.\d+)?$")
 
 
 class UpstreamState(BaseModel):
-    behind: int  # commits the branch has that the running commit has not
+    behind: int  # commits the branch has that the running commit has not; for a release: newer releases
     url: str = ""  # where to read them
+    latest: str = ""  # for a release: the newest one ("X.Y.Z"), if it is newer
 
 
 # ---------------------------------------------------------------------------

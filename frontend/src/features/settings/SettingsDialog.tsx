@@ -11,6 +11,7 @@ import { SaveRow, SavedAtOnce, SettingsLayout, type SettingsSection } from "../.
 import { Button, ErrorText, Field, FieldRow, IconButton, Input, PageHead, Select, Textarea, Toggle } from "../../components/ui";
 import { useStored } from "../../lib/hooks";
 import { equivalentModel } from "../../lib/models";
+import { updateHow } from "../../lib/version";
 import { DatabaseEditor } from "./DatabaseEditor";
 import { DefaultModels } from "./DefaultModels";
 import { GithubTokenField } from "./GithubTokenField";
@@ -331,8 +332,8 @@ export function SettingsDialog({ open, onClose, section }: { open: boolean; onCl
                 <Toggle checked={values.update_check ?? true} onChange={(v) => set({ update_check: v })} label={t("settings.updateCheck")} />
                 <p className="text-fg-3">
                   {t("settings.updateCheckHint")}
-                  {meta.data?.version && ` ${t("settings.versionRunning", { commit: meta.data.version.commit })}`}
-                  {meta.data?.version?.behind ? ` ${t("update.how", { count: meta.data.version.behind })}` : meta.data?.version?.behind === 0 ? ` ${t("settings.versionCurrent")}` : ""}
+                  {meta.data?.version && ` ${t("settings.versionRunning", { commit: meta.data.version.name })}`}
+                  {meta.data?.version?.behind ? ` ${updateHow(t, meta.data.version)}` : meta.data?.version?.behind === 0 ? ` ${t("settings.versionCurrent")}` : ""}
                 </p>
               </div>
               <SaveRow dirty={dirty(...GENERAL)} onSave={() => save(GENERAL)} />

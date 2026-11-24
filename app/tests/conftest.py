@@ -347,7 +347,7 @@ class FakeRunner:
     async def close_pull_request(self, credentials, repo: str, number: int) -> None:
         self.closed.append(number)
 
-    async def upstream(self, credentials, repository: str, branch: str, commit: str):
+    async def upstream(self, credentials, repository: str, branch: str, commit: str, version: str = ""):
         self.upstream_calls.append((repository, branch, commit))
         if self.upstream_error:
             raise RunnerError(self.upstream_error)

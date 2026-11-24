@@ -93,7 +93,8 @@
   "update": {
     "available": "Update available",
     "how_one": "A newer PlainBoard is available ({{count}} commit ahead). On the server: docker compose pull, then docker compose up -d (built from a clone: git pull, then docker compose up -d --build).",
-    "how_other": "A newer PlainBoard is available ({{count}} commits ahead). On the server: docker compose pull, then docker compose up -d (built from a clone: git pull, then docker compose up -d --build)."
+    "how_other": "A newer PlainBoard is available ({{count}} commits ahead). On the server: docker compose pull, then docker compose up -d (built from a clone: git pull, then docker compose up -d --build).",
+    "release": "PlainBoard {{version}} is available. On the server: docker compose pull, then docker compose up -d."
   },
   "taskStatus": {
     "backlog": "Backlog",
@@ -796,7 +797,7 @@
     "memberChat": "Allow direct messages to members",
     "memberChatHint": "Off: you talk to the manager, and members' conversations can only be read. Agents still talk to each other, and schedules and assignments are not affected.",
     "updateCheck": "Tell me when a newer PlainBoard is available",
-    "updateCheckHint": "Every few hours PlainBoard asks GitHub whether its repository has newer commits than the one that is running. Only that commit id is sent.",
+    "updateCheckHint": "Every few hours PlainBoard asks GitHub whether a newer release exists (on :edge: newer commits than the one that is running). Only the commit id and version are sent.",
     "versionRunning": "Running {{commit}}.",
     "versionCurrent": "That is the newest.",
     "databaseSqlite": "Database: SQLite, one file in the data volume.",

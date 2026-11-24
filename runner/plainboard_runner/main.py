@@ -737,7 +737,7 @@ async def promotion_push(spec: PromotePushSpec) -> PromoteResult:
 @app.post("/github/upstream")
 async def github_upstream(ref: UpstreamRef) -> UpstreamState | None:
     try:
-        return await github.upstream(ref.credentials, ref.repository, ref.branch, ref.commit)
+        return await github.upstream(ref.credentials, ref.repository, ref.branch, ref.commit, version=ref.version)
     except WorkspaceError as exc:
         raise HTTPException(502, str(exc)[:600]) from exc
 

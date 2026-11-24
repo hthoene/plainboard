@@ -1,7 +1,8 @@
 """Asks now and then whether a newer PlainBoard exists than the one that is running.
 
 No model and nothing about the user's projects: the runner asks GitHub how many commits the upstream
-branch is ahead of the commit this image was built from (services/version.py). The UI shows the
+branch is ahead of the commit this image was built from, or for a release, how many newer releases
+(tags vX.Y.Z) exist (services/version.py). The UI shows the
 answer as a quiet notice. Whatever goes wrong (offline, a private fork, a build without git data)
 means no notice, never an error for the user.
 """
@@ -59,8 +60,8 @@ class UpdateWatcher:
             return
         config = get_config()
         try:
-            state = await self._runner.upstream(settings_service.credentials(values), config.update_repository, config.update_branch, commit)
+            state = await self._runner.upstream(settings_service.credentials(values), config.update_repository, config.update_branch, commit, version_service.running_version())
         except RunnerError as exc:  # offline, rate limited: what was known stays, the next round asks again
             log.info("Could not ask for newer versions: %s", str(exc)[:200])
             return
-        version_service.record(state.behind if state else None, state.url if state else "", utcnow())
+        version_service.record(state.behind if state else None, state.url if state else "", utcnow(), state.latest if state else "")

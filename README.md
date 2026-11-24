@@ -270,13 +270,15 @@ Save this as `docker-compose.yml`, then run `docker compose up -d`:
 #
 # and open http://localhost:8080. Everything else is set in the browser.
 # To update: docker compose pull, then docker compose up -d.
+# :latest is the newest release. Every commit of main instead: PLAINBOARD_TAG=edge (in .env or the
+# environment); a fixed release: PLAINBOARD_TAG=1.2.3 (RELEASING.md).
 
 name: plainboard
 
 services:
   # The web UI and everything PlainBoard does by itself.
   app:
-    image: thoenehannes/plainboard:latest
+    image: thoenehannes/plainboard:${PLAINBOARD_TAG:-latest}
     restart: unless-stopped
     ports:
       # On a server: a PLAINBOARD_PASSWORD, behind a reverse proxy with TLS (PLAINBOARD_BIND only if the proxy is on another machine).
@@ -308,7 +310,7 @@ services:
 
   # Where the agents work: their shell, their tools, your code. Only the app talks to it.
   runner:
-    image: thoenehannes/plainboard-runner:latest
+    image: thoenehannes/plainboard-runner:${PLAINBOARD_TAG:-latest}
     restart: unless-stopped
     volumes:
       # To let agents work in a folder of your machine: PLAINBOARD_WORKSPACES_DIR=/home/me/code

@@ -230,27 +230,53 @@ def parse_check_runs(items: list[dict[str, Any]]) -> list[PullRequestCheck]:
 API = "https://api.github.com"
 
 
-async def upstream(credentials: Credentials, repository: str, branch: str, commit: str, *, transport: httpx.AsyncBaseTransport | None = None) -> UpstreamState | None:
+RELEASE_TAG = re.compile(r"refs/tags/v(\d+)\.(\d+)\.(\d+)")
+
+
+async def upstream(credentials: Credentials, repository: str, branch: str, commit: str, *, version: str = "", transport: httpx.AsyncBaseTransport | None = None) -> UpstreamState | None:
     """How many commits ``branch`` of ``repository`` has that ``commit`` has not. None if GitHub does
-    not know the commit there (a local build, a fork). Asked without a token first: a public
+    not know the commit there (a local build, a fork). For a release (``version`` "X.Y.Z"): how many
+    releases (tags vX.Y.Z) are newer, and the newest. Asked without a token first: a public
     repository needs none, and the user's token is not sent where it is not needed."""
-    url = f"{API}/repos/{repository}/compare/{commit}...{branch}"
     async with httpx.AsyncClient(timeout=20, transport=transport) as client:
-        tokens = [None, credentials.github_token] if credentials.github_token else [None]
-        for token in tokens:
-            headers = {"Accept": "application/vnd.github+json", "User-Agent": "plainboard"}
-            if token:
-                headers["Authorization"] = f"Bearer {token}"
-            try:
-                resp = await client.get(url, params={"per_page": 1}, headers=headers)
-            except httpx.HTTPError as exc:
-                raise WorkspaceError(f"GitHub is not reachable: {exc}") from exc
-            if resp.status_code == 200:
-                data = resp.json()
-                return UpstreamState(behind=int(data.get("ahead_by") or 0), url=data.get("html_url") or "")
-        if resp.status_code == 404:
+        if version:
+            resp = await _ask(client, credentials, f"{API}/repos/{repository}/git/matching-refs/tags/v", {}, repository)
+            if resp is None:
+                return None
+            own = tuple(int(n) for n in version.split("."))
+            newer = sorted({v for v in (_release(item.get("ref") or "") for item in resp.json()) if v and v > own})
+            if not newer:
+                return UpstreamState(behind=0)
+            latest = ".".join(map(str, newer[-1]))
+            return UpstreamState(behind=len(newer), url=f"https://github.com/{repository}/compare/v{version}...v{latest}", latest=latest)
+        resp = await _ask(client, credentials, f"{API}/repos/{repository}/compare/{commit}...{branch}", {"per_page": 1}, repository)
+        if resp is None:
             return None
-        raise WorkspaceError(f"GitHub answered {resp.status_code} for {repository}")
+        data = resp.json()
+        return UpstreamState(behind=int(data.get("ahead_by") or 0), url=data.get("html_url") or "")
+
+
+def _release(ref: str) -> tuple[int, int, int] | None:
+    m = RELEASE_TAG.fullmatch(ref)
+    return (int(m[1]), int(m[2]), int(m[3])) if m else None
+
+
+async def _ask(client: httpx.AsyncClient, credentials: Credentials, url: str, params: dict, repository: str) -> httpx.Response | None:
+    """GitHub's answer; None for 404."""
+    tokens = [None, credentials.github_token] if credentials.github_token else [None]
+    for token in tokens:
+        headers = {"Accept": "application/vnd.github+json", "User-Agent": "plainboard"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        try:
+            resp = await client.get(url, params=params, headers=headers)
+        except httpx.HTTPError as exc:
+            raise WorkspaceError(f"GitHub is not reachable: {exc}") from exc
+        if resp.status_code == 200:
+            return resp
+    if resp.status_code == 404:
+        return None
+    raise WorkspaceError(f"GitHub answered {resp.status_code} for {repository}")
 
 
 async def close(credentials: Credentials, repo: str, number: int) -> bool:

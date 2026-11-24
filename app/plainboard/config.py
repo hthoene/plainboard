@@ -49,6 +49,10 @@ class Config(BaseSettings):
     # often to ask. See services/version.py.
     commit: str = ""
     commit_file: Path = Path("/app/commit")
+    # The release this image is ("X.Y.Z", from the tag vX.Y.Z it was built for; the variable overrides
+    # it); empty for a build of a commit (:edge, a local build). See RELEASING.md.
+    version: str = ""
+    version_file: Path = Path("/app/version")
     update_repository: str = "hthoene/plainboard"
     update_branch: str = "main"
     update_interval_seconds: float = 6 * 3600.0

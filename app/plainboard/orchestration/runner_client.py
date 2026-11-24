@@ -548,9 +548,10 @@ class RunnerClient:
         body = {"credentials": credentials.model_dump(mode="json"), "remote": remote.model_dump(mode="json"), "branch": branch}
         return (await self._github("/git/branch", body, 150)).json().get("sha")
 
-    async def upstream(self, credentials: Credentials, repository: str, branch: str, commit: str) -> UpstreamState | None:
-        """How far ``commit`` is behind PlainBoard's own upstream branch; None if GitHub does not know it there."""
-        body = {"credentials": credentials.model_dump(mode="json"), "repository": repository, "branch": branch, "commit": commit}
+    async def upstream(self, credentials: Credentials, repository: str, branch: str, commit: str, version: str = "") -> UpstreamState | None:
+        """How far ``commit`` is behind PlainBoard's own upstream branch, or the release ``version`` behind
+        newer releases; None if GitHub does not know it there."""
+        body = {"credentials": credentials.model_dump(mode="json"), "repository": repository, "branch": branch, "commit": commit, "version": version}
         data = (await self._github("/github/upstream", body, 60)).json()
         return UpstreamState.model_validate(data) if data else None
 

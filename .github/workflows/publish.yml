@@ -5,8 +5,13 @@ name: Publish images
 #   <namespace>/plainboard          the app (web UI and everything PlainBoard does by itself)
 #   <namespace>/plainboard-runner   where the agents work
 #
-# each as :latest and as :<first 7 characters of the commit>. It runs for every commit on main that
-# passed CI, and by hand (Actions -> Publish images -> Run workflow).
+# Two channels (RELEASING.md):
+#   :edge                   every commit on main that passed CI, overwritten each time
+#   :X.Y.Z, :X.Y, :latest   a release: a pushed tag vX.Y.Z, or by hand (Actions -> Publish images ->
+#                           Run workflow) with that version to publish the tag's commit again.
+#                           :X.Y and :latest only when it is the newest release of its line / of all,
+#                           so an older release (a fix for an old line, a late run) never takes them over.
+# By hand without a version: an :edge build of the chosen branch.
 #
 # It needs two repository secrets (Settings -> Secrets and variables -> Actions):
 #   DOCKERHUB_USERNAME   the Docker Hub user name
@@ -23,26 +28,76 @@ on:
     workflows: [CI]
     types: [completed]
     branches: [main]
+  push:
+    tags: ["v[0-9]*.[0-9]*.[0-9]*"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Release to publish (X.Y.Z, its tag vX.Y.Z must exist); empty: an :edge build of the chosen branch"
+        required: false
+        default: ""
 
 permissions:
   contents: read
 
-# One at a time, in order: an older commit must never become :latest after a newer one.
+# :edge one at a time, in order: an older commit must never become :edge after a newer one (a newer
+# run that waits replaces an older one that waits). Each release in a group of its own, so that no
+# release that waits is dropped; which one is :latest is decided by the version, not by the order.
 concurrency:
-  group: publish-images
+  group: publish-images-${{ github.ref_type == 'tag' && github.ref_name || inputs.version && format('v{0}', inputs.version) || 'edge' }}
   cancel-in-progress: false
 
 env:
   PUBLISH: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
   NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME }}
-  # The commit that passed CI, not whatever main points at by now.
-  COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
+  what:
+    name: What to publish
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.what.outputs.commit }}
+      version: ${{ steps.what.outputs.version }}
+      tags: ${{ steps.what.outputs.tags }}
+    steps:
+      - id: what
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT: ${{ inputs.version }}
+          # The commit that passed CI, not whatever main points at by now.
+          COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          version=""
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$REF_TYPE" = tag ]; then version="${REF_NAME#v}"; fi
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then version="${INPUT#v}"; fi
+          if [ -z "$version" ]; then
+            { echo "commit=$COMMIT"; echo "version="; echo "tags=edge"; } >> "$GITHUB_OUTPUT"
+            echo "::notice:::edge from ${COMMIT::7}"
+            exit 0
+          fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::A release is X.Y.Z (tag vX.Y.Z), not '$version'"; exit 1
+          fi
+          # The tag's commit (an annotated tag points at a tag object first).
+          ref=$(gh api "repos/$REPO/git/ref/tags/v$version" --jq '.object.type + " " + .object.sha') || { echo "::error::There is no tag v$version"; exit 1; }
+          set -- $ref
+          commit="$2"
+          if [ "$1" = tag ]; then commit=$(gh api "repos/$REPO/git/tags/$commit" --jq .object.sha); fi
+          releases=$(gh api "repos/$REPO/git/matching-refs/tags/v" --jq '.[].ref' | sed -n 's#^refs/tags/v\([0-9]*\.[0-9]*\.[0-9]*\)$#\1#p' | sort -uV)
+          line="${version%.*}"
+          tags="$version"
+          if [ "$(awk -v p="$line." 'index($0, p) == 1' <<<"$releases" | tail -n1)" = "$version" ]; then tags="$tags $line"; fi
+          if [ "$(tail -n1 <<<"$releases")" = "$version" ]; then tags="$tags latest"; fi
+          { echo "commit=$commit"; echo "version=$version"; echo "tags=$tags"; } >> "$GITHUB_OUTPUT"
+          echo "::notice::Release $version from ${commit::7}: $tags"
+
   build:
     name: Build ${{ matrix.image }} (${{ matrix.arch }})
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    needs: what
     strategy:
       fail-fast: false
       matrix:
@@ -58,7 +113,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ env.COMMIT }}
+          ref: ${{ needs.what.outputs.commit }}
       - uses: docker/setup-buildx-action@v3
       - name: Sign in to Docker Hub
         if: env.PUBLISH == 'true'
@@ -76,6 +131,8 @@ jobs:
           file: ${{ matrix.dockerfile }}
           platforms: linux/${{ matrix.arch }}
           provenance: false
+          # The app shows it (services/version.py); empty for :edge.
+          build-args: PLAINBOARD_VERSION=${{ needs.what.outputs.version }}
           cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
           cache-to: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
           # Pushed without a tag: the tags are put on both architectures together, below.
@@ -97,7 +154,7 @@ jobs:
 
   tag:
     name: Publish ${{ matrix.image }}
-    needs: build
+    needs: [what, build]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -123,7 +180,11 @@ jobs:
       - name: One image for both architectures
         if: env.PUBLISH == 'true'
         working-directory: digests
+        env:
+          TAGS: ${{ needs.what.outputs.tags }}
         run: |
           image="$NAMESPACE/${{ matrix.image }}"
-          docker buildx imagetools create -t "$image:latest" -t "$image:${COMMIT::7}" $(printf "$image@sha256:%s " *)
-          docker buildx imagetools inspect "$image:latest"
+          args=()
+          for tag in $TAGS; do args+=(-t "$image:$tag"); done
+          docker buildx imagetools create "${args[@]}" $(printf "$image@sha256:%s " *)
+          docker buildx imagetools inspect "$image:${TAGS%% *}"

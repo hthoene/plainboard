@@ -41,6 +41,7 @@ def test_the_build_reads_its_commit_from_the_checkout(tmp_path):
 def built_from(monkeypatch):
     version.forget()
     monkeypatch.setattr(version, "running_commit", lambda: SHA)
+    monkeypatch.setattr(version, "running_version", lambda: "")
     yield
     version.forget()
 
@@ -48,12 +49,12 @@ def built_from(monkeypatch):
 def test_a_newer_version_shows_up_in_the_meta_data(client, built_from):
     fake = client.app_ref.state.runner
     tick = client.app_ref.state.updates.tick
-    assert client.get("/api/meta").json()["version"] == {"commit": SHA[:10], "behind": None, "url": ""}  # not asked yet
+    assert client.get("/api/meta").json()["version"] == {"commit": SHA[:10], "name": f"edge-{SHA[:7]}", "release": False, "behind": None, "latest": "", "url": ""}  # not asked yet
 
     fake.upstream_state = UpstreamState(behind=4, url="https://github.com/hthoene/plainboard/compare/a...main")
     client.portal.call(tick)
     assert fake.upstream_calls == [("hthoene/plainboard", "main", SHA)]  # nothing but the commit goes out
-    assert client.get("/api/meta").json()["version"] == {"commit": SHA[:10], "behind": 4, "url": "https://github.com/hthoene/plainboard/compare/a...main"}
+    assert client.get("/api/meta").json()["version"] == {"commit": SHA[:10], "name": f"edge-{SHA[:7]}", "release": False, "behind": 4, "latest": "", "url": "https://github.com/hthoene/plainboard/compare/a...main"}
 
     # Offline or rate limited: what was known stays, and nobody sees an error.
     fake.upstream_error = "GitHub is not reachable"
@@ -64,6 +65,34 @@ def test_a_newer_version_shows_up_in_the_meta_data(client, built_from):
     fake.upstream_error, fake.upstream_state = "", None
     client.portal.call(tick)
     assert client.get("/api/meta").json()["version"]["behind"] is None
+
+
+def test_a_release_is_compared_with_newer_releases(client, built_from, monkeypatch):
+    monkeypatch.setattr(version, "running_version", lambda: "1.2.0")
+    fake = client.app_ref.state.runner
+    seen = []
+    real = fake.upstream
+
+    async def upstream(credentials, repository, branch, commit, version=""):
+        seen.append(version)
+        return await real(credentials, repository, branch, commit, version)
+
+    monkeypatch.setattr(fake, "upstream", upstream)
+    fake.upstream_state = UpstreamState(behind=2, url="https://github.com/hthoene/plainboard/compare/v1.2.0...v1.3.0", latest="1.3.0")
+    client.portal.call(client.app_ref.state.updates.tick)
+    assert seen == ["1.2.0"]
+    shown = client.get("/api/meta").json()["version"]
+    assert (shown["name"], shown["release"], shown["behind"], shown["latest"]) == ("1.2.0", True, 2, "1.3.0")
+
+
+def test_the_version_file_names_a_release(tmp_path, monkeypatch):
+    from plainboard.config import get_config
+
+    for written, expected in (("v1.4.2\n", "1.4.2"), ("\n", ""), ("nonsense", "")):
+        (tmp_path / "version").write_text(written)
+        monkeypatch.setattr(get_config(), "version_file", tmp_path / "version")
+        monkeypatch.setattr(version, "_version", None)
+        assert version.running_version() == expected
 
 
 def test_the_check_can_be_turned_off(client, built_from):

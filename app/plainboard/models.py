@@ -693,6 +693,20 @@ class DocPageVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class DocThemeVersion(Base):
+    """A saved state of a site's theme (#128, services/docs_theme.py): who, when, why. The newest is the theme as it is."""
+
+    __tablename__ = "doc_theme_versions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    site_id: Mapped[int] = mapped_column(ForeignKey("doc_sites.id", ondelete="CASCADE"), index=True)
+    theme: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    author: Mapped[str] = mapped_column(String(100), default="")
+    agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id", ondelete="SET NULL"))
+    reason: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class DocTranslation(Base):
     """A page in another language of its site (services/docs_translate.py). ``source_hash``: of the page it was made from."""
 

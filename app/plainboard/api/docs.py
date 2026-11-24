@@ -71,8 +71,9 @@ async def get_site(project_id: int, site_id: int, session: Session) -> DocSiteOu
 
 
 @router.patch("/sites/{site_id}", response_model=DocSiteOut)
-async def update_site(project_id: int, site_id: int, body: DocSiteUpdate, session: Session, request: Request) -> DocSiteOut:
-    site = await docs_service.update_site(session, await docs_service.get_site(session, project_id, site_id), **body.model_dump(exclude_unset=True))
+async def update_site(project_id: int, site_id: int, body: DocSiteUpdate, session: Session, request: Request, who: Who) -> DocSiteOut:
+    site = await docs_service.get_site(session, project_id, site_id)
+    site = await docs_service.update_site(session, site, author=_author(who), reason="in the settings", **body.model_dump(exclude_unset=True))
     if site.languages and site.translator:
         _translate_soon(request)
     return await _site_out(session, site)

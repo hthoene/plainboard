@@ -175,6 +175,9 @@ AGENT_GUIDE = """You are the doc agent of the doc site "{name}" (slug {slug}, /d
   move or remove pages.
 - Keep pages short and find before you write (list_docs query): change a page rather than add a second one.
 - You write no code and change no repository.
+- A theme (the site's look): doc_theme. Given the product's website, start from theme_from_website. Always look at
+  the result with preview_doc_site (a draft before saving): contrast and readability in light and dark, on desktop
+  and phone; fix what is off, briefly, then save and report with screenshots (task_number attaches them).
 
 ## Doc spec
 {spec}"""
@@ -225,9 +228,9 @@ ASSISTANT_WARNING = (
 )
 
 
-async def update_site(session: AsyncSession, site: DocSite, **changes) -> DocSite:
+async def update_site(session: AsyncSession, site: DocSite, *, author: Author | None = None, reason: str = "", **changes) -> DocSite:
     """Name, slug, description, spec, published, public, languages, translator and its model; ``domain``: "" removes
-    it, another one has to be verified again."""
+    it, another one has to be verified again. A changed ``theme`` is kept as a version (by ``author``, ``reason``)."""
     slug = changes.pop("slug", None)
     if slug is not None and slug != site.slug:
         if await session.scalar(select(DocSite.id).where(DocSite.slug == slug, DocSite.id != site.id)) is not None:
@@ -246,7 +249,10 @@ async def update_site(session: AsyncSession, site: DocSite, **changes) -> DocSit
     if changes.get("theme") is not None:
         from . import docs_theme
 
-        site.theme = await docs_theme.clean(session, site, DocTheme.model_validate(changes["theme"]))
+        theme = await docs_theme.clean(session, site, DocTheme.model_validate(changes["theme"]))
+        if theme != (site.theme or {}):
+            await docs_theme.record(session, site, theme, author or Author("someone"), reason)
+            site.theme = theme
     domain = changes.get("domain")
     if domain is not None:
         new = clean_domain(domain) if domain.strip() else None
@@ -621,6 +627,10 @@ def _relink(text: str, files: dict[int, int], pages: dict[int, int]) -> str:
     return PAGE_REF.sub(lambda m: f"doc-page:{pages.get(int(m.group(1)), int(m.group(1)))}", text)
 
 
+def _relink_theme(theme: dict, files: dict[int, int]) -> dict:
+    return {**theme, **{k: files.get(theme[k], theme[k]) for k in ("logo_light", "logo_dark", "favicon") if theme.get(k)}}
+
+
 async def after_import(session: AsyncSession, new: dict[str, dict[int, int]]) -> None:
     """Imported pages name their files and pages by the ids of the other side: by the new ones from now on."""
     files, page_ids = new.get("attachments", {}), new.get("doc_pages", {})
@@ -630,7 +640,12 @@ async def after_import(session: AsyncSession, new: dict[str, dict[int, int]]) ->
         docs_custom.relink(custom, files, page_ids)
     for site in await session.scalars(select(DocSite).where(DocSite.id.in_(list(new.get("doc_sites", {}).values())))):
         if site.theme:  # its logos and favicon are files of the site
-            site.theme = {**site.theme, **{k: files.get(site.theme[k], site.theme[k]) for k in ("logo_light", "logo_dark", "favicon") if site.theme.get(k)}}
+            site.theme = _relink_theme(site.theme, files)
+    from ..models import DocThemeVersion
+
+    for version in await session.scalars(select(DocThemeVersion).where(DocThemeVersion.site_id.in_(list(new.get("doc_sites", {}).values())))):
+        if version.theme:
+            version.theme = _relink_theme(version.theme, files)
     if not page_ids:
         return
     ids = list(page_ids.values())

@@ -14,9 +14,10 @@ from __future__ import annotations
 import html
 import re
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import DocSite
+from ..models import DocSite, DocThemeVersion
 from ..schemas import DocTheme
 from . import docs as docs_service
 from .errors import ServiceError
@@ -130,3 +131,54 @@ def public(theme: dict, files_base: str) -> dict | None:
         return None
     file = lambda key: f"{files_base}/{int(theme[key])}" if theme.get(key) else None  # noqa: E731
     return {"logo": file("logo_light"), "logo_dark": file("logo_dark") or file("logo_light"), "show_name": theme.get("show_name", True), "links": theme.get("links") or []}
+
+
+# --- versions (#128) ---------------------------------------------------------------------------------------------
+
+
+def patch(current: dict, changes: dict) -> dict:
+    """``current`` with ``changes`` over it: light and dark key by key, everything else as a whole; None puts a field
+    back to its default. Unknown fields are an error (nothing is silently dropped)."""
+    out = DocTheme.model_validate(current or {}).model_dump()
+    fields = DocTheme.model_fields
+    if unknown := sorted(set(changes) - set(fields)):
+        raise ServiceError(f"Unknown theme field(s): {', '.join(unknown)}. Fields: {', '.join(fields)}.")
+    for key, value in changes.items():
+        if value is None:
+            out[key] = fields[key].get_default(call_default_factory=True)
+            out[key] = out[key].model_dump() if hasattr(out[key], "model_dump") else out[key]
+        elif key in ("light", "dark") and isinstance(value, dict):
+            out[key] = {**out[key], **{k: "" if v is None else v for k, v in value.items()}}
+        else:
+            out[key] = value
+    return out
+
+
+async def record(session: AsyncSession, site: DocSite, theme: dict, author, reason: str) -> None:  # noqa: ANN001
+    """Keep ``theme`` as the site's newest version (not committed). The theme it had before the history began is
+    kept first, so it can be gone back to."""
+    if site.theme and await session.scalar(select(DocThemeVersion.id).where(DocThemeVersion.site_id == site.id).limit(1)) is None:
+        session.add(DocThemeVersion(project_id=site.project_id, site_id=site.id, theme=site.theme, author="", reason="as it was before"))
+        await session.flush()
+    session.add(DocThemeVersion(project_id=site.project_id, site_id=site.id, theme=theme, author=author.name, agent_id=author.agent_id, reason=(reason or "changed")[:300]))
+
+
+async def versions(session: AsyncSession, site_id: int, limit: int = 20) -> list[DocThemeVersion]:
+    """Newest first."""
+    q = select(DocThemeVersion).where(DocThemeVersion.site_id == site_id).order_by(DocThemeVersion.id.desc()).limit(limit)
+    return list(await session.scalars(q))
+
+
+async def version(session: AsyncSession, site: DocSite, version_id: int) -> DocThemeVersion:
+    found = await session.get(DocThemeVersion, version_id)
+    if found is None or found.site_id != site.id:
+        raise ServiceError(f"Theme version {version_id} of {site.slug} not found.", 404)
+    return found
+
+
+async def previous(session: AsyncSession, site: DocSite) -> dict:
+    """The theme before the last change: the version before the newest, or the default when there is none."""
+    newest = await versions(session, site.id, 2)
+    if not newest:
+        raise ServiceError(f"{site.slug} has no theme changes to undo.")
+    return newest[1].theme if len(newest) > 1 else {}

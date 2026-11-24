@@ -26,6 +26,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -34,7 +35,7 @@ from ..models import DocSite
 from ..security import SESSION_COOKIE
 from ..services import board as board_service
 from ..services import docs as docs_service
-from ..services import docs_custom, docs_domains
+from ..services import docs_custom, docs_domains, docs_theme
 from ..services import docs_public as public
 from ..services.errors import NotFound, ServiceError
 from .deps import Runs, Session
@@ -71,6 +72,10 @@ async def _site(session, request: Request, slug: str) -> DocSite:  # noqa: ANN00
     on_domain = request.scope.get("state", {}).get(DOMAIN_SLUG)
     if on_domain is not None and on_domain != slug:
         raise NotFound("Not found")  # a site's domain serves that site only
+    if (grant := public.preview_grant(request.cookies.get(public.PREVIEW_COOKIE))) is not None:  # the preview tool's browser (#128)
+        found = await session.scalar(select(DocSite).where(DocSite.slug == slug))
+        if found is not None and found.id == grant.site_id:
+            return found
     site = await public.served(session, slug)
     await public.may_read(session, site, request.cookies.get(SESSION_COOKIE), request.headers.get("authorization"))
     return site
@@ -244,11 +249,17 @@ async def html_page(slug: str, path: str, request: Request, session: Session) ->
         lang, path = first, rest
     cache = {"Cache-Control": "public, max-age=60" if found.public else "private, no-store"}
     key = (found.id, found.updated_at.isoformat(), base, "html", lang, path.strip("/"), _origin(request))
-    if (done := public.CACHE.get(key)) is not None:
+    grant = public.preview_grant(request.cookies.get(public.PREVIEW_COOKIE))
+    draft = grant.theme if grant is not None and grant.site_id == found.id else None  # a theme not saved yet (#128)
+    if draft is not None:
+        cache, key = {"Cache-Control": "no-store"}, (*key, id(grant))
+    elif (done := public.CACHE.get(key)) is not None:
         return HTMLResponse(done, headers=cache)
     view = jsonable_encoder(await public.site_view(session, found, base, lang))
+    if draft is not None:
+        view["theme"] = docs_theme.public(draft, f"{public.api_base(found)}/files")
     here = public.lang_base(found, base, lang)
-    theme = public.theme_head(found)
+    theme = public.theme_head(found, draft)
     custom = None
     if (m := path.strip("/")).startswith("p/") and "/" not in m[2:] and any(f["path"] == m for f in view["footer"]):  # a page of its own (#121)
         custom = jsonable_encoder(await docs_custom.view(session, found, m[2:], base, lang))
@@ -264,7 +275,7 @@ async def html_page(slug: str, path: str, request: Request, session: Session) ->
         alternates["x-default"] = alternates[found.language]
     state = {"site": view, "page": page_view, "custom": custom}
     out = public.document(template, state, public.head_html(view, shown, canonical, alternates), public.body_html(view, shown), lang, theme)
-    return HTMLResponse(public.CACHE.put(key, out), headers=cache)
+    return HTMLResponse(out if draft is not None else public.CACHE.put(key, out), headers=cache)
 
 
 # --- a site's own domain ---------------------------------------------------------------------------------------

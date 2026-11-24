@@ -406,8 +406,45 @@ def document(template: str | None, state: dict, head: str, body: str, lang: str 
     return out.replace("<!--pb-docs-body-->", body, 1)
 
 
-def theme_head(site: DocSite) -> str:
-    return docs_theme.head(site.theme or {}, f"{api_base(site)}/files")
+def theme_head(site: DocSite, theme: dict | None = None) -> str:
+    return docs_theme.head(site.theme or {} if theme is None else theme, f"{api_base(site)}/files")
+
+
+# --- previews for the agents' screenshots (#128) --------------------------------------------------------------
+# The preview tool's browser carries a short-lived grant as a cookie: it may read that one site even unpublished or
+# private, and with a theme not saved yet. Only the app makes grants (tools/docs_theme.preview_doc_site); kept in
+# this process, as the app runs in one.
+
+PREVIEW_COOKIE = "pb_doc_preview"
+PREVIEW_SECONDS = 300
+
+
+@dataclass
+class PreviewGrant:
+    site_id: int
+    theme: dict | None  # None: the site's own
+    until: float
+
+
+_grants: OrderedDict[str, PreviewGrant] = OrderedDict()
+
+
+def grant_preview(site_id: int, theme: dict | None) -> str:
+    import secrets
+
+    now = time.monotonic()
+    for token in [t for t, g in _grants.items() if g.until < now]:
+        del _grants[token]
+    while len(_grants) >= 200:
+        _grants.popitem(last=False)
+    token = secrets.token_urlsafe(24)
+    _grants[token] = PreviewGrant(site_id, theme, now + PREVIEW_SECONDS)
+    return token
+
+
+def preview_grant(token: str | None) -> PreviewGrant | None:
+    grant = _grants.get(token or "")
+    return grant if grant is not None and grant.until >= time.monotonic() else None
 
 
 def sign_in_page(template: str | None, site: DocSite) -> str:

@@ -93,6 +93,7 @@ TABLES: tuple[Table, ...] = (
     Table("doc_page_versions", refs={"page_id": "doc_pages", "agent_id": "agents"}),
     Table("doc_translations", refs={"site_id": "doc_sites", "page_id": "doc_pages"}),
     Table("doc_custom_pages", refs={"site_id": "doc_sites"}),
+    Table("doc_theme_versions", refs={"site_id": "doc_sites", "agent_id": "agents"}),
     Table("ticket_states", ("task_id", "tasks"), {"task_id": "tasks", "until_assignment_id": "assignments"}, key="task_id"),
     # A chat goes on from its summary and its latest messages: the provider's own session stays behind.
     Table(

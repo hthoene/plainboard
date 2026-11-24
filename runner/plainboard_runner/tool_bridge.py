@@ -167,4 +167,4 @@ async def _workspace_snapshots(bridge: ToolBridge, args: dict[str, Any]) -> Tool
     return ToolCallResult(text=text)
 
 
-from . import code_read  # noqa: E402,F401  (registers the code tools of a doc site's assistant)
+from . import code_read, doc_shots  # noqa: E402,F401  (register the code tools of a doc site's assistant, the theme previews)

@@ -696,9 +696,15 @@ def related_hint(label, hits: list) -> str:
     return "Possibly related in this project's history (search_history finds more): " + "; ".join(truncate(label(h), 120) for h in hits) + "."
 
 
-def continue_prompt(assignment: Assignment, ledger: str) -> str:
+def continue_prompt(assignment: Assignment, ledger: str, interrupted: bool = False) -> str:
+    why = (
+        "you ended your last turn for it to answer in between, and it is still open. Pick up where you stopped; your earlier "
+        "turn's last message was no report, so this turn's final message must cover the whole assignment"
+        if interrupted
+        else "what it waited for has ended (see the updates above)"
+    )
     return (
-        f'Go on with assignment #{assignment.id} "{truncate(assignment.title, 100)}": what it waited for has ended (see the updates above).\n'
+        f'Go on with assignment #{assignment.id} "{truncate(assignment.title, 100)}": {why}.\n'
         f"So far it took {ledger}.\n"
         "Finish it now. Your final message is the report. If you have to start another slow job for it, first put in "
         "everything that job should check, then end your turn: you continue when it ends."
@@ -819,7 +825,8 @@ def ask_prompt(from_agent: Agent, question: str) -> str:
 def ask_notice(from_agent: Agent, question: str) -> str:
     return (
         f"[PlainBoard] {from_agent.name} is waiting for your answer to: {truncate(question.strip(), 500)}\n"
-        "It is queued as your next turn, so answer it there. Finish your current step, then end your turn at the next safe point."
+        "It is queued as your next turn, so answer it there. Finish your current step, then end your turn at the next safe point. "
+        "An open assignment stays open: you go on with it in the turn after your answer."
     )
 
 
@@ -828,7 +835,8 @@ def chat_notice(text: str, files: int = 0) -> str:
     return (
         f"[PlainBoard] The user just wrote to you{attached}: {truncate(text.strip(), 2000) or '(no text)'}\n"
         "It is queued as your next turn, so answer it there. Take it into account from now on. Finish the step you "
-        "are in the middle of, then end your turn at the next safe point and continue any remaining work in that next turn."
+        "are in the middle of, then end your turn at the next safe point. An open assignment stays open: you go on with it "
+        "in the turn after your answer."
     )
 
 

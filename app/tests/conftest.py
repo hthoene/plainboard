@@ -135,6 +135,10 @@ class FakeRunner:
         self.check_specs: list = []
         self.land_specs: list = []
         self.land_error = ""
+        self.promote_plan = None  # Promotion (#129): what the runner reads (PromotePlan), what a push answers (PromoteResult)
+        self.promote_result = None
+        self.promotion_plans: list = []
+        self.promotion_pushes: list = []
         self.pulls: dict[tuple[str, int], PullRequestState] = {}  # GitHub: the trains' pull requests
         self.merged: list[tuple[str, int, dict]] = []
         self.closed: list[int] = []
@@ -309,6 +313,20 @@ class FakeRunner:
         self.check_specs.append(spec)
         self.jobs[spec.id] = JobState(running=True, log_path=f"/jobs/{spec.id}.log")
         return self.jobs[spec.id]
+
+    async def promotion_plan(self, spec):
+        from plainboard_protocol import PromotePlan
+
+        self.promotion_plans.append(spec)
+        plan = self.promote_plan or PromotePlan(base=spec.base or "main", release=spec.release, sha="0" * 40)
+        return plan.model_copy(update={"sha": spec.sha or plan.sha})
+
+    async def promotion_push(self, spec):
+        from plainboard_protocol import PromoteResult
+
+        self.database_free("promotion_push")
+        self.promotion_pushes.append(spec)
+        return self.promote_result or PromoteResult(ok=True, how="fast-forward", sha=spec.sha)
 
     async def land_train(self, spec) -> CheckResult:
         self.land_specs.append(spec)

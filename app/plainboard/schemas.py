@@ -148,6 +148,7 @@ class RepositoryCreate(BaseModel):
     check_command: str = Field(default="", max_length=2000)  # decides whether finished branches may land
     quick_check_command: str = Field(default="", max_length=2000)  # run on a branch when it is handed over
     land_first: bool = False  # merge finished branches at once, check the base branch afterwards
+    release_branch: str = Field(default="", max_length=200, pattern=r"^[^\s~^:?*\[\\]*$")  # promoted to on request (#129); empty: none
     tidy_branches: bool = True  # remove branches whose content is all on the base branch (orchestration/tidy.py)
     check_target_seconds: int = Field(default=0, ge=0, le=7 * 86400)  # how long a check run should take; 0: no target
     agent_ids: list[int] | None = None  # explicit access for agents restricted to selected repos
@@ -165,6 +166,7 @@ class RepositoryUpdate(BaseModel):
     check_command: str | None = Field(default=None, max_length=2000)
     quick_check_command: str | None = Field(default=None, max_length=2000)
     land_first: bool | None = None
+    release_branch: str | None = Field(default=None, max_length=200, pattern=r"^[^\s~^:?*\[\\]*$")  # "": no promotion step
     tidy_branches: bool | None = None
     check_target_seconds: int | None = Field(default=None, ge=0, le=7 * 86400)  # 0: no target
     checks_baseline_seconds: int | None = Field(default=None, ge=0, le=7 * 86400)  # the verdict of a speed-up: what a check run takes now
@@ -494,6 +496,7 @@ class RepositoryOut(ORM):
     check_command: str = ""
     quick_check_command: str = ""
     land_first: bool = False
+    release_branch: str = ""
     tidy_branches: bool = True
     check_target_seconds: int = 0
     checks_baseline_seconds: int | None = None
@@ -1406,6 +1409,7 @@ class FlowRepo(BaseModel):
     typical_check_seconds: int | None  # the median of the last check runs that landed; None until there is one
     check_target_seconds: int
     red: bool  # the base branch fails its checks
+    release: str = ""  # the release branch it is promoted to on request (#129); empty: none
 
 
 class FlowJob(BaseModel):
@@ -1463,12 +1467,66 @@ class FlowTrain(BaseModel):
     branches: list[str] = Field(default_factory=list)
 
 
+class PromotionTicket(BaseModel):
+    task_id: int | None
+    task_number: int | None
+    title: str  # the ticket's, else the branch's
+    branch: str
+
+
+class PromotionCommit(BaseModel):
+    sha: str
+    author: str
+    date: str
+    message: str  # its subject line
+
+
+class PromotionOut(BaseModel):
+    id: int
+    repository_id: int
+    base: str
+    release: str
+    sha: str
+    tag: str
+    status: Literal["checking", "promoted", "pull_request", "failed"]
+    how: str
+    url: str
+    detail: str
+    commits: int
+    tickets: int
+    by: str
+    started_at: UTCDateTime
+    finished_at: UTCDateTime | None
+
+
+class PromotionPreview(BaseModel):
+    """What a promotion of the base branch to the release branch would bring now (#129)."""
+
+    repository_id: int
+    base: str
+    release: str
+    sha: str
+    release_sha: str | None
+    fast_forward: bool  # else a merge commit (the release branch has commits of its own)
+    total: int  # commits the release branch lacks
+    commits: list[PromotionCommit]
+    tickets: list[PromotionTicket]  # branches that landed on the base branch since the last promotion
+    checked: bool  # this exact commit passed its checks already: no check run needed
+    running: PromotionOut | None = None  # a promotion that is on its way
+
+
+class PromoteIn(BaseModel):
+    tag: str = Field(default="", max_length=100, pattern=r"^[^\s~^:?*\[\\]*$")
+    sha: str | None = Field(default=None, pattern=r"^[0-9a-f]{7,64}$")  # the commit the preview showed; None: the head now
+
+
 class FlowLive(BaseModel):
     now: UTCDateTime
     repositories: list[FlowRepo]
     work: list[FlowWork]
     branches: list[FlowBranch]  # on their way (waiting, checking, repairing, stuck) and the last ones that landed
     trains: list[FlowTrain]  # being checked now (or blocked)
+    promotions: list[PromotionOut] = Field(default_factory=list)  # per repository: the running one and the last one
 
 
 class FlowRepair(BaseModel):
@@ -1493,7 +1551,7 @@ class FlowHistory(BaseModel):
 
 
 class FlowStep(BaseModel):
-    key: Literal["handed", "failed", "repair", "checking", "landed", "stuck"]
+    key: Literal["handed", "failed", "repair", "checking", "landed", "stuck", "released"]
     state: Literal["done", "now", "todo"]
     at: UTCDateTime | None = None
     detail: str = ""

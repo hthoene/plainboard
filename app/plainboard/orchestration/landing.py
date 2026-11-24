@@ -47,11 +47,11 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from plainboard_protocol import Credentials, PullRequestCheck, PullRequestState, RepoSpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec
+from plainboard_protocol import Credentials, PromotePushSpec, PullRequestCheck, PullRequestState, RepoSpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from ..models import ACTIVE_RUN_STATUSES, Agent, agent_repositories, Assignment, AssignmentStatus, Landing, LandingStatus, Project, Repository, Run, Task, Train, TrainStatus, utcnow
+from ..models import ACTIVE_RUN_STATUSES, Agent, agent_repositories, Assignment, AssignmentStatus, Landing, LandingStatus, Project, Promotion, PromotionStatus, Repository, Run, Task, Train, TrainStatus, utcnow
 from ..services import agents as agent_service
 from ..services import board as board_service
 from ..services import flow_check as flow_check_service
@@ -59,6 +59,7 @@ from ..services import flow_log
 from ..services import landings as landing_service
 from ..services import repositories as repo_service
 from ..services import permissions
+from ..services import promotions as promotion_service
 from ..services import secrets as secret_service
 from ..services import timing as timing_service
 from ..services.errors import ServiceError
@@ -166,6 +167,12 @@ class LandingWatcher:
                     await s.rollback()
                     log.info("Landing for repository %s postponed: %s", repository_id, exc)
             await self._held_long(s, now)
+            for promotion_id in list(await s.scalars(select(Promotion.id).where(Promotion.status == PromotionStatus.CHECKING))):
+                try:
+                    await self._promotion(s, promotion_id, now)
+                except (RunnerError, ServiceError) as exc:
+                    await s.rollback()
+                    log.info("Promotion %s not looked at: %s", promotion_id, exc)
             for repository_id in list(await s.scalars(select(Repository.id).order_by(Repository.id))):
                 try:
                     await self._guard(s, repository_id, repository_id in busy, now)
@@ -969,6 +976,56 @@ class LandingWatcher:
 
     async def _label(self, s: AsyncSession, landing: Landing) -> str:
         return await label(s, landing)
+
+    async def _promotion(self, s: AsyncSession, promotion_id: int, now: datetime) -> None:
+        """A promotion (#129): once the check of its commit passed, that commit goes to the release branch.
+        Its own clone and job: trains of the base branch go on meanwhile."""
+        promotion = await s.get(Promotion, promotion_id)
+        r = await self._repo(s, promotion.repository_id) if promotion else None
+        if promotion is None or r is None:
+            return
+        failed = ""
+        if promotion.mode == promotion_service.COMMAND:
+            state = (await self._runs.runners.of(r.repo.project_id).job_status([promotion.job_id or ""])).get(promotion.job_id or "")
+            if state is not None and state.running:
+                return
+            if state is None:
+                failed = "The check run was lost (the runner restarted). Nothing was pushed; promote again."
+            elif state.exit_code != 0:
+                failed = f"The check command ended with exit code {state.exit_code}. Nothing was pushed. Last output:\n{r.redact(state.tail)}\nFull log: {state.log_path}"  # type: ignore[operator]
+        elif promotion.mode == promotion_service.GITHUB and r.slug:
+            checks = await self._runs.runners.of(r.repo.project_id).commit_checks(r.credentials, r.slug, promotion.sha)
+            result = base_result(checks, (now - promotion.created_at).total_seconds())
+            if result == "pending":
+                return
+            if result == "failed":
+                failed = "Failed checks of the commit: " + ", ".join(c.name + (f" ({c.link})" if c.link else "") for c in checks if c.state == "fail")[:800] + ". Nothing was pushed."
+            elif result == "none":
+                promotion.detail = "The host reported no checks for this commit."
+        if not failed:
+            await s.commit()  # nothing of the database is held while the runner pushes
+            title = f"Promote {promotion.base} to {promotion.release}" + (f" ({promotion.tag})" if promotion.tag else "")
+            spec = PromotePushSpec(credentials=r.credentials, key=promotion_service.key(r.repo), remote=r.remote, base=promotion.base, release=promotion.release, sha=promotion.sha, tag=promotion.tag, github=r.slug, title=title)
+            pushed = await self._runs.runners.of(r.repo.project_id).promotion_push(spec)
+            if pushed.ok:
+                promotion.status = PromotionStatus.PULL_REQUEST if pushed.how == "pull-request" else PromotionStatus.PROMOTED
+                promotion.how, promotion.url = pushed.how, pushed.url
+                promotion.detail = "\n".join(x for x in (promotion.detail, r.redact(pushed.detail) if pushed.how != "pull-request" else "") if x)  # type: ignore[operator]
+            else:
+                failed = f"The push to {promotion.release} failed: {r.redact(pushed.detail)}"  # type: ignore[operator]
+        promotion.finished_at = now
+        if failed:
+            promotion.status, promotion.detail = PromotionStatus.FAILED, truncate(failed, 4000)
+        await s.commit()
+        await flow_log.record(s, r.project.id, f"promotion.{promotion.status}", repository_id=r.repo.id, promotion_id=promotion.id, sha=promotion.sha, how=promotion.how, url=promotion.url, detail=truncate(promotion.detail, 1000))
+        what = f"{promotion.base} at {promotion.sha[:12]} ({promotion.commits} commits, {len(promotion.landing_ids or [])} branches{', tag ' + promotion.tag if promotion.tag else ''})"
+        if promotion.status == PromotionStatus.FAILED:
+            text = f"The promotion of {what} to {promotion.release} of {r.repo.name} failed: {truncate(promotion.detail, 1200)}"
+        elif promotion.status == PromotionStatus.PULL_REQUEST:
+            text = f"{promotion.release} of {r.repo.name} refused a direct push, so the promotion of {what} is a pull request: {promotion.url}. It needs a merge there (by the user, or as the repository's rules allow)."
+        else:
+            text = f"Promoted {what} to {promotion.release} of {r.repo.name} ({promotion.how})." + (f" Note: {truncate(promotion.detail, 300)}" if promotion.detail else "")
+        await self._tell_manager(s, r, text)
 
     async def _tell_manager(self, s: AsyncSession, r: Repo, text: str) -> None:
         await tell_manager(s, self._runs, r.project, text)

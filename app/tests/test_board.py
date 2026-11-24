@@ -91,7 +91,7 @@ def test_deleting_a_project_can_take_its_folders_along(client):
     repo = client.post(f"/api/projects/{kept['id']}/repositories", json={"name": "api", "url": "https://github.com/acme/api.git"}).json()
     # Not asked for: the agents' folders stay, the runner's own clones of the repositories go.
     assert client.delete(f"/api/projects/{kept['id']}").status_code == 204
-    assert runner.removed[-1].workspace is None and runner.removed[-1].trains == [f"p{kept['id']}-r{repo['id']}"]
+    assert runner.removed[-1].workspace is None and runner.removed[-1].trains == [f"p{kept['id']}-r{repo['id']}", f"p{kept['id']}-r{repo['id']}-release"]
 
     # Asked for: a new project of the same name gets the same folder, so the old one has to go.
     again = client.post("/api/projects", json={"name": "Shop"}).json()

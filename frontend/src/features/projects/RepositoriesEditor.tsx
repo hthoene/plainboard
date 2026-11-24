@@ -15,6 +15,7 @@ export interface RepoDraft {
   check_command: string;
   quick_check_command: string;
   land_first: boolean;
+  release_branch: string; // promoted to on request (#129); empty: none
   tidy_branches: boolean;
   check_target_minutes: string; // empty: no target
   checks_verdict?: string; // read-only: the verdict of the last speed-up of its checks
@@ -40,6 +41,7 @@ export const emptyRepo = (): RepoDraft => ({
   check_command: "",
   quick_check_command: "",
   land_first: false,
+  release_branch: "",
   tidy_branches: true,
   check_target_minutes: "",
   auth: "default",
@@ -60,6 +62,7 @@ export const toDraft = (r: Repository): RepoDraft => ({
   check_command: r.check_command ?? "",
   quick_check_command: r.quick_check_command ?? "",
   land_first: r.land_first ?? false,
+  release_branch: r.release_branch ?? "",
   tidy_branches: r.tidy_branches ?? true,
   check_target_minutes: r.check_target_seconds ? String(Math.round(r.check_target_seconds / 60)) : "",
   checks_verdict: r.checks_verdict ?? "",
@@ -82,6 +85,7 @@ export const toBody = (d: RepoDraft) => ({
   check_command: d.check_command.trim(),
   quick_check_command: d.quick_check_command.trim(),
   land_first: d.land_first,
+  release_branch: d.release_branch.trim(),
   tidy_branches: d.tidy_branches,
   check_target_seconds: Math.max(0, Math.round(Number(d.check_target_minutes) || 0)) * 60,
   auth: d.auth,
@@ -222,6 +226,7 @@ export function RepositoriesEditor({
                 <div className="truncate font-medium">
                   {repo.name || t("projects.repoAutoName")}
                   {repo.default_branch && <span className="ml-1.5 font-normal text-fg-3">@{repo.default_branch}</span>}
+                  {repo.release_branch && <span className="ml-1.5 font-normal text-fg-3">→ {repo.release_branch}</span>}
                   {repo.auth !== "default" && (
                     <span className="ml-1.5 font-normal text-fg-3">· {t(repo.auth === "ssh" ? "projects.repoAccessBadgeSsh" : "projects.repoAccessBadgeToken")}</span>
                   )}
@@ -297,6 +302,9 @@ export function RepositoriesEditor({
                   { value: "first", label: t("projects.repoLandFirst") },
                 ]}
               />
+            </Field>
+            <Field label={t("projects.repoRelease")} hint={t("projects.repoReleaseHint")}>
+              <Input placeholder="main" value={editing.release_branch} onChange={(e) => setEditing({ ...editing, release_branch: e.target.value })} className="w-60 max-w-full font-mono" />
             </Field>
             <Field label={t("projects.repoQuickCheck")} hint={t("projects.repoQuickCheckHint")}>
               <Input placeholder="cargo fmt --check && cargo clippy" value={editing.quick_check_command} onChange={(e) => setEditing({ ...editing, quick_check_command: e.target.value })} className="font-mono" />

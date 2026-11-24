@@ -23,6 +23,8 @@ from ..models import (
     JobStatus,
     Landing,
     LandingStatus,
+    Promotion,
+    PromotionStatus,
     Repository,
     Run,
     RunStatus,
@@ -33,6 +35,7 @@ from ..models import (
 )
 from ..schemas import FlowBranch, FlowHistory, FlowHistoryItem, FlowJob, FlowLive, FlowRepair, FlowRepo, FlowStep, FlowTicketBranch, FlowTrain, FlowWork
 from . import landings as landing_service
+from . import promotions as promotion_service
 
 TYPICAL_OF = 5  # the median of this many of the latest check runs that landed
 RECENTLY_LANDED = 5  # per repository
@@ -143,12 +146,13 @@ async def live(session: AsyncSession, project_id: int) -> FlowLive:
         now=utcnow(),
         repositories=[
             FlowRepo(id=r.id, name=r.name, base=r.default_branch or "", land_first=r.land_first, typical_check_seconds=typical.get(r.id),
-                     check_target_seconds=r.check_target_seconds, red=r.id in red)
+                     check_target_seconds=r.check_target_seconds, red=r.id in red, release=r.release_branch or "")
             for r in repos
         ],  # fmt: skip
         work=list(work.values()),
         branches=[_branch(landing, numbers) for landing in landings],
         trains=[_train(t, members.get(t.id, [])) for t in trains],
+        promotions=[promotion_service.out(p) for p in await promotion_service.latest(session, project_id)] if any(r.release_branch for r in repos) else [],
     )
 
 
@@ -219,6 +223,7 @@ async def of_ticket(session: AsyncSession, task_id: int) -> list[FlowTicketBranc
     events: dict[int, list[FlowEvent]] = {}
     for e in await session.scalars(select(FlowEvent).where(FlowEvent.landing_id.in_([x.id for x in landings]), FlowEvent.kind.in_(("landing.back", "landing.stuck"))).order_by(FlowEvent.id)):
         events.setdefault(e.landing_id or 0, []).append(e)
+    released = await promotion_service.of_landings(session, [i for x in landings for i in (x.id, x.carried_by) if i])
     out = []
     for landing in landings:
         carrier = carriers.get(landing.carried_by or 0) if landing.status == LandingStatus.CLOSED else None
@@ -241,6 +246,9 @@ async def of_ticket(session: AsyncSession, task_id: int) -> list[FlowTicketBranc
         else:
             steps.append(FlowStep(key="checking", state="now" if status == LandingStatus.TRAIN else "todo", at=train.created_at if train and status == LandingStatus.TRAIN else None))
             steps.append(FlowStep(key="landed", state="todo"))
+        if status == LandingStatus.MERGED and (promotion := released.get(way.id)):
+            done = promotion.status == PromotionStatus.PROMOTED
+            steps.append(FlowStep(key="released", state="done" if done else "now", at=promotion.finished_at, detail=promotion.release + (f" ({promotion.tag})" if promotion.tag else "") + ("" if done else f": {promotion.url}")))
         branch = _branch(landing, numbers)
         if carrier is not None:
             shown = _branch(carrier, numbers)
@@ -255,7 +263,7 @@ async def of_ticket(session: AsyncSession, task_id: int) -> list[FlowTicketBranc
 @event.listens_for(Session, "before_flush")
 def _note_changes(session: Session, _ctx, _instances) -> None:  # noqa: ANN001
     for obj in (*session.new, *session.dirty, *session.deleted):
-        if isinstance(obj, (Landing, Train, Job)) or (isinstance(obj, FlowEvent) and obj in session.new and obj.kind in ("branches.tidied", "landing.stuck")):
+        if isinstance(obj, (Landing, Train, Job, Promotion)) or (isinstance(obj, FlowEvent) and obj in session.new and obj.kind in ("branches.tidied", "landing.stuck")):
             session.info.setdefault("flow_projects", set()).add(obj.project_id)
 
 

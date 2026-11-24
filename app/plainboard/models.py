@@ -380,6 +380,8 @@ class Repository(Timestamps, Base):
     token_enc: Mapped[str | None] = mapped_column(Text)
     ssh_key_enc: Mapped[str | None] = mapped_column(Text)
     ssh_public_key: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # Promotion (#129): the branch the base branch is promoted to when asked (e.g. main). Empty: none.
+    release_branch: Mapped[str] = mapped_column(String(200), default="", server_default="")
 
 
 agent_repositories = Table(
@@ -896,6 +898,38 @@ class Train(Timestamps, Base):
     failed_checks: Mapped[str] = mapped_column(Text, default="", server_default="")  # names, one per line
     escalated: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())  # the manager was told the base stays red
     rerun_at: Mapped[datetime | None] = mapped_column(DateTime)  # a look at the base branch (size 0): its failed jobs were run once more
+
+
+class PromotionStatus(StrEnum):
+    CHECKING = "checking"  # the check command runs on the commit (or the host's checks are awaited)
+    PROMOTED = "promoted"  # on the release branch
+    PULL_REQUEST = "pull_request"  # the release branch refused the push: a pull request is open for it
+    FAILED = "failed"  # nothing was pushed
+
+
+class Promotion(Timestamps, Base):
+    """A fixed commit of a repository's base branch brought to its release branch (#129), after one check
+    run on exactly that commit. Trains of the base branch go on meanwhile."""
+
+    __tablename__ = "promotions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    repository_id: Mapped[int] = mapped_column(ForeignKey("repositories.id", ondelete="CASCADE"), index=True)
+    base: Mapped[str] = mapped_column(String(200))
+    release: Mapped[str] = mapped_column(String(200))
+    sha: Mapped[str] = mapped_column(String(64))
+    release_sha: Mapped[str] = mapped_column(String(64), default="")  # the release branch before
+    tag: Mapped[str] = mapped_column(String(100), default="")
+    status: Mapped[str] = mapped_column(String(20), default=PromotionStatus.CHECKING, index=True)
+    mode: Mapped[str] = mapped_column(String(20), default="")  # command | github | none (no check: it passed before or there is none)
+    job_id: Mapped[str | None] = mapped_column(String(32))
+    how: Mapped[str] = mapped_column(String(20), default="")  # fast-forward | merge | pull-request
+    url: Mapped[str] = mapped_column(String(500), default="")  # the pull request
+    detail: Mapped[str] = mapped_column(Text, default="")  # why it failed, or a note (e.g. a tag that could not be set)
+    commits: Mapped[int] = mapped_column(Integer, default=0)
+    landing_ids: Mapped[list[int]] = mapped_column(JSON, default=list)  # the branches that landed on the base branch since the last promotion
+    by: Mapped[str] = mapped_column(String(100), default="")  # who asked: an agent's slug or a user's name
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
 class FlowEvent(Base):

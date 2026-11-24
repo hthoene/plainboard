@@ -10,6 +10,7 @@ import { useSince } from "../../lib/time";
 import { useShell } from "../layout/shell-context";
 import { clock, elapsedOf, ms, typicalOf, useFlowModel, type FlowModel } from "./flow";
 import { Branch, Held, Mark, Progress, Who } from "./parts";
+import { PromoteButton, PromotionLine } from "./Promote";
 
 const ROW = "grid grid-cols-[9px_minmax(0,1fr)_auto] items-baseline gap-x-2 border-b border-line px-2.5 py-2";
 
@@ -124,12 +125,14 @@ export function FlowView() {
           const landed = mine.filter((b) => b.status === "merged").sort((a, b) => ms(b.merged_at) - ms(a.merged_at));
           const typical = typicalOf(repo);
           const agentIds = busy.filter((id) => m.repoOfAgent(id) === repo.id);
+          const promotion = (live.promotions ?? []).find((p) => p.repository_id === repo.id);
           return (
             <div key={repo.id} className="mb-6" data-part="flow-repo">
               <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 px-4 pb-2">
                 <h2 className="font-extrabold">{repo.name}</h2>
                 <span className="font-mono text-fg-3">{repo.base}</span>
                 {repo.land_first && <Badge>{t("flow.landFirst")}</Badge>}
+                {repo.release && <span className="font-mono text-fg-3">→ {repo.release}</span>}
                 <span className="flex-1" />
                 {typical && <span className="text-fg-3">{t("flow.typical", { time: clock(typical) })}</span>}
                 <span className={clsx("flex items-baseline gap-1", repo.red ? "text-you-fg" : "text-fg-2")}>
@@ -137,6 +140,13 @@ export function FlowView() {
                   <span>{t(repo.red ? "flow.baseRed" : "flow.baseGreen")}</span>
                 </span>
               </div>
+              {repo.release && (
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 pb-2">
+                  <PromotionLine promotion={promotion} />
+                  <span className="flex-1" />
+                  <PromoteButton repo={repo} running={promotion?.status === "checking"} />
+                </div>
+              )}
               <div className="grid gap-y-5 px-2 @3xl:grid-cols-4 @3xl:gap-x-3">
                 <Lane title={t("flow.working")} count={agentIds.length}>
                   <WorkRows m={m} agentIds={agentIds} />

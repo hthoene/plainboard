@@ -6,11 +6,14 @@ from fastapi import APIRouter
 from plainboard_protocol import Credentials
 from pydantic import BaseModel, Field
 
-from ..schemas import RepositoryCreate, RepositoryOut, RepositoryUpdate
+from ..orchestration.runner_client import RunnerError
+from ..schemas import PromoteIn, PromotionOut, PromotionPreview, RepositoryCreate, RepositoryOut, RepositoryUpdate
 from ..services import ownership, permissions
 from ..services import projects as project_service
+from ..services import promotions as promotion_service
 from ..services import repositories as repo_service
 from ..services import settings as settings_service
+from ..services.errors import ServiceError
 from .deps import Runs, Session, Who
 
 router = APIRouter(prefix="/api", tags=["repositories"])
@@ -83,3 +86,22 @@ async def update_repository(repo_id: int, body: RepositoryUpdate, session: Sessi
 @router.delete("/repositories/{repo_id}", status_code=204)
 async def delete_repository(repo_id: int, session: Session) -> None:
     await repo_service.delete(session, await repo_service.get(session, repo_id))
+
+
+@router.get("/repositories/{repo_id}/promotion", response_model=PromotionPreview)
+async def promotion_preview(repo_id: int, session: Session, runs: Runs) -> PromotionPreview:
+    """What promoting the base branch to the release branch would bring now (#129)."""
+    try:
+        return await promotion_service.preview(session, runs, await repo_service.get(session, repo_id))
+    except RunnerError as exc:
+        raise ServiceError(f"The repository could not be read: {exc}", 502) from exc
+
+
+@router.post("/repositories/{repo_id}/promotion", response_model=PromotionOut, status_code=201)
+async def promote(repo_id: int, body: PromoteIn, session: Session, runs: Runs, who: Who) -> PromotionOut:
+    """Promote: check the base branch's commit once, then bring it to the release branch."""
+    try:
+        promotion = await promotion_service.start(session, runs, await repo_service.get(session, repo_id), by=who.name, tag=body.tag, sha=body.sha)
+    except RunnerError as exc:
+        raise ServiceError(f"The repository could not be read: {exc}", 502) from exc
+    return promotion_service.out(promotion)

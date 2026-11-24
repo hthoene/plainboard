@@ -8,7 +8,7 @@ import time
 from collections.abc import AsyncIterator
 
 import httpx
-from plainboard_protocol import GitLogResult, GitLogSpec, GitPresentResult, GitPresentSpec, ProjectFiles, TidyResult, TidySpec, CandidatesSpec, CheckResult, CleanupCandidate, CleanupResult, CleanupSpec, CompletionResult, CompletionSpec, Credentials, DeleteSpec, JobPort, JobSpec, JobState, JobTiming, LimitsEvent, MachineUsage, ProviderAccount, ProviderInfo, SignInAck, SignInFiles, SignInRefresh, PullRequestCheck, PullRequestState, RepoSpec, RunEvent, RunSpec, SkillFetch, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, TrimSpec, UnpushedSpec, UnpushedWork, UpstreamState, parse_event
+from plainboard_protocol import GitLogResult, GitLogSpec, GitPresentResult, GitPresentSpec, PromotePlan, PromotePushSpec, PromoteResult, PromoteSpec, ProjectFiles, TidyResult, TidySpec, CandidatesSpec, CheckResult, CleanupCandidate, CleanupResult, CleanupSpec, CompletionResult, CompletionSpec, Credentials, DeleteSpec, JobPort, JobSpec, JobState, JobTiming, LimitsEvent, MachineUsage, ProviderAccount, ProviderInfo, SignInAck, SignInFiles, SignInRefresh, PullRequestCheck, PullRequestState, RepoSpec, RunEvent, RunSpec, SkillFetch, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, TrimSpec, UnpushedSpec, UnpushedWork, UpstreamState, parse_event
 
 from ..services.errors import ServiceError
 
@@ -529,6 +529,19 @@ class RunnerClient:
             return CheckResult.model_validate(resp.json())
         except (httpx.HTTPError, ValueError) as exc:
             return CheckResult(ok=False, detail=unreachable(exc))
+
+    async def promotion_plan(self, spec: PromoteSpec) -> PromotePlan:
+        """What would go from the base branch to the release branch; with ``checkout``, prepared for its check."""
+        return PromotePlan.model_validate((await self._github("/promotions/plan", spec.model_dump(mode="json"), 600)).json())
+
+    async def promotion_push(self, spec: PromotePushSpec) -> PromoteResult:
+        """A checked commit of the base branch to the release branch (or a pull request, if the push is refused)."""
+        try:
+            resp = await self._client.post("/promotions/push", json=spec.model_dump(mode="json"), timeout=600)
+            resp.raise_for_status()
+            return PromoteResult.model_validate(resp.json())
+        except (httpx.HTTPError, ValueError) as exc:
+            return PromoteResult(ok=False, detail=unreachable(exc))
 
     async def branch_head(self, credentials: Credentials, remote: RepoSpec, branch: str) -> str | None:
         """The commit a branch points to on its remote; None if the branch is not there."""

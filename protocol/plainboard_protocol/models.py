@@ -590,6 +590,57 @@ class TrainLandSpec(BaseModel):
     delete_branches: dict[str, str] = Field(default_factory=dict)  # branch -> the commit that landed
 
 
+class PromoteSpec(BaseModel):
+    """Promotion (#129): what goes from the base branch (e.g. dev) to the release branch (e.g. main). In a
+    clone of its own, so trains of the base branch go on meanwhile. ``checkout``: the commit is checked out
+    there for the check command (the promotion), else only read (a preview)."""
+
+    credentials: Credentials
+    key: str = Field(pattern=TRAIN_KEY)
+    remote: RepoSpec
+    base: str | None = Field(default=None, max_length=200)  # None: the repository's default branch
+    release: str = Field(min_length=1, max_length=200)
+    sha: str | None = Field(default=None, pattern=r"^[0-9a-f]{7,64}$")  # None: the head of the base branch now
+    checkout: bool = False
+    limit: int = Field(default=200, ge=1, le=2000)
+
+
+class PromotePlan(BaseModel):
+    base: str
+    release: str
+    sha: str  # the fixed commit of the base branch that is promoted
+    release_sha: str | None = None  # the release branch now; None: it does not exist yet
+    fast_forward: bool = True  # the release branch is an ancestor of sha
+    total: int = 0  # commits on sha that the release branch lacks (merges included)
+    commits: list[GitCommit] = Field(default_factory=list)  # newest first, without merges, at most ``limit``
+    first_parent: list[str] = Field(default_factory=list)  # the base branch's own commits in the range (train heads), newest first
+
+
+class PromotePushSpec(BaseModel):
+    """Bring a checked commit of the base branch to the release branch: a fast-forward push, else a merge
+    commit. A push the host refuses (a protected branch) becomes a pull request when ``github`` names the
+    repository (owner/name)."""
+
+    credentials: Credentials
+    key: str = Field(pattern=TRAIN_KEY)
+    remote: RepoSpec
+    base: str = Field(min_length=1, max_length=200)
+    release: str = Field(min_length=1, max_length=200)
+    sha: str = Field(pattern=r"^[0-9a-f]{7,64}$")
+    tag: str = Field(default="", max_length=100)
+    github: str | None = None
+    title: str = Field(default="", max_length=300)
+
+
+class PromoteResult(BaseModel):
+    ok: bool
+    how: str = ""  # fast-forward | merge | pull-request | "" (failed)
+    sha: str = ""  # what the release branch points to now (a pull request: the commit it proposes)
+    number: int | None = None  # pull-request: its number
+    url: str = ""
+    detail: str = ""
+
+
 class BranchRef(BaseModel):
     credentials: Credentials
     remote: RepoSpec

@@ -224,7 +224,7 @@ async def _delete(session: AsyncSession, project: Project, runner, files: bool) 
 
     if runner is not None:
         folder = f"{get_config().workspaces_root}/{project.slug}" if files and not project.workspace_path else None
-        trains = [landing_service.train_key(r) for r in await repo_service.list_for_project(session, project.id)]
+        trains = [k for r in await repo_service.list_for_project(session, project.id) for k in (landing_service.train_key(r), f"{landing_service.train_key(r)}-release")]  # the promotions' clone too (services/promotions.key)
         rested = project.paused_at is not None
         if not rested:
             project.paused_at = utcnow()

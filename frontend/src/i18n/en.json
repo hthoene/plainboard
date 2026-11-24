@@ -249,6 +249,8 @@
     "repoTidyHint": "Every hour and after each landing, PlainBoard deletes the branches whose content is all on the base branch already, also when they were squashed, rebased or landed inside another branch. Anything not proven to be there stays, and so do the base and default branch, protected branches, branches of open pull requests, what PlainBoard has in flight, and anything with a commit younger than an hour. The manager is told each deleted branch with its commit, so it can be restored; old branches with unmerged work are only named to it.",
     "repoLandingHint": "An agent hands over its finished branch and goes on with other work. PlainBoard brings the branches to the base branch by itself.",
     "repoLandWhen": "When does a finished branch reach the base branch?",
+    "repoRelease": "Release branch",
+    "repoReleaseHint": "Optional, e.g. main. Branches land on the base branch; when you or the manager promote it, its head is checked once and brought to this branch (in the flow view). Empty: no promotion step.",
     "repoLandChecked": "After the checks pass",
     "repoLandCheckedHint": "PlainBoard merges all finished branches, checks them once together, and only what passes reaches the base branch. Right for a branch you release from, and where checks are quick and reliable.",
     "repoLandFirstBadge": "merges at once",
@@ -1595,7 +1597,8 @@
       "repair": "Repair by its author",
       "checking": "Checked on a train",
       "landed": "Landed on the base branch",
-      "stuck": "With the manager"
+      "stuck": "With the manager",
+      "released": "Released"
     },
     "member": {
       "turn": "Working",
@@ -1614,6 +1617,32 @@
       "quiet": "Nothing on its way",
       "waiting": "{{count}} handed over",
       "repairing": "{{count}} being repaired"
+    },
+    "promotion": {
+      "button": "Promote to {{release}}",
+      "title": "Promote {{base}} to {{release}}",
+      "confirm": "Check and promote to {{release}}",
+      "summary_one": "{{count}} commit of {{base}} at {{sha}} is not on {{release}} yet.",
+      "summary_other": "{{count}} commits of {{base}} at {{sha}} are not on {{release}} yet.",
+      "fastForward": "{{release}} is moved forward to it.",
+      "merge": "{{release}} has commits of its own: it gets a merge commit.",
+      "check": "The repository's checks run once on exactly this commit; only if they pass is it pushed. Branches keep landing on the base branch meanwhile.",
+      "checked": "This exact commit passed its checks already: it is pushed without another check run.",
+      "running": "A promotion ({{sha}}) is on its way already.",
+      "nothing": "Nothing to promote: {{release}} has everything of {{base}}.",
+      "tickets_one": "{{count}} landed branch",
+      "tickets_other": "{{count}} landed branches",
+      "noTickets": "No branches of PlainBoard since the last promotion.",
+      "commits_one": "{{count}} commit",
+      "commits_other": "{{count}} commits",
+      "moreCommits": "… and {{count}} more",
+      "tag": "Tag (optional)",
+      "tagHint": "Set on the promoted commit, e.g. a version.",
+      "checking": "Promotion of {{sha}} to {{release}}: being checked",
+      "promoted": "{{sha}} promoted to {{release}}",
+      "pull_request": "{{release}} is protected: pull request for {{sha}}",
+      "failed": "Promotion of {{sha}} to {{release}} failed",
+      "open": "Open"
     }
   },
   "customerLanguages": {

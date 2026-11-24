@@ -27,6 +27,8 @@ import type {
   FlowHistory,
   FlowLive,
   FlowTicketBranch,
+  Promotion,
+  PromotionPreview,
   Idea,
   IdeasData,
   IdeaVersion,
@@ -221,5 +223,13 @@ export const useFlowHistory = (pid: number, repositoryId: number | null) =>
     },
     getNextPageParam: (last) => last.next_before,
   });
+/** What promoting a repository's base branch to its release branch would bring now (#129): read from git when the dialog opens. */
+export const usePromotionPreview = (repoId: number, enabled: boolean) =>
+  useQuery({ queryKey: ["promotion", repoId], queryFn: () => api.get<PromotionPreview>(`/repositories/${repoId}/promotion`), enabled, staleTime: 0, retry: false });
+export const usePromote = (pid: number) =>
+  useApiMutation(
+    ({ repoId, tag, sha }: { repoId: number; tag: string; sha: string }) => api.post<Promotion>(`/repositories/${repoId}/promotion`, { tag, sha }),
+    () => [qk.flow(pid)],
+  );
 /** The way a ticket's branches take to the base branch. */
 export const useTaskFlow = (taskId: number) => useQuery({ queryKey: ["taskflow", taskId], queryFn: () => api.get<FlowTicketBranch[]>(`/tasks/${taskId}/flow`) });

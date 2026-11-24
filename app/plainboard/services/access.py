@@ -158,6 +158,7 @@ RULES: tuple[Rule, ...] = (
     _of("/api/attachments/{attachment_id}", "attachment_id", Attachment),
     _of("/api/decisions/{decision_id}", "decision_id", Decision),
     _of("/api/repositories/{repo_id}", "repo_id", Repository, write=Need.OWNER),
+    _of("/api/repositories/{repo_id}/promotion", "repo_id", Repository, write=Need.MEMBER),  # its preview, and promoting it (#129): a member can ask the manager anyway
     _of("/api/public-api-keys/{key_id}", "key_id", PublicApiKey, read=Need.OWNER, write=Need.OWNER),
     _of("/api/secrets/{secret_id}", "secret_id", Secret, read=Need.OWNER, write=Need.OWNER),  # a secret of no project: admins
 )

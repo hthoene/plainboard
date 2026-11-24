@@ -71,6 +71,9 @@ Time here is the opposite of what human teams are used to, and your instincts ab
     base branch afterwards, once for all that landed, and a failure is repaired there by one
     assignment. The base branch is then red for a while. Right for a development branch; not for a
     branch that is released from. list_repositories shows how each one lands.
+  - A repository with a release branch (update_repository release_branch, e.g. main) is promoted from
+    its base branch only when the user asks or the project's agreed workflow says so: promotion_preview
+    shows what would go, promote_branch checks it once and brings it there.
   - What a minute can check must never cost a train. Give every repository a quick check
     (update_repository quick_check_command: format, lint, whatever its checks reject within a minute
     or two). PlainBoard runs it the moment a branch is handed over, and its author fixes what it finds

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket
 from fastapi.responses import Response, StreamingResponse
-from plainboard_protocol import ACCOUNT_KEY_PATTERN, DEFAULT_ACCOUNT, BranchRef, CandidatesSpec, CheckResult, CleanupCandidate, CleanupResult, CleanupSpec, CommitRef, CompletionResult, CompletionSpec, Credentials, DeleteSpec, ErrorEvent, GitLogResult, GitLogSpec, GitPresentResult, GitPresentSpec, JobPort, JobTiming, JobSpec, JobState, LimitsEvent, MachineUsage, ProjectFiles, ProviderAccount, ProviderInfo, SignInAck, SignInFiles, SignInRefresh, files_digest, PullRequestCheck, PullRequestRef, PullRequestState, RepoSpec, RerunRef, RunSpec, SkillFetch, TidyResult, TidySpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, TrimSpec, UnpushedSpec, UnpushedWork, UpstreamRef, UpstreamState
+from plainboard_protocol import ACCOUNT_KEY_PATTERN, DEFAULT_ACCOUNT, BranchRef, CandidatesSpec, CheckResult, CleanupCandidate, CleanupResult, CleanupSpec, CommitRef, CompletionResult, CompletionSpec, Credentials, DeleteSpec, ErrorEvent, GitLogResult, GitLogSpec, GitPresentResult, GitPresentSpec, PromotePlan, PromotePushSpec, PromoteResult, PromoteSpec, JobPort, JobTiming, JobSpec, JobState, LimitsEvent, MachineUsage, ProjectFiles, ProviderAccount, ProviderInfo, SignInAck, SignInFiles, SignInRefresh, files_digest, PullRequestCheck, PullRequestRef, PullRequestState, RepoSpec, RerunRef, RunSpec, SkillFetch, TidyResult, TidySpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, TrimSpec, UnpushedSpec, UnpushedWork, UpstreamRef, UpstreamState
 from pydantic import BaseModel, Field
 
 from . import cleanup
@@ -28,6 +28,7 @@ from .browser import browsers
 from . import jobs
 from . import notices
 from . import ports
+from . import promote
 from . import selfupdate
 from . import signins
 from . import skills
@@ -714,6 +715,23 @@ async def check_train(spec: TrainCheckSpec) -> JobState:
 @app.post("/trains/land", response_model=CheckResult)
 async def land_train(spec: TrainLandSpec) -> CheckResult:
     return await trains.land(spec)
+
+
+@app.post("/promotions/plan", response_model=PromotePlan)
+async def promotion_plan(spec: PromoteSpec) -> PromotePlan:
+    """What would go from the base branch to the release branch (#129); with checkout, prepared for its check."""
+    try:
+        return await promote.plan(spec)
+    except (WorkspaceError, ValueError, OSError) as exc:
+        raise HTTPException(502, str(exc)[:600]) from exc
+
+
+@app.post("/promotions/push", response_model=PromoteResult)
+async def promotion_push(spec: PromotePushSpec) -> PromoteResult:
+    try:
+        return await promote.push(spec)
+    except (WorkspaceError, ValueError, OSError) as exc:
+        return PromoteResult(ok=False, detail=str(exc)[:600])
 
 
 @app.post("/github/upstream")

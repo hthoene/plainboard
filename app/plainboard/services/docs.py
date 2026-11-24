@@ -82,7 +82,7 @@ def clean_languages(values: list[str], language: str) -> list[str]:
 
 def site_out(site: DocSite, pages: int = 0, stale: int = 0, agent: Agent | None = None, releases: list | None = None) -> DocSiteOut:
     return DocSiteOut(
-        releases=releases or [],
+        releases=releases or [], versioned=site.versioned,
         id=site.id, project_id=site.project_id, name=site.name, slug=site.slug, description=site.description, spec=site.spec,
         published=site.published, public=site.public, language=site.language, languages=list(site.languages or []),
         translator=site.translator, translate_provider=site.translate_provider, translate_model=site.translate_model,
@@ -138,7 +138,7 @@ async def find_site(session: AsyncSession, project_id: int, ref: str) -> DocSite
 async def create_site(
     session: AsyncSession, project_id: int, *, name: str, slug: str | None = None, description: str = "", spec: str = "", published: bool = False,
     public: bool = False, language: str = "en", languages: list[str] | None = None, agent_provider: str | None = None, agent_model: str | None = None,
-    agent_effort: str | None = None,
+    agent_effort: str | None = None, versioned: bool = False,
 ) -> DocSite:  # fmt: skip
     """With its doc agent, the one agent that writes it (``ensure_agent``)."""
     if slug and await session.scalar(select(DocSite.id).where(DocSite.slug == slug)) is not None:
@@ -148,6 +148,7 @@ async def create_site(
     site = DocSite(
         project_id=project_id, name=name.strip(), slug=slug or await unique_site_slug(session, name), description=description.strip(), spec=spec.strip(),
         published=published, public=public, language=language, languages=clean_languages(languages or [], language), domain_token=secrets.token_urlsafe(24),
+        versioned=versioned,
     )  # fmt: skip
     session.add(site)
     await session.flush()
@@ -227,7 +228,7 @@ ASSISTANT_FIELDS = (
     "assistant_enabled", "assistant_provider", "assistant_model", "assistant_effort", "assistant_code", "assistant_daily_messages",
     "assistant_daily_cost", "assistant_max_tokens",
 )  # fmt: skip
-SITE_FIELDS = ("name", "description", "spec", "published", "public", "translator", "translate_provider", "translate_model", *ASSISTANT_FIELDS)
+SITE_FIELDS = ("name", "description", "spec", "published", "public", "versioned", "translator", "translate_provider", "translate_model", *ASSISTANT_FIELDS)
 ASSISTANT_PROVIDERS = ("", "claude_code")  # a provider whose runs can go without any built-in tool (toolset "none")
 ASSISTANT_WARNING = (
     "With this on, the assistant reads the project's code and the public texts of its tickets to answer visitors. "

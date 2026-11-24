@@ -1,4 +1,4 @@
-"""Versions of doc sites (#126): doc_releases, and the range of versions each doc page row holds.
+"""Versions of doc sites (#126): doc_releases, the range of versions each doc page row holds, doc_sites.versioned.
 
 Revision ID: 0092
 Revises: 0091
@@ -33,6 +33,8 @@ def upgrade() -> None:
     )
     op.create_index("ix_doc_releases_project_id", "doc_releases", ["project_id"])
     op.create_index("ix_doc_releases_site_id", "doc_releases", ["site_id"])
+    with op.batch_alter_table("doc_sites") as batch:
+        batch.add_column(sa.Column("versioned", sa.Boolean(), nullable=False, server_default=sa.false()))
     with op.batch_alter_table("doc_pages") as batch:
         batch.add_column(sa.Column("page_key", sa.Integer(), nullable=True))
         batch.add_column(sa.Column("since_seq", sa.Integer(), nullable=False, server_default="1"))
@@ -55,3 +57,5 @@ def downgrade() -> None:
         batch.drop_column("since_seq")
         batch.drop_column("page_key")
     op.drop_table("doc_releases")
+    with op.batch_alter_table("doc_sites") as batch:
+        batch.drop_column("versioned")

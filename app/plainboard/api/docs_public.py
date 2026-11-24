@@ -9,7 +9,8 @@ in their project.
 - JSON under ``/api/public/docs/<slug>``: the site with its top level (``?lang=``), ``/nav?parent=&offset=&limit=``
   (children, page by page), ``/page?path=&lang=``, ``/search?q=&lang=``, ``/files/<id>``. ETag on every view. Each
   takes ``?release=<version slug>`` (none: the default version); the site's view names the version shown
-  (``version``), the ones to switch to (``versions``) and the site's address without the version (``site_base``).
+  (``version``), the ones to switch to (``versions``) and the site's address without the version (``site_base``);
+  a site without versions (``versioned`` false) has none of them and takes no ``release``.
 - ``/custom/<page>?lang=``: a page of the site's own (#121, services/docs_custom.py), at ``p/<page>`` in the HTML.
 - ``POST /api/public/docs/<slug>/assistant`` {text, conversation?, lang?}: the site's assistant (#119, where
   ``assistant`` is true in the site's view), the answer streamed as NDJSON (``DocsAssistant.stream``); refused with

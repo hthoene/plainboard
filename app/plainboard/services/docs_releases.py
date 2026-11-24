@@ -10,6 +10,10 @@ and a page is one row for all versions in which it is the same (``DocPage.since_
 makes a second row, for the versions it goes to. So the rows, the search index and the translations grow with the
 changes, not with pages × versions, and every query of a version is the same indexed query with a range condition.
 
+Versions are optional per site (``DocSite.versioned``, off by default): a site without them always shows its current
+state (the working version, no version in its addresses, no switcher, no banner). The first cut turns them on;
+turned off again, nothing is deleted: the versions stay (and can still be edited in the app) but are not served.
+
 Visitors get the default version at /docs/<site>/ (the one marked ``is_default``, else the latest released one that
 is neither hidden nor deprecated, else the working one) and any other at /docs/<site>/<version slug>/. ``hidden``
 takes a version off the served site (for the working version: whether it is public at all). The site's footer pages
@@ -161,6 +165,7 @@ async def cut(session: AsyncSession, site: DocSite, *, name: str, slug: str | No
         project_id=site.project_id, site_id=site.id, seq=working.seq, working=False, name=name, slug=slug, notes=notes.strip(), released_on=_naive(released_on) or utcnow(),
     )  # fmt: skip
     working.seq += 1
+    site.versioned = True  # the first cut turns versions on
     session.add(rel)
     await _changed(session, site)
     return rel
@@ -215,6 +220,11 @@ async def delete(session: AsyncSession, site: DocSite, rel: DocRelease) -> None:
 async def served(session: AsyncSession, site: DocSite, slug: str | None) -> tuple[DocRelease, DocRelease, list[DocRelease]]:
     """(the version asked for, the default, all versions) for a visitor; a hidden one only as the default."""
     rels = await releases(session, site.id)
+    if not site.versioned:  # always the current state, at the addresses without a version
+        if slug:
+            raise NotFound("Not found")
+        working = next(r for r in rels if r.working)
+        return working, working, []
     default = pick_default(rels)
     if not slug:
         return default, default, rels

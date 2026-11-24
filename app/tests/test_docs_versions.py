@@ -23,7 +23,7 @@ def test_a_cut_version_keeps_its_pages_while_the_working_one_goes_on_and_both_ca
     sid = s["id"]
     base = f"/api/projects/{pid}/docs"
     working = s["releases"][0]
-    assert working["working"] and working["slug"] == "next" and working["default"]
+    assert working["working"] and working["slug"] == "next" and working["default"] and not s["versioned"]
     intro = page(client, pid, sid, title="Intro", body="Old intro.")
     guide = page(client, pid, sid, title="Guide", body=f"See [intro](doc-page:{intro['id']}).")
     setup = page(client, pid, sid, title="Setup", parent_id=guide["id"], body="Install it.")
@@ -31,6 +31,7 @@ def test_a_cut_version_keeps_its_pages_while_the_working_one_goes_on_and_both_ca
     cut = client.post(f"{base}/sites/{sid}/releases", json={"name": "1.0", "notes": "First release"})
     assert cut.status_code == 201, cut.text
     v1 = cut.json()
+    assert client.get(f"{base}/sites/{sid}").json()["versioned"]  # the first cut turns versions on
     assert v1["slug"] == "1.0" and not v1["working"] and v1["default"] and v1["url"] == "/docs/handbook/"
     assert len(rows_of(client, intro["id"])) == 1  # nothing copied
 
@@ -216,3 +217,35 @@ def test_many_versions_of_a_large_site_cost_rows_by_changes_not_by_versions(clie
     assert len(oldest["sidebar"][0]["items"]) == 40 and oldest["sidebar"][1]["total"] == 49
     assert client.get("/api/public/docs/handbook/page", params={"path": "p2/p41", "release": "1.1"}).json()["markdown"] == "Changed in 1.1"
     assert client.get("/api/public/docs/handbook/page", params={"path": "p2/p41"}).json()["markdown"] == "Changed in 1.1"  # the default: 1.24
+
+
+def test_a_site_without_versions_always_shows_its_current_state_and_turning_them_off_deletes_nothing(client, project):
+    pid = project["id"]
+    s = site(client, pid, published=True, public=True)
+    base = f"/api/projects/{pid}/docs"
+    p = page(client, pid, s["id"], title="Intro", body="Current.")
+    client.cookies.clear()
+    view = client.get("/api/public/docs/handbook").json()
+    assert view["versioned"] is False and view["version"] is None and view["versions"] == [] and view["base"] == "/docs/handbook"
+    assert client.get("/api/public/docs/handbook", params={"release": "next"}).status_code == 404
+    assert client.get("/docs/handbook/next/intro").status_code == 404 and client.get("/docs/handbook/intro").status_code == 200
+
+    from conftest import ADMIN_PASSWORD
+    from test_permissions import sign_in
+
+    sign_in(client, "admin", ADMIN_PASSWORD)
+    v1 = client.post(f"{base}/sites/{s['id']}/releases", json={"name": "1.0"}).json()
+    client.patch(f"{base}/pages/{p['id']}", json={"body": "Newer."})
+    client.cookies.clear()
+    assert client.get("/api/public/docs/handbook/page", params={"path": "intro"}).json()["markdown"] == "Current."
+    sign_in(client, "admin", ADMIN_PASSWORD)
+    off = client.patch(f"{base}/sites/{s['id']}", json={"versioned": False}).json()
+    assert off["versioned"] is False and [r["name"] for r in off["releases"]] == ["next", "1.0"]  # kept
+    client.cookies.clear()
+    assert client.get("/api/public/docs/handbook/page", params={"path": "intro"}).json()["markdown"] == "Newer."
+    assert client.get("/docs/handbook/1.0/intro").status_code == 404
+    sign_in(client, "admin", ADMIN_PASSWORD)
+    assert client.get(f"{base}/pages/{p['id']}", params={"release": v1["id"]}).json()["body"] == "Current."
+    client.patch(f"{base}/sites/{s['id']}", json={"versioned": True})
+    client.cookies.clear()
+    assert client.get("/docs/handbook/1.0/intro").status_code == 200

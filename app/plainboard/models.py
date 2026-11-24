@@ -649,6 +649,9 @@ class DocSite(Timestamps, Base):
     # Its look (#121, services/docs_theme.py): logos, colours, font, corners, header links, custom CSS. Empty: the
     # look every site has.
     theme: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, server_default="{}")
+    # Versions (#126, services/docs_releases.py): off, the site always shows its current state (the working version,
+    # no version in its addresses); on with the first cut. Off again, its versions stay but are not served.
+    versioned: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 
 
 class DocPage(Timestamps, Base):

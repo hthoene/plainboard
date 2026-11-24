@@ -187,7 +187,10 @@ class Version:
         from . import docs_releases
 
         r = self.rel
+        if not self.releases:  # a site without versions
+            return {"versioned": False, "version": None, "versions": [], "site_base": self.site_base}
         return {
+            "versioned": True,
             "version": {"slug": r.slug, "name": r.name, "working": r.working, "deprecated": r.deprecated, "default": r.id == self.default.id, "released_on": r.released_on, "notes": r.notes},
             "versions": docs_releases.public_list(self.releases, self.default), "site_base": self.site_base,
         }  # fmt: skip

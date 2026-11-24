@@ -52,7 +52,7 @@ def _site_line(site, pages: int, stale: int) -> str:  # noqa: ANN001
     served = ("public" if site.public else "private") if site.published else "draft"
     langs = f"; languages {site.language}+{','.join(site.languages)}" if site.languages else ""
     agent = f"; doc agent {site.agent.slug}" if getattr(site, "agent", None) else ""
-    released = [r for r in getattr(site, "releases", []) if not r.working]
+    released = [r for r in getattr(site, "releases", []) if not r.working] if getattr(site, "versioned", False) else []
     versions = "; versions: working + " + ", ".join(r.name + (" (deprecated)" if r.deprecated else "") + (" (hidden)" if r.hidden else "") for r in released[:10]) if released else ""
     return f"- {site.slug}: {site.name} [{served}; {where}; {pages} pages" + (f", {stale} marked outdated" if stale else "") + f"{langs}{versions}{agent}]"
 
@@ -234,6 +234,7 @@ class ManageDocSiteArgs(BaseModel):
     agent_provider: str | None = Field(default=None, max_length=50, description="Its doc agent's provider (list_models); empty = default")
     agent_model: str | None = Field(default=None, max_length=100, description="Its doc agent's model; empty = the default for members")
     agent_effort: Literal["", "low", "medium", "high", "xhigh", "max"] | None = None
+    versioned: bool | None = Field(default=None, description="Use versions (manage_doc_version); off = always the current state, versions kept but not shown")
     domain_help: bool = Field(default=False, description="Also return how the user gives it an own domain")
 
 
@@ -262,7 +263,7 @@ async def manage_doc_site(ctx: ToolContext, args: ManageDocSiteArgs) -> str:
             raise ToolError("A new site needs a name.")
         site = await docs_service.create_site(
             ctx.session, ctx.project.id, name=args.name, slug=args.slug, description=args.description or "", spec=args.spec or "", published=bool(args.published),
-            public=bool(args.public), languages=args.languages or [], **agent_args,
+            public=bool(args.public), languages=args.languages or [], versioned=bool(args.versioned), **agent_args,
         )  # fmt: skip
         if args.translator or args.translate_model:
             site = await docs_service.update_site(ctx.session, site, translator=args.translator, translate_model=args.translate_model)

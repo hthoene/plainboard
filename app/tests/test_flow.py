@@ -6,6 +6,8 @@ import gzip
 import json
 from datetime import timedelta
 
+import pytest
+
 from conftest import FakeRunner, agents_by_slug, idle, runs_of, wait_for
 from plainboard_protocol import JobState, PullRequestCheck, PullRequestState
 
@@ -124,6 +126,33 @@ def test_an_assignment_stays_open_while_its_job_runs_and_reports_once(client, pr
     assert report["agent_id"] == manager["id"] and report["trigger"] == "wake"
     update = runner(client).specs[-1].prompt
     assert 'Assignment #1 "Fix it" (Dev) done after' in update and "of work in 2 turns" in update and "All green" in update
+
+
+@pytest.mark.parametrize("by", ["ask", "chat"])
+def test_an_assignment_turn_ended_for_a_question_stays_open_and_goes_on_after_the_answer(client, project, monkeypatch, by):
+    """#150: told that a teammate (or the user) waits for an answer, the agent ended its turn to answer first.
+    That turn's text was taken as the report and the assignment counted as done, with its work still open."""
+    monkeypatch.setattr("plainboard.orchestration.run_manager.ASK_BUSY_TIMEOUT_SECONDS", 0.05)
+    pid = project["id"]
+    dev = make_member(client, pid)
+    manager = manager_of(client, pid)
+    chat(client, manager["id"], delegate("dev", "Fix it", "HOLD\nSAY first the question, then the rest"))
+    wait_for(lambda: any(r["trigger"] == "assignment" and r["status"] == "running" for r in runs_of(client, pid)))
+    if by == "ask":
+        chat(client, manager["id"], 'TOOL ask_agent {"agent": "dev", "question": "SAY the answer"}')
+    else:
+        chat(client, dev["id"], "SAY the answer")
+    wait_for(lambda: runner(client).notices)
+    runner(client).released = True
+    wait_for(lambda: idle(client, pid) and assignments(client, pid)[0]["status"] == "done")
+    (assignment,) = assignments(client, pid)
+    assert assignment["result"] == "ok"  # the turn that went on with it reports, not the one that stopped for the answer
+    triggers = [r["trigger"] for r in sorted(runs_of(client, pid, agent_id=dev["id"]), key=lambda r: r["id"])]
+    assert triggers == ["assignment", by, "wake"]  # the answer first, then the assignment goes on
+    going_on = next(s.prompt for s in runner(client).specs if "Go on with assignment #1" in s.prompt)
+    assert "to answer in between, and it is still open" in going_on
+    reports = [s.prompt for s in runner(client).specs if 'Assignment #1 "Fix it"' in s.prompt]
+    assert len(reports) == 1 and "done after" in reports[0] and "first the question" not in reports[0]
 
 
 def test_a_job_whose_waiting_tool_call_outlived_its_turn_still_continues_the_assignment(client, project):

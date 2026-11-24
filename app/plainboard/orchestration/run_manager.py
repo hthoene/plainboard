@@ -246,6 +246,10 @@ class RunManager:
         self._run_tasks: set[asyncio.Task[None]] = set()  # every turn's task until it is done
         self._state_tried: dict[int, float] = {}  # closed tickets whose last rewrite was started then (see refresh_closed_tickets)
         self._unread: dict[int, set[int]] = {}  # running turn -> waiting chat messages (runs) it was told about and has not read yet
+        # Running turn -> questions and chat messages (runs) it was told to end its turn for (#150): an assignment
+        # turn that ends while one of them still waits stays open, and goes on after it (_settle).
+        self._interrupts: dict[int, set[int]] = {}
+        self._resumed: set[int] = set()  # assignments whose next turn goes on after such an interruption
         # agent -> what changes its waiting chat run (a message joining, one withdrawn): read and write back
         # the parts one after the other, so no message overwrites another. The app runs as one process.
         self._chat_locks: dict[int, asyncio.Lock] = {}
@@ -666,6 +670,7 @@ class RunManager:
         if busy_run and (text.strip() or attachment_ids):
             if await self.runners.of(agent.project_id).notify_run(busy_run, prompts.chat_notice(text, len(attachment_ids or []))):
                 self._unread.setdefault(busy_run, set()).add(run.id)  # it reads it after the step it is in
+                self._interrupts.setdefault(busy_run, set()).add(run.id)
             if ended := self._end_waits(busy_run, "the user wrote to you"):  # no wait is worth more than the user
                 await flow_log.record(s, agent.project_id, "wait.ended", agent_id=agent.id, run_id=busy_run, waits=ended, by="user")
         return run
@@ -941,7 +946,8 @@ class RunManager:
                 s, target, RunTrigger.ASK, prompts.ask_prompt(caller, question), source_agent_id=caller.id, parent_run_id=ctx.run_id
             )
         if busy_run:
-            await self.runners.of(target.project_id).notify_run(busy_run, prompts.ask_notice(caller, question))
+            if await self.runners.of(target.project_id).notify_run(busy_run, prompts.ask_notice(caller, question)):
+                self._interrupts.setdefault(busy_run, set()).add(run.id)
             if ended := self._end_waits(busy_run, f"{caller.name} is waiting for your answer", asks=False):  # a job's result comes by itself
                 async with self._sm() as s:
                     await flow_log.record(s, target.project_id, "wait.ended", agent_id=target.id, run_id=busy_run, waits=ended, by=caller.name)
@@ -1522,6 +1528,7 @@ class RunManager:
             self._lost.discard(run_id)
             self._job_waits.pop(run_id, None)
             self._unread.pop(run_id, None)
+            self._interrupts.pop(run_id, None)
             self._busy_agents.discard(agent_id)
             self._wake.set()
             try:
@@ -1572,9 +1579,11 @@ class RunManager:
             if run.input_text or files:
                 text = run.input_text
             elif held is not None and not await job_service.running_for_assignment(s, held.id):
-                text = prompts.continue_prompt(held, (await timing_service.ledger(s, held)).text())
+                text = prompts.continue_prompt(held, (await timing_service.ledger(s, held)).text(), interrupted=held.id in self._resumed)
             else:
                 text = prompts.wake_prompt(agent.is_manager)
+            if held is not None:
+                self._resumed.discard(held.id)
             meta: dict = {"trigger": run.trigger}
             if run.task_id:
                 meta["task_id"] = run.task_id
@@ -1911,12 +1920,25 @@ class RunManager:
         unread = assignment.agent_id in self._job_news or assignment.id in self._comment_news.get(assignment.agent_id, ())
         return unread and bool(await inbox.pending_count(s, assignment.agent_id))
 
+    async def _interrupted(self, s: AsyncSession, run: Run) -> bool:
+        """Whether the turn was told to end for a question or chat message that still waits for its turn."""
+        told = self._interrupts.get(run.id)
+        if not told:
+            return False
+        return bool(await s.scalar(select(Run.id).where(Run.id.in_(told), Run.status == RunStatus.QUEUED).limit(1)))
+
     async def _assignment_turn_ended(self, s: AsyncSession, run: Run, assignment: Assignment, agent: Agent, project: Project, outcome_text: str) -> None:
         """Close the assignment and send its one report, unless it still waits for a job of its own:
         then it stays open, and the turn that the job's result starts continues it."""
         ok = run.status == RunStatus.SUCCEEDED
         text = run.result_text or ""
         if ok and project.auto_wake_manager and await self._waits_for_job(s, assignment):
+            bus.publish(project.id, "assignment.upserted", AssignmentOut.model_validate(assignment))
+            return
+        if ok and await self._interrupted(s, run):
+            # It ended its turn for a question or chat message that waits as its next turn (#150): not finished.
+            # Its text is no report; the turn after that answer goes on with the assignment (_settle).
+            self._resumed.add(assignment.id)
             bus.publish(project.id, "assignment.upserted", AssignmentOut.model_validate(assignment))
             return
         if ok and run.stop_requested_at and not agent.enabled:

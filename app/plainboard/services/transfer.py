@@ -89,10 +89,12 @@ TABLES: tuple[Table, ...] = (
     Table("ideas", refs={"topic_id": "idea_topics", "task_id": "tasks"}, late={"merged_into_id": "ideas"}),
     Table("idea_links", refs={"idea_id": "ideas", "other_id": "ideas"}),
     Table("idea_versions", refs={"idea_id": "ideas"}),
-    Table("doc_pages", refs={"site_id": "doc_sites"}, late={"parent_id": "doc_pages"}, reset={"reminded_at": None}),
+    Table("doc_releases", refs={"site_id": "doc_sites"}),
+    Table("doc_pages", refs={"site_id": "doc_sites"}, late={"parent_id": "doc_pages", "page_key": "doc_pages"}, reset={"reminded_at": None}),
     Table("doc_page_versions", refs={"page_id": "doc_pages", "agent_id": "agents"}),
     Table("doc_translations", refs={"site_id": "doc_sites", "page_id": "doc_pages"}),
     Table("doc_custom_pages", refs={"site_id": "doc_sites"}),
+    Table("doc_theme_versions", refs={"site_id": "doc_sites", "agent_id": "agents"}),
     Table("ticket_states", ("task_id", "tasks"), {"task_id": "tasks", "until_assignment_id": "assignments"}, key="task_id"),
     # A chat goes on from its summary and its latest messages: the provider's own session stays behind.
     Table(

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from ..models import DocSite
+from ..models import DocRelease, DocSite
 from ..services import docs_assistant as assistant
 from .registry import VISITOR, ToolContext, ToolError, local_tool, tool
 
@@ -15,12 +15,16 @@ DOCS_TOOLS = ("search_pages", "read_page")
 CODE_TOOLS = ("search_code", "read_code", "board_status")
 
 
-async def _site(ctx: ToolContext) -> tuple[DocSite, object]:
+async def _site(ctx: ToolContext) -> tuple[DocSite, object, DocRelease | None]:
+    """The site, the conversation and the version the visitor reads (None: the working one)."""
     chat = ctx.run.doc_chat
     site = await ctx.session.get(DocSite, chat.site_id) if chat else None
     if site is None or not site.published or site.project_id != ctx.project.id:
         raise ToolError("This documentation is not available.")
-    return site, chat
+    rel = await ctx.session.get(DocRelease, chat.release_id) if getattr(chat, "release_id", None) else None
+    if rel is not None and rel.site_id != site.id:
+        raise ToolError("This documentation is not available.")
+    return site, chat, rel
 
 
 class SearchDocsArgs(BaseModel):
@@ -29,8 +33,8 @@ class SearchDocsArgs(BaseModel):
 
 @tool("search_pages", "Search this documentation's pages by words and meaning: title, url, path, snippet.", SearchDocsArgs, roles=(VISITOR,))
 async def search_pages(ctx: ToolContext, args: SearchDocsArgs) -> str:
-    site, chat = await _site(ctx)
-    text, hits = await assistant.search_text(ctx.session, site, args.query, chat.lang, chat.base)
+    site, chat, rel = await _site(ctx)
+    text, hits = await assistant.search_text(ctx.session, site, args.query, chat.lang, chat.base, rel=rel)
     chat.seen.update({h["url"]: h["title"] for h in hits})
     return text
 
@@ -41,8 +45,8 @@ class ReadDocPageArgs(BaseModel):
 
 @tool("read_page", "Read a whole page of this documentation.", ReadDocPageArgs, roles=(VISITOR,))
 async def read_page(ctx: ToolContext, args: ReadDocPageArgs) -> str:
-    site, chat = await _site(ctx)
-    found = await assistant.page_text(ctx.session, site, args.path, chat.lang, chat.base)
+    site, chat, rel = await _site(ctx)
+    found = await assistant.page_text(ctx.session, site, args.path, chat.lang, chat.base, rel)
     if found is None:
         raise ToolError("No such page. Search with search_pages.")
     title, url, text = found
@@ -57,7 +61,7 @@ class BoardStatusArgs(BaseModel):
 
 @tool("board_status", "Public status of the project's planned and finished work (titles, descriptions, status).", BoardStatusArgs, roles=(VISITOR,))
 async def board_status(ctx: ToolContext, args: BoardStatusArgs) -> str:
-    site, chat = await _site(ctx)
+    site, chat, _ = await _site(ctx)
     if not site.assistant_code:
         raise ToolError("Not available.")
     return await assistant.board_text(ctx.session, ctx.project, args.query, chat.lang)

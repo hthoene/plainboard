@@ -537,7 +537,7 @@ def test_a_site_of_thousands_of_pages_is_served_and_listed_piece_by_piece(client
         def row(id_, parent, pos, slug, path, depth):
             title = f"Page {slug}"
             body = f"Text of {slug}. " + ("needle " if id_ == 2500 else "") + "lorem ipsum " * 20
-            return {"id": 100000 + id_, "project_id": pid, "site_id": s["id"], "parent_id": parent and 100000 + parent, "position": pos, "title": title, "slug": slug,
+            return {"id": 100000 + id_, "page_key": 100000 + id_, "project_id": pid, "site_id": s["id"], "parent_id": parent and 100000 + parent, "position": pos, "title": title, "slug": slug,
                     "path": path, "depth": depth, "body": body, "source_hash": source_hash(title, body), "paths": [], "edited_by": "x", "edited_at": now,
                     "drift": 0, "flag_reason": "", "created_at": now, "updated_at": now}  # fmt: skip
 

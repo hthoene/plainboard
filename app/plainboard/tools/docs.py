@@ -16,7 +16,7 @@ from sqlalchemy import func, select
 from ..models import Assignment, DocPage, DocSite
 from ..services import board as board_service
 from ..services import docs as docs_service
-from ..services import docs_public
+from ..services import docs_public, docs_releases
 from ..services.util import truncate
 from .registry import ALL, DOC_AGENT, DOCS, MANAGER, ToolContext, ToolError, local_tool, tool
 
@@ -52,7 +52,9 @@ def _site_line(site, pages: int, stale: int) -> str:  # noqa: ANN001
     served = ("public" if site.public else "private") if site.published else "draft"
     langs = f"; languages {site.language}+{','.join(site.languages)}" if site.languages else ""
     agent = f"; doc agent {site.agent.slug}" if getattr(site, "agent", None) else ""
-    return f"- {site.slug}: {site.name} [{served}; {where}; {pages} pages" + (f", {stale} marked outdated" if stale else "") + f"{langs}{agent}]"
+    released = [r for r in getattr(site, "releases", []) if not r.working] if getattr(site, "versioned", False) else []
+    versions = "; versions: working + " + ", ".join(r.name + (" (deprecated)" if r.deprecated else "") + (" (hidden)" if r.hidden else "") for r in released[:10]) if released else ""
+    return f"- {site.slug}: {site.name} [{served}; {where}; {pages} pages" + (f", {stale} marked outdated" if stale else "") + f"{langs}{versions}{agent}]"
 
 
 LISTED = 50  # pages per call
@@ -64,7 +66,30 @@ def _page_line(p: DocPage, children: int) -> str:
     mark = f" [marked outdated: {truncate(p.flag_reason, 160)}]" if p.flagged_at else ""
     linked = f" paths: {', '.join(p.paths)}" if p.paths else ""
     below = f" ({children} below)" if children else ""
-    return f"- {p.id} /{p.path} \"{p.title}\"{below} (edited {p.edited_at:%Y-%m-%d} by {p.edited_by}){linked}{mark}"
+    return f"- {p.page_key} /{p.path} \"{p.title}\"{below} (edited {p.edited_at:%Y-%m-%d} by {p.edited_by}){linked}{mark}"
+
+
+VERSION = "A released version of the site (name, e.g. 1.0); empty = the working version"
+
+
+async def _version(ctx: ToolContext, site: DocSite, ref: str | None):  # noqa: ANN202
+    return await docs_releases.find(ctx.session, site, ref) if ref else None
+
+
+async def _page_version(ctx: ToolContext, page_key: int, ref: str | None):  # noqa: ANN202
+    """The version named for a page (of the page's site); empty: the working one (None)."""
+    if not ref:
+        return None
+    row = await ctx.session.scalar(select(DocPage).where(DocPage.page_key == page_key, DocPage.project_id == ctx.project.id).limit(1))
+    if row is None:
+        raise ToolError(f"Doc page {page_key} not found")
+    site = await ctx.session.get(DocSite, row.site_id)
+    assert site is not None
+    return await _version(ctx, site, ref)
+
+
+def _in(rel) -> str:  # noqa: ANN001
+    return f" (version {rel.name})" if rel is not None else ""
 
 
 class ListDocsArgs(BaseModel):
@@ -72,6 +97,7 @@ class ListDocsArgs(BaseModel):
     parent: int | None = Field(default=None, description="Pages below this page id; empty = the top level")
     query: str | None = Field(default=None, max_length=200, description="Search the site's pages by meaning and words instead (best 10, with a snippet)")
     marked: bool = Field(default=False, description="Only pages marked as possibly outdated")
+    version: str | None = Field(default=None, max_length=80, description=VERSION)
     offset: int = Field(default=0, ge=0)
 
 
@@ -89,25 +115,28 @@ async def list_docs(ctx: ToolContext, args: ListDocsArgs) -> str:
             return "No doc sites yet."
         return "\n".join(_site_line(s, s.pages, s.stale_pages) for s in outs)
     site = await docs_service.find_site(ctx.session, ctx.project.id, args.site)
+    rel = await _version(ctx, site, args.version)
     head = [_spec(site), ""] if ctx.agent.is_manager and not _saw(ctx.run.run_id, site.id) else []
+    name = site.slug + _in(rel)
     if args.query:
-        hits, _ = await docs_public.search_hits(ctx.session, site, args.query, f"/docs/{site.slug}", site.language, FOUND, budget=False)
+        hits, _ = await docs_public.search_hits(ctx.session, site, args.query, f"/docs/{site.slug}", site.language, FOUND, budget=False, rel=rel)
         if not hits:
-            return "\n".join(head + [f"No pages of {site.slug} found for {args.query!r}."])
-        pages = {p.id: p for p in await ctx.session.scalars(select(DocPage).where(DocPage.id.in_([h["id"] for h in hits])))}
+            return "\n".join(head + [f"No pages of {name} found for {args.query!r}."])
+        q = select(DocPage).where(DocPage.page_key.in_([h["id"] for h in hits]), docs_service.visible(rel))
+        pages = {p.page_key: p for p in await ctx.session.scalars(q)}
         found = [f"{_page_line(pages[h['id']], 0)}\n  {h['snippet']}" for h in hits if h["id"] in pages]
-        return "\n".join(head + [f"Pages of {site.slug} found for {args.query!r} (by meaning and words, best first):", *found])
+        return "\n".join(head + [f"Pages of {name} found for {args.query!r} (by meaning and words, best first):", *found])
     elif args.marked:
-        q = select(DocPage).where(DocPage.site_id == site.id, DocPage.flagged_at.is_not(None))
+        q = select(DocPage).where(DocPage.site_id == site.id, DocPage.flagged_at.is_not(None), docs_service.visible(rel))
         total = int(await ctx.session.scalar(select(func.count()).select_from(q.subquery())) or 0)
         rows = list(await ctx.session.scalars(q.order_by(DocPage.flagged_at).offset(args.offset).limit(MARKED)))
-        title = f"Pages of {site.slug} marked as possibly outdated ({total}):"
+        title = f"Pages of {name} marked as possibly outdated ({total}):"
     else:
-        rows, _, total = await docs_service.children(ctx.session, site.id, args.parent, args.offset, LISTED)
+        rows, _, total = await docs_service.children(ctx.session, site.id, args.parent, args.offset, LISTED, rel)
         where = f"below page {args.parent}" if args.parent else "at the top"
-        title = f"Pages of {site.slug} {where} ({args.offset + 1}-{args.offset + len(rows)} of {total}):" if rows else f"No pages {where}."
-    counts = await docs_service.child_counts(ctx.session, [p.id for p in rows])
-    lines = head + [title] + [_page_line(p, counts.get(p.id, 0)) for p in rows]
+        title = f"Pages of {name} {where} ({args.offset + 1}-{args.offset + len(rows)} of {total}):" if rows else f"No pages {where}{_in(rel)}."
+    counts = await docs_service.child_counts(ctx.session, [p.page_key for p in rows], rel)
+    lines = head + [title] + [_page_line(p, counts.get(p.page_key, 0)) for p in rows]
     if args.offset + len(rows) < total:
         lines.append(f"(more: offset={args.offset + len(rows)})")
     return "\n".join(lines)
@@ -116,6 +145,7 @@ async def list_docs(ctx: ToolContext, args: ListDocsArgs) -> str:
 class ReadDocPageArgs(BaseModel):
     page: int = Field(description="Page id")
     offset: int = Field(default=0, ge=0, description="Characters to skip of a long page")
+    version: str | None = Field(default=None, max_length=80, description=VERSION)
 
 
 READ_CHARS = 20000
@@ -123,17 +153,18 @@ READ_CHARS = 20000
 
 @tool("read_doc_page", "A doc page's Markdown (long pages in parts).", ReadDocPageArgs, roles=ALL, feature=DOCS)
 async def read_doc_page(ctx: ToolContext, args: ReadDocPageArgs) -> str:
-    page = await docs_service.get_page(ctx.session, ctx.project.id, args.page)
+    rel = await _page_version(ctx, args.page, args.version)
+    page = await docs_service.get_page(ctx.session, ctx.project.id, args.page, rel)
     site = await ctx.session.get(DocSite, page.site_id)
     assert site is not None
-    facts = [f"site {site.slug}", f"/{page.path}", f"edited {page.edited_at:%Y-%m-%d} by {page.edited_by}"]
+    facts = [f"site {site.slug}{_in(rel)}", f"/{page.path}", f"edited {page.edited_at:%Y-%m-%d} by {page.edited_by}"]
     if page.paths:
         facts.append(f"paths: {', '.join(page.paths)}")
     mark = f"\nMarked as possibly outdated: {page.flag_reason}" if page.flagged_at else ""
     body = page.body or "(empty)"
     part = body[args.offset : args.offset + READ_CHARS]
     more = f"\n\n(characters {args.offset}-{args.offset + len(part)} of {len(body)}; more: offset={args.offset + len(part)})" if args.offset or len(body) > args.offset + READ_CHARS else ""
-    return f"Doc page {page.id} \"{page.title}\" ({'; '.join(facts)}){mark}\n\n{part}{more}"
+    return f"Doc page {page.page_key} \"{page.title}\" ({'; '.join(facts)}){mark}\n\n{part}{more}"
 
 
 class WriteDocPageArgs(BaseModel):
@@ -148,6 +179,7 @@ class WriteDocPageArgs(BaseModel):
     slug: str | None = Field(default=None, max_length=80, pattern=r"^[a-z0-9]+(-[a-z0-9]+)*$")
     paths: list[str] | None = Field(default=None, max_length=50, description="Code paths it describes (prefix or glob): changes there mark it for update")
     still_current: bool = Field(default=False, description="Checked after a change: still right, clear its outdated mark")
+    version: str | None = Field(default=None, max_length=80, description="A released version to correct (name); empty = the working version")
 
 
 @tool(
@@ -163,26 +195,28 @@ async def write_doc_page(ctx: ToolContext, args: WriteDocPageArgs) -> str:
             raise ToolError("A new page needs site and title.")
         site = await docs_service.find_site(ctx.session, ctx.project.id, args.site)
         _own(ctx, site)
+        rel = await _version(ctx, site, args.version)
         page = await docs_service.create_page(
             ctx.session, site, author, title=args.title, body=args.body or "", parent_id=args.parent or None, position=args.position,
-            slug=args.slug, paths=args.paths, reason=args.reason,
+            slug=args.slug, paths=args.paths, reason=args.reason, rel=rel,
         )  # fmt: skip
-        done = f"Created doc page {page.id} /{page.path} in {site.slug}."
+        done = f"Created doc page {page.page_key} /{page.path} in {site.slug}{_in(rel)}."
     else:
-        page = await docs_service.get_page(ctx.session, ctx.project.id, args.page)
+        rel = await _page_version(ctx, args.page, args.version)
+        page = await docs_service.get_page(ctx.session, ctx.project.id, args.page, rel)
         site = await ctx.session.get(DocSite, page.site_id)
         assert site is not None
         _own(ctx, site)
         if args.still_current and args.body is None and args.title is None:
-            await docs_service.confirm_page(ctx.session, page, author, args.reason)
-            return f"Doc page {page.id} confirmed as current."
-        versions = await docs_service.count_versions(ctx.session, page.id)
+            await docs_service.confirm_page(ctx.session, page, author, args.reason, rel)
+            return f"Doc page {page.page_key}{_in(rel)} confirmed as current."
+        versions = await docs_service.count_versions(ctx.session, page.page_key)
         page = await docs_service.update_page(
             ctx.session, page, author, title=args.title, body=args.body, move=args.move, parent_id=args.parent or None, position=args.position,
-            slug=args.slug, paths=args.paths, reason=args.reason,
+            slug=args.slug, paths=args.paths, reason=args.reason, rel=rel,
         )  # fmt: skip
-        changed = await docs_service.count_versions(ctx.session, page.id) > versions
-        done = f"Doc page {page.id} /{page.path} {'saved as a new version' if changed else 'updated (text unchanged)'}."
+        changed = await docs_service.count_versions(ctx.session, page.page_key) > versions
+        done = f"Doc page {page.page_key} /{page.path}{_in(rel)} {'saved as a new version' if changed else 'updated (text unchanged)'}."
     return done
 
 
@@ -200,6 +234,7 @@ class ManageDocSiteArgs(BaseModel):
     agent_provider: str | None = Field(default=None, max_length=50, description="Its doc agent's provider (list_models); empty = default")
     agent_model: str | None = Field(default=None, max_length=100, description="Its doc agent's model; empty = the default for members")
     agent_effort: Literal["", "low", "medium", "high", "xhigh", "max"] | None = None
+    versioned: bool | None = Field(default=None, description="Use versions (manage_doc_version); off = always the current state, versions kept but not shown")
     domain_help: bool = Field(default=False, description="Also return how the user gives it an own domain")
 
 
@@ -228,7 +263,7 @@ async def manage_doc_site(ctx: ToolContext, args: ManageDocSiteArgs) -> str:
             raise ToolError("A new site needs a name.")
         site = await docs_service.create_site(
             ctx.session, ctx.project.id, name=args.name, slug=args.slug, description=args.description or "", spec=args.spec or "", published=bool(args.published),
-            public=bool(args.public), languages=args.languages or [], **agent_args,
+            public=bool(args.public), languages=args.languages or [], versioned=bool(args.versioned), **agent_args,
         )  # fmt: skip
         if args.translator or args.translate_model:
             site = await docs_service.update_site(ctx.session, site, translator=args.translator, translate_model=args.translate_model)
@@ -242,6 +277,52 @@ async def manage_doc_site(ctx: ToolContext, args: ManageDocSiteArgs) -> str:
     agent = await docs_service.doc_agent(ctx.session, site.id)
     langs = "; languages " + ", ".join(site.languages) if site.languages else ""
     return f"Doc site {site.slug} saved ({served}{langs}).{_agent_line(site, agent)}{help_}"
+
+
+class ManageDocVersionArgs(BaseModel):
+    site: str = Field(description="Site slug/id")
+    version: str = Field(min_length=1, max_length=80, description="Version name, e.g. 1.0 (the working version: next)")
+    cut: bool = Field(default=False, description="Cut this new version from the working version as it is now (when the user wants a release)")
+    notes: str | None = Field(default=None, max_length=5000, description="What the version is (release notes)")
+    rename: str | None = Field(default=None, max_length=80, description="New name")
+    deprecated: bool | None = Field(default=None, description="Still served, marked as outdated")
+    hidden: bool | None = Field(default=None, description="Not served (the working version: not public)")
+    default: bool | None = Field(default=None, description="What visitors get at the site's address; false = the latest released one")
+    delete: bool = Field(default=False, description="Delete this released version (only when the user asks)")
+
+
+def _versions_line(outs) -> str:  # noqa: ANN001
+    return "Versions: " + ", ".join(
+        f"{r.name} ({', '.join(x for x in ('working' if r.working else '', 'default' if r.default else '', 'deprecated' if r.deprecated else '', 'hidden' if r.hidden else '') if x) or 'released'}; {r.url})"
+        for r in outs
+    )
+
+
+@tool(
+    "manage_doc_version",
+    "Versions of a doc site: cut one from the working version (e.g. at a release), rename, deprecate, hide, make default or delete one.",
+    ManageDocVersionArgs,
+    roles=(MANAGER,),
+    feature=DOCS,
+)
+async def manage_doc_version(ctx: ToolContext, args: ManageDocVersionArgs) -> str:
+    site = await docs_service.find_site(ctx.session, ctx.project.id, args.site)
+    changes = {"name": args.rename, "notes": args.notes, "deprecated": args.deprecated, "hidden": args.hidden, "default": args.default}
+    if args.cut:
+        rel = await docs_releases.cut(ctx.session, site, name=args.version, notes=args.notes or "")
+        if any(v is not None for k, v in changes.items() if k != "notes"):
+            await docs_releases.update(ctx.session, site, rel, **{k: v for k, v in changes.items() if k != "notes"})
+        done = f"Cut version {rel.name} of {site.slug}: it keeps the pages as they are now; the doc agent goes on in the working version."
+    else:
+        rel = await docs_releases.find_any(ctx.session, site, args.version)
+        if args.delete:
+            name = rel.name
+            await docs_releases.delete(ctx.session, site, rel)
+            done = f"Deleted version {name} of {site.slug}."
+        else:
+            await docs_releases.update(ctx.session, site, rel, **changes)
+            done = f"Version {rel.name} of {site.slug} saved."
+    return f"{done}\n{_versions_line(await docs_releases.outs(ctx.session, site))}"
 
 
 class OrderDocsArgs(BaseModel):

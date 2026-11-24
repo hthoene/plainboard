@@ -371,7 +371,8 @@ def build_mcp_server(bridge: ToolBridge):
         def make_handler(name: str):
             async def handler(args: dict[str, Any]) -> dict[str, Any]:
                 result = await bridge.call(name, args)
-                return {"content": [{"type": "text", "text": result.text}], "is_error": result.is_error}
+                images = [{"type": "image", "data": i.data, "mimeType": i.media_type} for i in result.images]
+                return {"content": [{"type": "text", "text": result.text}, *images], "is_error": result.is_error}
 
             return handler
 

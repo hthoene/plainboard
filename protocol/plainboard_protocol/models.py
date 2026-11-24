@@ -210,9 +210,17 @@ class SignInRefresh(BaseModel):
     credentials: Credentials
 
 
+class ToolImage(BaseModel):
+    """A picture in a tool's result (a screenshot): the model sees it."""
+
+    media_type: str = "image/png"
+    data: str  # base64
+
+
 class ToolCallResult(BaseModel):
     text: str
     is_error: bool = False
+    images: list[ToolImage] = Field(default_factory=list)
     # Not done yet: ask again with this id (POST /api/internal/runs/<id>/tools/pending/<call>). Only to a bridge that
     # sent TOOL_PENDING_HEADER: a long call (a quick check, a question) must not run into a proxy's timeout.
     pending: str = ""

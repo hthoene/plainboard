@@ -649,6 +649,9 @@ class DocSite(Timestamps, Base):
     # Its look (#121, services/docs_theme.py): logos, colours, font, corners, header links, custom CSS. Empty: the
     # look every site has.
     theme: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, server_default="{}")
+    # Versions (#126, services/docs_releases.py): off, the site always shows its current state (the working version,
+    # no version in its addresses); on with the first cut. Off again, its versions stay but are not served.
+    versioned: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 
 
 class DocPage(Timestamps, Base):
@@ -661,6 +664,12 @@ class DocPage(Timestamps, Base):
     site_id: Mapped[int] = mapped_column(ForeignKey("doc_sites.id", ondelete="CASCADE"), index=True)
     parent_id: Mapped[int | None] = mapped_column(ForeignKey("doc_pages.id", ondelete="CASCADE"), index=True)
     position: Mapped[int] = mapped_column(Integer, default=0)
+    # Versions of the site (#126, services/docs_releases.py): a row holds the page in the versions ``since_seq`` up to
+    # ``until_seq`` (None: up to the working version); ``page_key`` is the page across versions (the id of its row
+    # with the highest range), what ``parent_id``, links (doc-page:<key>) and every API name it by.
+    page_key: Mapped[int | None] = mapped_column(ForeignKey("doc_pages.id", ondelete="CASCADE"), index=True)
+    since_seq: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    until_seq: Mapped[int | None] = mapped_column(Integer)
     title: Mapped[str] = mapped_column(String(200))
     slug: Mapped[str] = mapped_column(String(120))
     path: Mapped[str] = mapped_column(String(2000), default="")  # its address under the site: the slugs from the top (kept on every move)
@@ -678,6 +687,27 @@ class DocPage(Timestamps, Base):
     reminded_at: Mapped[datetime | None] = mapped_column(DateTime)  # the manager last heard it is stale
 
 
+class DocRelease(Timestamps, Base):
+    """A version of a doc site (#126, services/docs_releases.py): the working one (``working``, one per site, what is
+    written now) or one cut from it (``seq``: the order of cutting). The working one's ``seq`` is the one the next cut
+    gets. ``hidden``: not served (for the working one: the switch whether it is public at all)."""
+
+    __tablename__ = "doc_releases"
+    __table_args__ = (UniqueConstraint("site_id", "slug"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    site_id: Mapped[int] = mapped_column(ForeignKey("doc_sites.id", ondelete="CASCADE"), index=True)
+    seq: Mapped[int] = mapped_column(Integer, default=1)
+    working: Mapped[bool] = mapped_column(Boolean, default=False)
+    name: Mapped[str] = mapped_column(String(80))
+    slug: Mapped[str] = mapped_column(String(40))  # its address segment: /docs/<site>/<slug>/
+    notes: Mapped[str] = mapped_column(Text, default="")
+    released_on: Mapped[datetime | None] = mapped_column(DateTime)
+    deprecated: Mapped[bool] = mapped_column(Boolean, default=False)
+    hidden: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)  # what visitors get at /docs/<site>/ (none: the latest released)
+
+
 class DocPageVersion(Base):
     """A saved state of a page: who (a person or an agent), when, why. The newest is the page as it is."""
 
@@ -687,6 +717,20 @@ class DocPageVersion(Base):
     page_id: Mapped[int] = mapped_column(ForeignKey("doc_pages.id", ondelete="CASCADE"), index=True)
     title: Mapped[str] = mapped_column(String(200))
     body: Mapped[str] = mapped_column(Text, default="")
+    author: Mapped[str] = mapped_column(String(100), default="")
+    agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id", ondelete="SET NULL"))
+    reason: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class DocThemeVersion(Base):
+    """A saved state of a site's theme (#128, services/docs_theme.py): who, when, why. The newest is the theme as it is."""
+
+    __tablename__ = "doc_theme_versions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    site_id: Mapped[int] = mapped_column(ForeignKey("doc_sites.id", ondelete="CASCADE"), index=True)
+    theme: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     author: Mapped[str] = mapped_column(String(100), default="")
     agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id", ondelete="SET NULL"))
     reason: Mapped[str] = mapped_column(String(300), default="")

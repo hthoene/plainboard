@@ -127,7 +127,7 @@ async def footer(session: AsyncSession, site: DocSite, lang: str) -> list[dict]:
     return [{"slug": p.slug, "title": _in(p, site, lang)[0], "titles": {code: _in(p, site, code)[0] for code in langs}, "path": path(p)} for p in await pages(session, site.id)]
 
 
-async def view(session: AsyncSession, site: DocSite, slug: str, base: str, lang: str) -> dict:
+async def view(session: AsyncSession, site: DocSite, slug: str, base: str, lang: str, rel=None) -> dict:  # noqa: ANN001
     """A page as the served site shows it: rendered as its docs pages are."""
     from . import docs_public as public
 
@@ -136,7 +136,7 @@ async def view(session: AsyncSession, site: DocSite, slug: str, base: str, lang:
         raise NotFound("Not found")
     title, body, fallback = _in(page, site, lang)
     here = public.lang_base(site, base, lang)
-    rendered = public.render(body, base=here, files_base=f"{public.api_base(site)}/files", page_paths=await public.linked_paths(session, site.id, body))
+    rendered = public.render(body, base=here, files_base=f"{public.api_base(site)}/files", page_paths=await public.linked_paths(session, site.id, body, rel=rel))
     return {
         "id": page.id, "slug": page.slug, "path": path(page), "title": title, "lang": lang, "fallback": fallback, "html": rendered.html, "toc": rendered.toc,
         "description": public.describe(rendered.text) or site.description, "updated_at": page.updated_at,

@@ -27,7 +27,7 @@ from plainboard_protocol import ProviderInfo, RunSpec, ToolBridgeSpec, Workspace
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_config
-from ..models import DocSite, Project, Run, RunStatus, RunTrigger, utcnow
+from ..models import DocRelease, DocSite, Project, Run, RunStatus, RunTrigger, utcnow
 from ..services import accounts as account_service
 from ..services import agents as agent_service
 from ..services import docs as docs_service
@@ -65,7 +65,7 @@ class Chat:
     project_id: int
     client: str
     lang: str
-    base: str
+    base: str  # the address of the version the visitor reads
     code: bool
     provider: str
     model: str
@@ -76,6 +76,7 @@ class Chat:
     busy: bool = False
     used: float = field(default_factory=time.monotonic)
     seen: dict[str, str] = field(default_factory=dict)  # url -> title of the pages it was given this turn
+    release_id: int | None = None  # the version of the site the visitor reads (#126): what it answers from
 
 
 class DocsAssistant:
@@ -107,7 +108,7 @@ class DocsAssistant:
         return provider, model, site.assistant_effort or None
 
     async def start(
-        self, s: AsyncSession, site: DocSite, client: str, text: str, chat_id: str | None, lang: str, base: str
+        self, s: AsyncSession, site: DocSite, client: str, text: str, chat_id: str | None, lang: str, base: str, rel: DocRelease | None = None
     ) -> tuple[Chat, RunSpec, RunContext]:
         """Everything a visitor's question needs before it streams; every limit is checked here (``ServiceError``)."""
         from .run_manager import RunContext
@@ -140,6 +141,7 @@ class DocsAssistant:
                 provider=provider, model=model, effort=effort,
             )  # fmt: skip
         chat.lang, chat.base, chat.code, chat.seen = lang, base, site.assistant_code, {}
+        chat.release_id = rel.id if rel is not None else None
 
         manager = await agent_service.get_manager(s, project.id)
         where = self.runs.runners.where(project.id)
@@ -161,7 +163,7 @@ class DocsAssistant:
         known = {**credentials.secrets, **{k: v for k in keys if (v := getattr(credentials, k, None))}}
         shown = assistant.filter_for(known)
         credentials = credentials.model_copy(update={"secrets": {}})  # nothing runs a command: the project's secrets stay home
-        pages, hits = await assistant.context_for(s, site, text, lang, base)
+        pages, hits = await assistant.context_for(s, site, text, lang, base, rel)
         chat.seen.update({h["url"]: h["title"] for h in hits})
         names = assistant_tools.tools_for(chat.code)
         run_id = -1 - secrets.randbelow(2**31)
@@ -177,7 +179,7 @@ class DocsAssistant:
             effort=chat.effort,
             toolset="none",
             system_prompt=assistant.system_prompt(site, project),
-            prompt=assistant.question_prompt(text, lang, pages),
+            prompt=assistant.question_prompt(text, lang, pages, rel.name if rel is not None and not rel.working else ""),
             resume_session_id=chat.session_id,
             max_turns=MAX_TURNS,
             workspace=workspace,

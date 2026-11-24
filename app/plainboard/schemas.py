@@ -1729,6 +1729,7 @@ class DocSiteCreate(BaseModel):
     agent_provider: str | None = Field(default=None, max_length=50)  # its doc agent; None: the installation's defaults
     agent_model: str | None = Field(default=None, max_length=100)
     agent_effort: str | None = Field(default=None, max_length=20)
+    versioned: bool = False  # versions (#126); off: always the current state
 
 
 Translator = Literal["", "llm", "deepl", "google"]
@@ -1739,6 +1740,7 @@ class DocSiteUpdate(BaseModel):
     slug: DocSlug | None = None
     description: str | None = Field(default=None, max_length=300)
     spec: str | None = Field(default=None, max_length=20000)
+    versioned: bool | None = None  # versions (#126): off again, they stay but are not served
     published: bool | None = None
     public: bool | None = None
     languages: list[str] | None = Field(default=None, max_length=30)  # further languages, translated
@@ -1813,6 +1815,43 @@ class DocAgentOut(BaseModel):
     enabled: bool = True
 
 
+class DocReleaseOut(BaseModel):
+    """A version of a doc site (#126, services/docs_releases.py)."""
+
+    id: int
+    site_id: int
+    name: str  # e.g. 1.0; the working one "next" until renamed
+    slug: str  # its address: /docs/<site>/<slug>/
+    working: bool  # the version written now (one per site)
+    seq: int  # the order of cutting (the working one: the next cut's)
+    notes: str = ""
+    released_on: UTCDateTime | None = None
+    deprecated: bool = False
+    hidden: bool = False  # not served (the working one: not public)
+    is_default: bool = False  # chosen as the visitors' default
+    default: bool = False  # what visitors get at /docs/<site>/ now (chosen, else the latest released one)
+    url: str
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
+
+
+class DocReleaseCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    slug: str | None = Field(default=None, max_length=40, pattern=r"^[a-z0-9][a-z0-9._-]*$")  # default: from the name
+    notes: str = Field(default="", max_length=20000)
+    released_on: datetime | None = None  # default: now
+
+
+class DocReleaseUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    slug: str | None = Field(default=None, max_length=40, pattern=r"^[a-z0-9][a-z0-9._-]*$")
+    notes: str | None = Field(default=None, max_length=20000)
+    released_on: datetime | None = None
+    deprecated: bool | None = None
+    hidden: bool | None = None
+    default: bool | None = None  # true: the visitors' default; false: back to the latest released one
+
+
 class DocSiteOut(ORM):
     id: int
     project_id: int
@@ -1843,6 +1882,8 @@ class DocSiteOut(ORM):
     assistant_warning: str = ""  # what reading the code and the board risks: shown beside assistant_code
     theme: DocTheme = Field(default_factory=DocTheme)
     agent: DocAgentOut | None = None  # its doc agent, the only agent that writes it
+    versioned: bool = False  # uses versions (#126): off, it always shows the current state and visitors see no versions
+    releases: list[DocReleaseOut] = []  # its versions (#126): the working one first, then the released ones, newest first
     url: str  # its address under this PlainBoard: /docs/<slug>/
     pages: int = 0
     stale_pages: int = 0  # flagged as possibly outdated
@@ -1853,8 +1894,9 @@ class DocSiteOut(ORM):
 class DocPageItem(ORM):
     """A page in the site's tree (without its text)."""
 
-    id: int
+    id: int  # the page in every version of its site (#126)
     site_id: int
+    release_id: int | None = None  # the version it was read or changed in; None: the working version
     parent_id: int | None
     position: int
     title: str

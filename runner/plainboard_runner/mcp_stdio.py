@@ -36,7 +36,8 @@ def build_server(bridge: ToolBridge) -> Server:
 
     async def call_tool(_ctx: Any, params: types.CallToolRequestParams) -> types.CallToolResult:
         result = await bridge.call(params.name, params.arguments or {})
-        return types.CallToolResult(content=[types.TextContent(type="text", text=result.text)], is_error=result.is_error)
+        images = [types.ImageContent(type="image", data=i.data, mime_type=i.media_type) for i in result.images]
+        return types.CallToolResult(content=[types.TextContent(type="text", text=result.text), *images], is_error=result.is_error)
 
     return Server("plainboard", on_list_tools=list_tools, on_call_tool=call_tool)
 

@@ -22,6 +22,7 @@ import {
   Sun,
   SunMoon,
   Table,
+  Tag,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
@@ -33,7 +34,7 @@ import { formatDateTime, timeAgo } from "../../lib/format";
 import { useDismiss, useMediaQuery } from "../../lib/hooks";
 import { diffLines, type Row } from "../chat/ToolCode";
 import { DocMarkdown } from "./DocMarkdown";
-import { base, siteHref, useDocPage, useDocsRefresh, useDocTranslation, useDocVersion, useDocVersions, useFindPages } from "./queries";
+import { base, rel, releaseHref, releaseOf, useDocPage, useDocsRefresh, useDocTranslation, useDocVersion, useDocVersions, useFindPages, useRelease } from "./queries";
 
 type Mode = "write" | "preview" | "split";
 
@@ -42,6 +43,7 @@ type Mode = "write" | "preview" | "split";
 export function PageEditor({ pid, site, pageId, canWrite, onBack, onOpenPage }: { pid: number; site: DocSite; pageId: number; canWrite: boolean; onBack?: () => void; onOpenPage: (id: number) => void }) {
   const { t } = useTranslation();
   const page = useDocPage(pid, pageId);
+  const version = releaseOf(site, useRelease());
   if (page.isLoading) {
     return (
       <div className="flex flex-1 items-center justify-center">
@@ -52,7 +54,7 @@ export function PageEditor({ pid, site, pageId, canWrite, onBack, onOpenPage }: 
   if (!page.data) {
     return (
       <div className="flex-1 p-6">
-        <ErrorText error={page.error ?? t("docs.page.gone")} />
+        <ErrorText error={version && !version.working ? t("docs.releases.notInVersion", { name: version.name }) : (page.error ?? t("docs.page.gone"))} />
       </div>
     );
   }
@@ -63,6 +65,8 @@ function Editor({ pid, site, page, canWrite, onBack, onOpenPage }: { pid: number
   const { t } = useTranslation();
   const wide = useMediaQuery("(min-width: 1280px)");
   const refresh = useDocsRefresh(pid);
+  const release = useRelease();
+  const version = releaseOf(site, release);
   const [title, setTitle] = useState(page.title);
   const [body, setBody] = useState(page.body);
   const [reason, setReason] = useState("");
@@ -101,7 +105,7 @@ function Editor({ pid, site, page, canWrite, onBack, onOpenPage }: { pid: number
     setSaving(true);
     setError(null);
     try {
-      await api.patch(`${base(pid)}/pages/${page.id}`, { title: title.trim() || page.title, body, reason: reason.trim() });
+      await api.patch(rel(`${base(pid)}/pages/${page.id}`, release), { title: title.trim() || page.title, body, reason: reason.trim() });
       setReason("");
       setSaved(true);
       window.setTimeout(() => setSaved(false), 2000);
@@ -128,7 +132,7 @@ function Editor({ pid, site, page, canWrite, onBack, onOpenPage }: { pid: number
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
 
-  const href = `${siteHref(site)}${page.path}`;
+  const href = `${releaseHref(site, version)}${page.path}`;
   const preview = <DocMarkdown text={body} onOpenPage={onOpenPage} />;
 
   return (
@@ -163,6 +167,12 @@ function Editor({ pid, site, page, canWrite, onBack, onOpenPage }: { pid: number
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
         <div className="space-y-3 px-3 pt-3 sm:px-4">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-fg-3">
+            {version && site.releases.length > 1 && (
+              <span className={clsx("inline-flex items-center gap-1 rounded-sm px-1.5 font-medium ring-1 ring-inset", version.working ? "text-fg-2 ring-line-2" : "bg-you-bg text-you-fg ring-you")}>
+                <Tag className="size-3.5" aria-hidden />
+                {version.name}
+              </span>
+            )}
             <span className="truncate font-mono">/{page.path}</span>
             <span>{t("docs.page.edited", { who: page.edited_by || "–", when: timeAgo(page.edited_at) })}</span>
             <button type="button" className="hover:text-fg hover:underline" onClick={() => setHistory(true)}>
@@ -174,6 +184,7 @@ function Editor({ pid, site, page, canWrite, onBack, onOpenPage }: { pid: number
               </button>
             )}
           </div>
+          {version && !version.working && <ReleasedNote site={site} name={version.name} canWrite={canWrite} />}
           {page.flagged_at && <FlagBanner pid={pid} page={page} canWrite={canWrite} />}
           {page.translations.length > 0 && <Translations items={page.translations} onOpen={setTranslation} />}
           {details && canWrite && <PageDetails pid={pid} page={page} />}
@@ -495,9 +506,25 @@ function PagePicker({ pid, site, onClose, onPick }: { pid: number; site: DocSite
 
 // --- around the text ------------------------------------------------------------------------------------------
 
+/** Editing a released version: corrections only, what is new belongs in the working version. */
+function ReleasedNote({ site, name, canWrite }: { site: DocSite; name: string; canWrite: boolean }) {
+  const { t } = useTranslation();
+  const working = site.releases.find((r) => r.working)?.name ?? "next";
+  return (
+    <div role="note" className="flex items-start gap-3 rounded-sm bg-you-bg px-3 py-2 text-you-fg">
+      <Tag className="mt-0.5 size-4 shrink-0" />
+      <div className="min-w-0 flex-1">
+        <p className="font-semibold">{t("docs.releases.editingReleased", { name })}</p>
+        {canWrite && <p>{t("docs.releases.correctionsOnly", { working })}</p>}
+      </div>
+    </div>
+  );
+}
+
 function FlagBanner({ pid, page, canWrite }: { pid: number; page: DocPage; canWrite: boolean }) {
   const { t } = useTranslation();
   const refresh = useDocsRefresh(pid);
+  const release = useRelease();
   const [busy, setBusy] = useState(false);
   return (
     <div role="status" className="flex flex-wrap items-start gap-x-3 gap-y-2 border-l-2 border-fg-2 bg-sunk px-3 py-2">
@@ -514,7 +541,7 @@ function FlagBanner({ pid, page, canWrite }: { pid: number; page: DocPage; canWr
           icon={<Check className="size-3.5" />}
           onClick={async () => {
             setBusy(true);
-            await api.post(`${base(pid)}/pages/${page.id}/confirm`).finally(() => setBusy(false));
+            await api.post(rel(`${base(pid)}/pages/${page.id}/confirm`, release)).finally(() => setBusy(false));
             await refresh();
           }}
         >
@@ -566,6 +593,7 @@ function Translations({ items, onOpen }: { items: DocTranslationItem[]; onOpen: 
 function PageDetails({ pid, page }: { pid: number; page: DocPage }) {
   const { t } = useTranslation();
   const refresh = useDocsRefresh(pid);
+  const release = useRelease();
   const [slug, setSlug] = useState(page.slug);
   const [paths, setPaths] = useState(page.paths.join("\n"));
   const [error, setError] = useState<unknown>(null);
@@ -589,7 +617,7 @@ function PageDetails({ pid, page }: { pid: number; page: DocPage }) {
             setBusy(true);
             setError(null);
             try {
-              await api.patch(`${base(pid)}/pages/${page.id}`, { ...(slug !== page.slug ? { slug } : {}), paths: list });
+              await api.patch(rel(`${base(pid)}/pages/${page.id}`, release), { ...(slug !== page.slug ? { slug } : {}), paths: list });
               await refresh();
             } catch (e) {
               setError(e);
@@ -648,6 +676,7 @@ function HistoryDialog({ pid, page, canWrite, onClose }: { pid: number; page: Do
   const a = useDocVersion(pid, page.id, before?.id ?? null);
   const b = useDocVersion(pid, page.id, version?.id ?? null);
   const refresh = useDocsRefresh(pid);
+  const release = useRelease();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const rows = useMemo(() => (b.data ? folded(diffLines(a.data?.body ?? "", b.data.body ?? "")) : []), [a.data, b.data]);
@@ -686,7 +715,7 @@ function HistoryDialog({ pid, page, canWrite, onClose }: { pid: number; page: Do
                       setBusy(true);
                       setError(null);
                       try {
-                        await api.post(`${base(pid)}/pages/${page.id}/versions/${version.id}/restore`);
+                        await api.post(rel(`${base(pid)}/pages/${page.id}/versions/${version.id}/restore`, release));
                         await refresh();
                         onClose();
                       } catch (e) {
@@ -739,6 +768,7 @@ function TranslationDialog({ pid, site, page, lang, canWrite, onClose }: { pid: 
   const { t } = useTranslation();
   const tr = useDocTranslation(pid, page.id, lang);
   const refresh = useDocsRefresh(pid);
+  const release = useRelease();
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -770,7 +800,7 @@ function TranslationDialog({ pid, site, page, lang, canWrite, onClose }: { pid: 
                 setBusy(true);
                 setError(null);
                 try {
-                  await api.put(`${base(pid)}/pages/${page.id}/translations/${lang}`, { title, body });
+                  await api.put(rel(`${base(pid)}/pages/${page.id}/translations/${lang}`, release), { title, body });
                   await refresh();
                   setEditing(false);
                 } catch (e) {

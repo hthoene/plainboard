@@ -274,6 +274,61 @@
     letter-spacing: 0.04em;
   }
 
+  /* --- versions (#126): the switcher beside the languages, the note above an older or unreleased one ----------- */
+  .doc-version-name {
+    max-width: 9rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-variant-numeric: tabular-nums;
+  }
+  .doc-version-btn:disabled {
+    opacity: 0.6;
+  }
+  .doc-menu .doc-version-note {
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .doc-menu .doc-version-note.is-working {
+    color: color-mix(in oklab, #f5a524 70%, var(--fg));
+  }
+  .doc-drawer-langs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+  }
+  .doc-version-banner {
+    --tone: var(--accent);
+    display: flex;
+    gap: 0.6rem;
+    align-items: flex-start;
+    margin: 0 0 1.75rem;
+    padding: 0.75rem 1rem;
+    border-radius: calc(14px * var(--doc-rf, 1));
+    border: 1px solid color-mix(in oklab, var(--tone) 35%, var(--line));
+    background: color-mix(in oklab, var(--tone) 8%, var(--bg));
+    color: var(--fg-2);
+  }
+  .doc-version-banner.is-working {
+    --tone: #f5a524;
+  }
+  .doc-version-banner svg {
+    margin-top: 0.25em;
+    color: color-mix(in oklab, var(--tone) 70%, var(--fg));
+  }
+  .doc-version-banner p {
+    margin: 0;
+  }
+  .doc-version-banner a {
+    font-weight: 600;
+    color: var(--accent-fg);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    text-decoration-color: color-mix(in oklab, var(--accent-fg) 35%, transparent);
+  }
+  .doc-version-banner a:hover {
+    text-decoration-color: currentColor;
+  }
+
   /* --- the three columns ------------------------------------------------------------------------------------- */
   .doc-layout {
     flex: 1;

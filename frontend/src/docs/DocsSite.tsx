@@ -1,15 +1,15 @@
 import clsx from "clsx";
-import { ArrowLeft, ArrowRight, ArrowUpRight, ChevronDown, ChevronRight, Globe, ListTree, LogOut, Menu, Moon, Search, Sun, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, ArrowUpRight, ChevronDown, ChevronRight, Globe, Info, ListTree, LogOut, Menu, Moon, Search, Sun, Tag, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useDismiss } from "../lib/hooks";
 import { setAppearance, useLook } from "../lib/theme";
 import { Assistant } from "./Assistant";
-import { customSlug, knownCustom, knownPage, langBase, loadCustom, loadNav, loadPage, NotFoundError, pageUrl, parseUrl, prefetch } from "./api";
+import { customSlug, inVersion, knownCustom, knownPage, langBase, loadCustom, loadNav, loadPage, NotFoundError, pageUrl, parseUrl, prefetch, versionBase } from "./api";
 import { Content } from "./Content";
 import { SearchDialog } from "./Search";
 import { levelKey, Tree } from "./Sidebar";
-import type { CustomView, Nav, NavItem, PageView, SiteView } from "./types";
+import type { CustomView, Nav, NavItem, PageView, SiteView, VersionItem } from "./types";
 
 /** The name of a language in that language ("Deutsch", "Français"), as a language switcher shows it. */
 export function languageName(code: string): string {
@@ -257,6 +257,22 @@ export function DocsSite({ site, initial, initialCustom = null }: { site: SiteVi
       onPrefetch={onPrefetch}
     />
   );
+  // Another version (#126): a document of its own, at the same page when it is there.
+  const [switching, setSwitching] = useState(false);
+  const toVersion = (v: VersionItem) => {
+    setSwitching(true);
+    setLoading(true);
+    void inVersion(site, v, lang, where.path).then((href) => location.assign(href));
+  };
+  useEffect(() => {
+    // Back from the other version (the page kept by the browser): ready again.
+    const onShow = (e: PageTransitionEvent) => e.persisted && (setSwitching(false), setLoading(false));
+    window.addEventListener("pageshow", onShow);
+    return () => window.removeEventListener("pageshow", onShow);
+  }, []);
+  const versions = site.versioned && site.version && (site.versions?.length ?? 0) > 1 && (
+    <VersionMenu versions={site.versions!} current={site.version.slug} busy={switching} onChoose={toVersion} />
+  );
   const languages = site.languages.length > 1 && (
     <LanguageMenu
       languages={site.languages}
@@ -309,7 +325,10 @@ export function DocsSite({ site, initial, initialCustom = null }: { site: SiteVi
             <span className="doc-search-btn-label">{t("docsSite.searchShort")}</span>
             <kbd className="doc-search-btn-kbd">{/Mac|iPhone|iPad/.test(navigator.platform) ? "⌘K" : "Ctrl K"}</kbd>
           </button>
-          <div className="hidden lg:contents">{languages}</div>
+          <div className="hidden lg:contents">
+            {versions}
+            {languages}
+          </div>
           <button
             type="button"
             className="doc-icon-btn"
@@ -335,7 +354,12 @@ export function DocsSite({ site, initial, initialCustom = null }: { site: SiteVi
                   <X className="size-5" />
                 </button>
               </div>
-              {languages && <div className="doc-drawer-langs">{languages}</div>}
+              {(versions || languages) && (
+                <div className="doc-drawer-langs">
+                  {versions}
+                  {languages}
+                </div>
+              )}
               {links.length > 0 && (
                 <nav className="doc-drawer-links" aria-label={t("docsSite.links")}>
                   {links.map((l) => (
@@ -354,6 +378,7 @@ export function DocsSite({ site, initial, initialCustom = null }: { site: SiteVi
         )}
 
         <main className="doc-main">
+          <VersionBanner site={site} lang={lang} path={where.path} onGo={toVersion} />
           {failed ? (
             <Message title={t("docsSite.failed")} text={t("docsSite.failedHint")} action={<button type="button" className="doc-btn" onClick={() => go(location.href, { pop: true })}>{t("docsSite.retry")}</button>} />
           ) : missing ? (
@@ -661,6 +686,84 @@ function LanguageMenu({ languages, current, onChoose }: { languages: string[]; c
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Which version is read, and the others (#126): the one in development first, then the newest released. */
+function VersionMenu({ versions, current, busy, onChoose }: { versions: VersionItem[]; current: string; busy: boolean; onChoose: (v: VersionItem) => void }) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useDismiss(ref, open, () => setOpen(false));
+  const shown = versions.find((v) => v.slug === current);
+  const note = (v: VersionItem) => (v.working ? t("docsSite.versionWorking") : v.deprecated ? t("docsSite.versionDeprecated") : v.default ? t("docsSite.versionLatest") : "");
+  return (
+    <div ref={ref} className="doc-lang doc-version">
+      <button
+        type="button"
+        className="doc-lang-btn doc-version-btn"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`${t("docsSite.version")}: ${shown?.name ?? current}`}
+        title={t("docsSite.version")}
+        disabled={busy}
+      >
+        <Tag className="size-4" />
+        <span className="doc-version-name">{shown?.name ?? current}</span>
+        <ChevronDown className="size-3.5" />
+      </button>
+      {open && (
+        <div role="menu" aria-label={t("docsSite.versions")} className="doc-menu">
+          {versions.map((v) => (
+            <button
+              key={v.slug}
+              type="button"
+              role="menuitemradio"
+              aria-checked={v.slug === current}
+              onClick={() => {
+                setOpen(false);
+                if (v.slug !== current) onChoose(v);
+              }}
+            >
+              <span>{v.name}</span>
+              {note(v) && <span className={clsx("doc-menu-code doc-version-note", v.working && "is-working")}>{note(v)}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Above the page when it is not the version most readers want: the one in development, a deprecated or an older one. */
+function VersionBanner({ site, lang, path, onGo }: { site: SiteView; lang: string; path: string; onGo: (v: VersionItem) => void }) {
+  const { t } = useTranslation();
+  const v = site.version;
+  const list = site.versions ?? [];
+  const current = list.find((x) => x.default);
+  if (!site.versioned || !v || v.default || !current) return null;
+  const here = list.findIndex((x) => x.slug === v.slug);
+  const older = here > list.indexOf(current);
+  if (!v.working && !v.deprecated && !older) return null;
+  const href = `${versionBase(site, current)}${lang === site.language ? "" : `/${lang}`}/${path}`;
+  return (
+    <div className={clsx("doc-version-banner", v.working && "is-working")} role="note">
+      <Info className="size-4 shrink-0" aria-hidden />
+      <p>
+        {v.working ? t("docsSite.bannerWorking") : v.deprecated ? t("docsSite.bannerDeprecated", { name: v.name }) : t("docsSite.bannerOld", { name: v.name })}{" "}
+        <a
+          href={href}
+          onClick={(e) => {
+            if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey) return;
+            e.preventDefault();
+            onGo(current);
+          }}
+        >
+          {t("docsSite.bannerToCurrent", { name: current.name })}
+        </a>
+      </p>
     </div>
   );
 }

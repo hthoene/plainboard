@@ -13,6 +13,7 @@ import {
   MessageSquare,
   Plus,
   ScrollText,
+  Tag,
   Trash2,
   Upload,
 } from "lucide-react";
@@ -27,10 +28,11 @@ import { useShell } from "../layout/shell-context";
 import { DocMarkdown } from "./DocMarkdown";
 import { languageLabel, PageEditor } from "./PageEditor";
 import { PageTree } from "./PageTree";
-import { base, siteHref, useDocFiles, useDocPage, useDocSites, useDocsRefresh } from "./queries";
+import { base, rel, ReleaseContext, releaseHref, releaseOf, siteHref, useDocFiles, useDocPage, useDocSites, useDocsRefresh, useRelease } from "./queries";
+import { ReleaseBadges, ReleasePicker, ReleasesTab } from "./Releases";
 import { SiteSettings, Visibility } from "./SiteSettings";
 
-type Tab = "pages" | "rules" | "files" | "settings";
+type Tab = "pages" | "rules" | "files" | "versions" | "settings";
 
 /** The project's doc sites (#118): a list of them, and per site its pages, its doc rules, its files and its
  * settings. Its doc agent writes it; people in the project can write too, viewers read. `focus`: a page to show
@@ -267,10 +269,15 @@ function SiteWorkspace({
   const { t } = useTranslation();
   const { project, canWrite, isOwner } = useShell();
   const [section, setSection] = useState("general");
+  // The version being edited (#126): null is the working one; a version deleted meanwhile falls back to it.
+  const [stored, setRelease] = useStored<number | null>(`plainboard.docRelease.${site.id}`, null);
+  const release = stored !== null && site.releases.some((r) => r.id === stored && !r.working) ? stored : null;
+  const hasReleases = site.releases.some((r) => !r.working);
   const tabs: { id: Tab; label: string; icon: ReactNode }[] = [
     { id: "pages", label: t("docs.tabs.pages"), icon: <FileText className="size-4" /> },
     { id: "rules", label: t("docs.tabs.rules"), icon: <ScrollText className="size-4" /> },
     { id: "files", label: t("docs.tabs.files"), icon: <Upload className="size-4" /> },
+    { id: "versions", label: t("docs.tabs.versions"), icon: <Tag className="size-4" /> },
     ...(canWrite ? [{ id: "settings" as Tab, label: t("docs.tabs.settings"), icon: <Languages className="size-4" /> }] : []),
   ];
   return (
@@ -291,7 +298,7 @@ function SiteWorkspace({
           </nav>
           <div className="flex-1" />
           {site.published && (
-            <a href={siteHref(site)} target="_blank" rel="noreferrer" className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-sm px-2.5 font-medium text-fg-2 hover:bg-sunk hover:text-fg touch:h-11">
+            <a href={releaseHref(site, releaseOf(site, release))} target="_blank" rel="noreferrer" className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-sm px-2.5 font-medium text-fg-2 hover:bg-sunk hover:text-fg touch:h-11">
               <ExternalLink className="size-4" />
               <span className="max-sm:hidden">{t("docs.openSite")}</span>
             </a>
@@ -306,14 +313,34 @@ function SiteWorkspace({
           ))}
         </nav>
       </header>
+      <ReleaseContext.Provider value={release}>
       <div className="flex min-h-0 flex-1">
-        {tab === "pages" && <PagesTab site={site} pageId={pageId} setPageId={setPageId} onRules={() => setTab("rules")} />}
+        {tab === "pages" && (
+          <PagesTab
+            site={site}
+            pageId={pageId}
+            setPageId={setPageId}
+            onRules={() => setTab("rules")}
+            picker={hasReleases ? <ReleasePicker site={site} release={release} onRelease={setRelease} onManage={() => setTab("versions")} /> : null}
+          />
+        )}
         {tab === "rules" && <RulesTab site={site} />}
         {tab === "files" && <FilesTab site={site} />}
+        {tab === "versions" && (
+          <ReleasesTab
+            site={site}
+            canWrite={canWrite}
+            onEdit={(id) => {
+              setRelease(id);
+              setTab("pages");
+            }}
+          />
+        )}
         {tab === "settings" && canWrite && (
           <SiteSettings pid={project.id} site={site} isOwner={isOwner} section={section} onSection={setSection} onDeleted={onBack} />
         )}
       </div>
+      </ReleaseContext.Provider>
     </>
   );
 }
@@ -336,19 +363,21 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
 
 // --- pages ----------------------------------------------------------------------------------------------------
 
-function PagesTab({ site, pageId, setPageId, onRules }: { site: DocSite; pageId: number | null; setPageId: (id: number | null) => void; onRules: () => void }) {
+function PagesTab({ site, pageId, setPageId, onRules, picker }: { site: DocSite; pageId: number | null; setPageId: (id: number | null) => void; onRules: () => void; picker: ReactNode }) {
   const { project, canWrite } = useShell();
   const [newIn, setNewIn] = useState<DocPageItem | null | undefined>(undefined);
+  const release = useRelease();
   const page = useDocPage(project.id, pageId);
   const opened = page.data ? [...page.data.ancestors.map((a) => a.id)] : [];
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
       <aside className={clsx("flex w-full shrink-0 flex-col border-line md:w-72 md:border-r xl:w-80", pageId !== null && "max-md:hidden")}>
-        <PageTree pid={project.id} site={site} selected={pageId} opened={opened} canWrite={canWrite} onSelect={setPageId} onNew={(p) => setNewIn(p)} />
+        {picker}
+        <PageTree key={release ?? "w"} pid={project.id} site={site} selected={pageId} opened={opened} canWrite={canWrite} onSelect={setPageId} onNew={(p) => setNewIn(p)} />
       </aside>
       <div className={clsx("flex min-w-0 flex-1", pageId === null && "max-md:hidden")}>
         {pageId !== null ? (
-          <PageEditor key={pageId} pid={project.id} site={site} pageId={pageId} canWrite={canWrite} onBack={() => setPageId(null)} onOpenPage={setPageId} />
+          <PageEditor key={`${pageId}-${release}`} pid={project.id} site={site} pageId={pageId} canWrite={canWrite} onBack={() => setPageId(null)} onOpenPage={setPageId} />
         ) : (
           <Overview site={site} onRules={onRules} />
         )}
@@ -372,13 +401,14 @@ function NewPageDialog({ site, parent, onClose, onCreated }: { site: DocSite; pa
   const { t } = useTranslation();
   const { project } = useShell();
   const refresh = useDocsRefresh(project.id);
+  const release = useRelease();
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const create = async () => {
     setBusy(true);
     try {
-      const page = await api.post<DocPageItem>(`${base(project.id)}/sites/${site.id}/pages`, { title: title.trim(), body: "", parent_id: parent?.id ?? null });
+      const page = await api.post<DocPageItem>(rel(`${base(project.id)}/sites/${site.id}/pages`, release), { title: title.trim(), body: "", parent_id: parent?.id ?? null });
       await refresh();
       onCreated(page.id);
     } catch (e) {
@@ -422,6 +452,7 @@ function NewPageDialog({ site, parent, onClose, onCreated }: { site: DocSite; pa
 /** What a site is at a glance, beside its tree while no page is open. */
 function Overview({ site, onRules }: { site: DocSite; onRules: () => void }) {
   const { t } = useTranslation();
+  const release = useRelease();
   const fact = (icon: ReactNode, label: string, value: ReactNode) => (
     <div className="flex items-start gap-3 border-b border-line py-2.5">
       <span className="mt-0.5 text-fg-3">{icon}</span>
@@ -444,6 +475,21 @@ function Overview({ site, onRules }: { site: DocSite; onRules: () => void }) {
               {site.languages.length > 0 && <span className="text-fg-3"> · {t(`docs.translator.${site.translator || "none"}`)}</span>}
             </>,
           )}
+          {(site.versioned || site.releases.some((r) => !r.working)) &&
+            fact(
+              <Tag className="size-4" />,
+              t("docs.overview.version"),
+              (() => {
+                const r = releaseOf(site, release);
+                return r ? (
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    {r.name} <ReleaseBadges r={r} versioned={site.versioned} />
+                  </span>
+                ) : (
+                  "–"
+                );
+              })(),
+            )}
           {fact(
             <Globe className="size-4" />,
             t("docs.overview.address"),

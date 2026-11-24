@@ -1862,7 +1862,16 @@
       }
     },
     "links": "Links",
-    "legal": "About this site"
+    "legal": "About this site",
+    "version": "Version",
+    "versions": "Versions",
+    "versionWorking": "in development",
+    "versionLatest": "latest",
+    "versionDeprecated": "deprecated",
+    "bannerWorking": "You are reading the documentation of the next version, still in development.",
+    "bannerOld": "You are reading the documentation of version {{name}}, which is not the current one.",
+    "bannerDeprecated": "Version {{name}} is deprecated.",
+    "bannerToCurrent": "Go to the current version ({{name}})"
   },
   "docs": {
     "assistant": {
@@ -1915,7 +1924,8 @@
       "pages": "Pages",
       "rules": "Doc rules",
       "files": "Files",
-      "settings": "Settings"
+      "settings": "Settings",
+      "versions": "Versions"
     },
     "visibility": {
       "draft": "Draft",
@@ -1932,7 +1942,8 @@
       "allCurrent": "All current",
       "languages": "Languages",
       "address": "Address",
-      "agent": "Doc agent"
+      "agent": "Doc agent",
+      "version": "Editing version"
     },
     "rules": {
       "title": "Doc rules",
@@ -1981,10 +1992,10 @@
       "bodyPlaceholder": "Write in Markdown. Drop or paste pictures and files here.",
       "gone": "This page does not exist anymore.",
       "edited": "{{who}} · {{when}}",
-      "versions_one": "{{count}} version",
-      "versions_other": "{{count}} versions",
-      "history_one": "History ({{count}} version)",
-      "history_other": "History ({{count}} versions)",
+      "versions_one": "{{count}} edit",
+      "versions_other": "{{count}} edits",
+      "history_one": "History ({{count}} edit)",
+      "history_other": "History ({{count}} edits)",
       "onSite": "Show on the site",
       "settings": "Address and code paths",
       "mode": "View",
@@ -2242,6 +2253,56 @@
       "byHand": "Footer pages are not translated automatically. Without a text here, readers of this language see the {{language}} original.",
       "deleteTitle": "Delete “{{title}}”?",
       "deleteText": "The page and its link in the footer go; its address shows “not found”. Files it uses stay with the site."
+    },
+    "releases": {
+      "title": "Versions",
+      "hint": "Keep a version of the docs for each release of your product while the next one is being written. Cutting a version copies nothing and takes no time; anyone can still correct it later.",
+      "use": "Use versions",
+      "usedYes": "This site uses versions.",
+      "usedNo": "This site uses no versions.",
+      "onHint": "Visitors can switch between versions; addresses carry the version, and the version in development is marked as such.",
+      "offHint": "Off: the site always shows the current state, as it is written now. No version switcher, no version in the addresses.",
+      "offKeptHint": "Off: visitors see the current state only. The versions below are kept and can still be edited; switch on again to show them.",
+      "firstHint": "Cut the first version when you release your product: its pages stay as they are now, while writing goes on for the next release.",
+      "cutFirst": "Cut the first version",
+      "cut": "Cut a version",
+      "cutNow": "Cut {{name}}",
+      "cutHint": "Takes the pages, their translations and files as they are now in {{working}}. Writing goes on in {{working}}.",
+      "cutTurnsOn": "This turns versions on: visitors get a version switcher and land on this version.",
+      "name": "Name",
+      "nameHint": "As visitors see it, e.g. 1.0 or 2024.2",
+      "slug": "Address",
+      "slugHint": "{{url}}",
+      "date": "Release date",
+      "notes": "Notes",
+      "notesHint": "What is new in it, for the version list (optional).",
+      "inDevelopment": "In development",
+      "default": "Default",
+      "deprecated": "Deprecated",
+      "hidden": "Not public",
+      "workingHint": "Being written now; the next version is cut from it.",
+      "releasedOn": "Released {{date}}",
+      "editPages": "Edit pages",
+      "readPages": "Read pages",
+      "settings": "Settings",
+      "settingsOf": "Version {{name}}",
+      "makeDefault": "Visitors land here",
+      "makeDefaultHint": "Shown at the site's address without a version. Off: the newest released version that is not deprecated.",
+      "markDeprecated": "Deprecated",
+      "markDeprecatedHint": "Readers of this version see a note with a link to the current one.",
+      "hide": "Not public",
+      "hideHint": "Taken off the public site; it stays here and can still be edited.",
+      "hideWorking": "Version in development not public",
+      "hideWorkingHint": "Visitors only see released versions, not what is being written now.",
+      "delete": "Delete version {{name}}",
+      "deleteSure": "Delete version",
+      "deleteHint": "Removes version {{name}} with the corrections made only in it. The other versions keep their pages.",
+      "editing": "Version being edited",
+      "manage": "Manage versions",
+      "pickerReleased": "Released version: changes go into {{name}} only.",
+      "editingReleased": "You are editing version {{name}}, already released.",
+      "correctionsOnly": "Make corrections only here. New content belongs in {{working}}.",
+      "notInVersion": "This page is not in version {{name}}."
     }
   }
 }

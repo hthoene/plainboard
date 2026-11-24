@@ -43,6 +43,27 @@ export interface SiteView {
   theme?: SiteTheme | null;
   /** Its own pages (imprint, privacy …) for the footer, in their order. */
   footer?: FooterLink[];
+  /** It uses versions (#126): then the version shown, the ones to switch to, and its address without a version. */
+  versioned?: boolean;
+  version?: VersionInfo | null;
+  versions?: VersionItem[];
+  site_base?: string;
+}
+
+/** A version a visitor may switch to: the one in development first, then the newest released. */
+export interface VersionItem {
+  slug: string;
+  name: string;
+  /** In development (the next one). */
+  working: boolean;
+  deprecated: boolean;
+  /** What the site's address without a version shows. */
+  default: boolean;
+  released_on: string | null;
+}
+
+export interface VersionInfo extends VersionItem {
+  notes: string;
 }
 
 export interface SiteTheme {

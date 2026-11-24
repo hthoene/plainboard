@@ -19,7 +19,7 @@ import { api, errorMessage } from "../../api/client";
 import type { DocPageItem, DocPages, DocSite } from "../../api/types";
 import { Button, ErrorText, IconButton, Input, Modal, Spinner } from "../../components/ui";
 import { useDismiss, useInView } from "../../lib/hooks";
-import { base, useDocChildren, useDocsRefresh, useFindPages } from "./queries";
+import { base, rel, useDocChildren, useDocsRefresh, useFindPages, useRelease } from "./queries";
 
 export interface TreeActions {
   /** A new page below this one (null: at the top). */
@@ -51,6 +51,7 @@ export function PageTree({
   const [expanded, setExpanded] = useState<Set<number>>(new Set(opened));
   const [moving, setMoving] = useState<DocPageItem | null>(null);
   const found = useFindPages(pid, site.id, query.trim());
+  const release = useRelease();
   const key = opened.join(",");
   useEffect(() => {
     if (opened.length) setExpanded((old) => new Set([...old, ...opened]));
@@ -63,7 +64,7 @@ export function PageTree({
       else next.add(id);
       return next;
     });
-  const ctx: Ctx = { pid, site, selected, expanded, canWrite, onSelect, onNew, toggle, onMove: setMoving };
+  const ctx: Ctx = { pid, site, release, selected, expanded, canWrite, onSelect, onNew, toggle, onMove: setMoving };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -112,6 +113,7 @@ export function PageTree({
 interface Ctx {
   pid: number;
   site: DocSite;
+  release: number | null;
   selected: number | null;
   expanded: Set<number>;
   canWrite: boolean;
@@ -165,7 +167,7 @@ function Level({ ctx, parent, depth, parentItem }: { ctx: Ctx; parent: number | 
             onClick={async () => {
               setLoadingMore(true);
               try {
-                const next = await api.get<DocPages>(`${base(ctx.pid)}/sites/${ctx.site.id}/pages?limit=200&offset=${items.length}${parent === null ? "" : `&parent=${parent}`}`);
+                const next = await api.get<DocPages>(rel(`${base(ctx.pid)}/sites/${ctx.site.id}/pages?limit=200&offset=${items.length}${parent === null ? "" : `&parent=${parent}`}`, ctx.release));
                 setMore((m) => [...m, ...next.items]);
               } finally {
                 setLoadingMore(false);
@@ -243,7 +245,7 @@ function RowMenu({ ctx, item, before, last, parentItem }: { ctx: Ctx; item: DocP
   const move = async (body: Record<string, unknown>) => {
     setOpen(false);
     try {
-      await api.patch(`${base(ctx.pid)}/pages/${item.id}`, body);
+      await api.patch(rel(`${base(ctx.pid)}/pages/${item.id}`, ctx.release), body);
       setError("");
     } catch (e) {
       setError(errorMessage(e));
@@ -301,7 +303,7 @@ function RowMenu({ ctx, item, before, last, parentItem }: { ctx: Ctx; item: DocP
               onClick={async () => {
                 setOpen(false);
                 setConfirm(false);
-                await api.del(`${base(ctx.pid)}/pages/${item.id}`).catch((e: unknown) => setError(errorMessage(e)));
+                await api.del(rel(`${base(ctx.pid)}/pages/${item.id}`, ctx.release)).catch((e: unknown) => setError(errorMessage(e)));
                 await refresh();
               }}
             >
@@ -326,10 +328,11 @@ function MoveDialog({ pid, site, page, onClose }: { pid: number; site: DocSite; 
   const refresh = useDocsRefresh(pid);
   const found = useFindPages(pid, site.id, query.trim());
   const top = useDocChildren(pid, site.id, null, !query.trim());
+  const release = useRelease();
   const candidates = (query.trim() ? found.data : top.data?.items) ?? [];
   const to = async (parent: number | null) => {
     try {
-      await api.patch(`${base(pid)}/pages/${page.id}`, { move: true, parent_id: parent });
+      await api.patch(rel(`${base(pid)}/pages/${page.id}`, release), { move: true, parent_id: parent });
       await refresh();
       onClose();
     } catch (e) {

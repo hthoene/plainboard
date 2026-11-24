@@ -1197,6 +1197,33 @@ export interface DocSite {
   stale_pages: number;
   /** Its own look (#121): every field at its default is the look every site has. */
   theme: DocTheme;
+  /** It uses versions (#126); off: it always shows the current state, visitors see no versions. */
+  versioned: boolean;
+  /** Its versions: the working one first, then the released ones, the newest first. */
+  releases: DocRelease[];
+  created_at: string;
+  updated_at: string;
+}
+
+/** A version of a doc site (#126). The working one is written now ("next" until renamed). */
+export interface DocRelease {
+  id: number;
+  site_id: number;
+  name: string;
+  /** Its address: /docs/<site>/<slug>/ */
+  slug: string;
+  working: boolean;
+  seq: number;
+  notes: string;
+  released_on: string | null;
+  deprecated: boolean;
+  /** Not served (the working one: not public). */
+  hidden: boolean;
+  /** Chosen as the visitors' default. */
+  is_default: boolean;
+  /** What visitors get at /docs/<site>/ now (chosen, else the latest released one). */
+  default: boolean;
+  url: string;
   created_at: string;
   updated_at: string;
 }
@@ -1241,6 +1268,8 @@ export interface DocCustomPage {
 export interface DocPageItem {
   id: number;
   site_id: number;
+  /** The version it was read in; null: the working one. */
+  release_id?: number | null;
   parent_id: number | null;
   position: number;
   title: string;

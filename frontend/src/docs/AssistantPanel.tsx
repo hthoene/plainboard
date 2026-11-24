@@ -168,7 +168,7 @@ export default function AssistantPanel({
             method: "POST",
             credentials: "same-origin",
             headers: { "Content-Type": "application/json", Accept: "application/x-ndjson" },
-            body: JSON.stringify({ text, conversation: conversation.current, lang }),
+            body: JSON.stringify({ text, conversation: conversation.current, lang, ...(site.version && !site.version.default ? { release: site.version.slug } : {}) }),
             signal: ctrl.signal,
           });
           if (r.ok) resp = r;

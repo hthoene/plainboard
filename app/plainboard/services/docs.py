@@ -27,11 +27,11 @@ import secrets
 from dataclasses import dataclass
 from typing import BinaryIO
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..events import bus
-from ..models import Agent, Attachment, DocCustomPage, DocPage, DocPageVersion, DocSite, DocTranslation, utcnow
+from ..models import Agent, Attachment, DocCustomPage, DocPage, DocPageVersion, DocRelease, DocSite, DocTranslation, utcnow
 from ..schemas import AgentCreate, AgentUpdate, AttachmentOut, DocAgentOut, DocPageItem, DocSiteOut, DocTheme
 from . import board as board_service
 from .errors import NotFound, ServiceError
@@ -80,8 +80,9 @@ def clean_languages(values: list[str], language: str) -> list[str]:
     return out[:30]
 
 
-def site_out(site: DocSite, pages: int = 0, stale: int = 0, agent: Agent | None = None) -> DocSiteOut:
+def site_out(site: DocSite, pages: int = 0, stale: int = 0, agent: Agent | None = None, releases: list | None = None) -> DocSiteOut:
     return DocSiteOut(
+        releases=releases or [],
         id=site.id, project_id=site.project_id, name=site.name, slug=site.slug, description=site.description, spec=site.spec,
         published=site.published, public=site.public, language=site.language, languages=list(site.languages or []),
         translator=site.translator, translate_provider=site.translate_provider, translate_model=site.translate_model,
@@ -98,11 +99,14 @@ async def site_outs(session: AsyncSession, sites: list[DocSite]) -> list[DocSite
         return []
     ids = [s.id for s in sites]
     rows = await session.execute(
-        select(DocPage.site_id, func.count(), func.count(DocPage.flagged_at)).where(DocPage.site_id.in_(ids)).group_by(DocPage.site_id)
-    )
+        select(DocPage.site_id, func.count(), func.count(DocPage.flagged_at)).where(DocPage.site_id.in_(ids), DocPage.until_seq.is_(None)).group_by(DocPage.site_id)
+    )  # the working version's
     counts = {site_id: (int(n), int(stale)) for site_id, n, stale in rows.all()}
     agents = {a.doc_site_id: a for a in await session.scalars(select(Agent).where(Agent.doc_site_id.in_(ids)))}
-    return [site_out(s, *counts.get(s.id, (0, 0)), agents.get(s.id)) for s in sites]
+    from . import docs_releases
+
+    releases = await docs_releases.outs_by_site(session, ids)
+    return [site_out(s, *counts.get(s.id, (0, 0)), agents.get(s.id), releases.get(s.id)) for s in sites]
 
 
 async def publish_site(session: AsyncSession, site: DocSite) -> None:
@@ -146,6 +150,8 @@ async def create_site(
         published=published, public=public, language=language, languages=clean_languages(languages or [], language), domain_token=secrets.token_urlsafe(24),
     )  # fmt: skip
     session.add(site)
+    await session.flush()
+    await working(session, site.id)
     await session.commit()
     await ensure_agent(session, site, provider=agent_provider, model=agent_model, effort=agent_effort)
     await publish_site(session, site)
@@ -174,6 +180,9 @@ AGENT_GUIDE = """You are the doc agent of the doc site "{name}" (slug {slug}, /d
 - Keep a short overview of your site in your own notes (remember: which page covers what) and update it when you add,
   move or remove pages.
 - Keep pages short and find before you write (list_docs query): change a page rather than add a second one.
+- Versions (list_docs shows the site's): every tool works on the working version unless you name one (version), and
+  update jobs after landings are about the working version. A released version describes the product as it was
+  released: change it only to correct an error that is wrong there too, never for new features or later changes.
 - You write no code and change no repository.
 - A theme (the site's look): doc_theme. Given the product's website, start from theme_from_website. Always look at
   the result with preview_doc_site (a draft before saving): contrast and readability in light and dark, on desktop
@@ -294,6 +303,118 @@ async def touch(session: AsyncSession, site_id: int) -> None:
     await session.execute(update(DocSite).where(DocSite.id == site_id).values(updated_at=utcnow()))
 
 
+# --- versions of a site (#126) ----------------------------------------------------------------------------------
+# A row of doc_pages holds a page in a range of the site's versions (``since_seq`` .. ``until_seq``, None: up to the
+# working one); every page is one row as long as nothing changes it, whatever the number of versions. Cutting a
+# version moves the working version's ``seq`` on and copies nothing; a change of a page in one version splits its row
+# first (``isolate``: copy on write), so the others keep what they had. The row with the highest range keeps the id,
+# ``page_key``: what parent_id, links and the API name a page by in every version. Release management:
+# services/docs_releases.py.
+
+Span = tuple[int, int | None]  # the versions a change goes to: (seq, seq) or, for the working one, (its seq, None)
+
+
+def visible(rel: DocRelease | None):
+    """Rows of pages in this version (None: the working one)."""
+    if rel is None or rel.working:
+        return DocPage.until_seq.is_(None)
+    return and_(DocPage.since_seq <= rel.seq, or_(DocPage.until_seq.is_(None), DocPage.until_seq >= rel.seq))
+
+
+async def working(session: AsyncSession, site_id: int) -> DocRelease:
+    """The site's working version (made if it has none)."""
+    rel = await session.scalar(select(DocRelease).where(DocRelease.site_id == site_id, DocRelease.working.is_(True)).limit(1))
+    if rel is None:
+        site = await session.get(DocSite, site_id)
+        assert site is not None
+        seq = int(await session.scalar(select(func.max(DocRelease.seq)).where(DocRelease.site_id == site_id)) or 0) + 1
+        rel = DocRelease(project_id=site.project_id, site_id=site_id, seq=seq, working=True, name="next", slug="next", notes="")
+        session.add(rel)
+        await session.flush()
+    return rel
+
+
+async def span_of(session: AsyncSession, site_id: int, rel: DocRelease | None) -> Span:
+    if rel is None or rel.working:
+        return (rel or await working(session, site_id)).seq, None
+    return rel.seq, rel.seq
+
+
+_COPIED = (
+    "project_id", "site_id", "parent_id", "position", "page_key", "title", "slug", "path", "depth", "body", "source_hash", "paths", "edited_by",
+    "edited_at", "drift", "flagged_at", "flag_reason", "reminded_at", "created_at",
+)  # fmt: skip
+
+
+async def _copy(session: AsyncSession, row: DocPage, since: int, until: int | None) -> DocPage:
+    """The row's page, with its translations, for these versions."""
+    twin = DocPage(**{k: getattr(row, k) for k in _COPIED}, since_seq=since, until_seq=until)
+    twin.paths = list(row.paths or [])
+    session.add(twin)
+    await session.flush()
+    for t in list(await session.scalars(select(DocTranslation).where(DocTranslation.page_id == row.id))):
+        session.add(DocTranslation(
+            project_id=t.project_id, site_id=t.site_id, page_id=twin.id, lang=t.lang, title=t.title, body=t.body, source_hash=t.source_hash,
+            translated_by=t.translated_by, translated_at=t.translated_at, error=t.error, attempted_at=t.attempted_at,
+        ))  # fmt: skip
+    return twin
+
+
+def _parts(row: DocPage, span: Span) -> tuple[Span | None, Span | None]:
+    """The row's versions below and above the span."""
+    lo, hi = span
+    below = (row.since_seq, lo - 1) if row.since_seq < lo else None
+    above = (hi + 1, row.until_seq) if hi is not None and (row.until_seq is None or row.until_seq > hi) else None
+    return below, above
+
+
+async def isolate(session: AsyncSession, row: DocPage, span: Span) -> DocPage:
+    """The row of the page for these versions only, split off before a change (copy on write)."""
+    below, above = _parts(row, span)
+    if below is None and above is None:
+        return row
+    if above is not None:
+        target = await _copy(session, row, *span)
+        row.since_seq, row.until_seq = above
+    else:
+        target = row
+        row.since_seq, row.until_seq = span
+    if below is not None:
+        await _copy(session, row, *below)
+    return target
+
+
+async def drop(session: AsyncSession, row: DocPage, span: Span) -> None:
+    """The page's row leaves these versions; the other versions keep it."""
+    below, above = _parts(row, span)
+    if above is not None:
+        if below is not None:
+            await _copy(session, row, *below)
+        row.since_seq, row.until_seq = above
+    elif below is not None:
+        row.since_seq, row.until_seq = below
+    else:
+        await remove_row(session, row)
+
+
+async def remove_row(session: AsyncSession, row: DocPage) -> None:
+    """A row gone from every version. A page's key row first takes over its highest other row (its id stays the
+    page's), so that no other version loses the page or what points at it."""
+    if row.id == row.page_key:
+        other = await session.scalar(select(DocPage).where(DocPage.page_key == row.id, DocPage.id != row.id).order_by(DocPage.since_seq.desc()).limit(1))
+        if other is not None:
+            for key in (*_COPIED, "since_seq", "until_seq"):
+                setattr(row, key, getattr(other, key))
+            await session.execute(delete(DocTranslation).where(DocTranslation.page_id == row.id))
+            await session.execute(update(DocTranslation).where(DocTranslation.page_id == other.id).values(page_id=row.id).execution_options(synchronize_session=False))
+            await session.execute(update(DocPageVersion).where(DocPageVersion.page_id == other.id).values(page_id=row.id).execution_options(synchronize_session=False))
+            await session.delete(other)
+            await session.flush()
+            return
+    await session.delete(row)
+    await session.flush()
+
+
 # --- the tree -------------------------------------------------------------------------------------------------
 
 
@@ -301,15 +422,20 @@ def _under(parent_id: int | None):
     return DocPage.parent_id.is_(None) if parent_id is None else DocPage.parent_id == parent_id
 
 
-async def children(session: AsyncSession, site_id: int, parent_id: int | None, offset: int = 0, limit: int = PAGE_LIMIT) -> tuple[list[DocPage], dict[int, int], int]:
-    """One page of a page's children (None: the top), with how many children each has, and how many there are."""
-    q = select(DocPage).where(DocPage.site_id == site_id, _under(parent_id)).order_by(DocPage.position, DocPage.id)
-    rows = list(await session.scalars(q.offset(offset).limit(min(limit, PAGE_LIMIT))))
-    total = int(await session.scalar(select(func.count()).select_from(DocPage).where(DocPage.site_id == site_id, _under(parent_id))) or 0)
-    return rows, await child_counts(session, [p.id for p in rows]), total
+ORDER = (DocPage.position, DocPage.page_key)
 
 
-async def levels(session: AsyncSession, site_id: int, parent_ids: list[int | None]) -> dict[int | None, tuple[list[DocPage], int]]:
+async def children(
+    session: AsyncSession, site_id: int, parent_id: int | None, offset: int = 0, limit: int = PAGE_LIMIT, rel: DocRelease | None = None
+) -> tuple[list[DocPage], dict[int, int], int]:
+    """One page of a page's children (None: the top), with how many children each has (by page key), and how many there are."""
+    where = (DocPage.site_id == site_id, _under(parent_id), visible(rel))
+    rows = list(await session.scalars(select(DocPage).where(*where).order_by(*ORDER).offset(offset).limit(min(limit, PAGE_LIMIT))))
+    total = int(await session.scalar(select(func.count()).select_from(DocPage).where(*where)) or 0)
+    return rows, await child_counts(session, [p.page_key for p in rows], rel), total
+
+
+async def levels(session: AsyncSession, site_id: int, parent_ids: list[int | None], rel: DocRelease | None = None) -> dict[int | None, tuple[list[DocPage], int]]:
     """The children of several pages at once (None: the top), at most ``PAGE_LIMIT`` each, with how many there are:
     the navigation opened down to a page, in two queries whatever its depth."""
     if not parent_ids:
@@ -317,35 +443,41 @@ async def levels(session: AsyncSession, site_id: int, parent_ids: list[int | Non
     ids = [p for p in parent_ids if p is not None]
     where = or_(DocPage.parent_id.in_(ids), DocPage.parent_id.is_(None)) if None in parent_ids else DocPage.parent_id.in_(ids)
     numbered = (
-        select(DocPage.id, func.row_number().over(partition_by=DocPage.parent_id, order_by=(DocPage.position, DocPage.id)).label("n"))
-        .where(DocPage.site_id == site_id, where)
+        select(DocPage.id, func.row_number().over(partition_by=DocPage.parent_id, order_by=ORDER).label("n"))
+        .where(DocPage.site_id == site_id, where, visible(rel))
         .subquery()
     )
-    rows = list(await session.scalars(select(DocPage).join(numbered, numbered.c.id == DocPage.id).where(numbered.c.n <= PAGE_LIMIT).order_by(DocPage.position, DocPage.id)))
-    totals = dict((await session.execute(select(DocPage.parent_id, func.count()).where(DocPage.site_id == site_id, where).group_by(DocPage.parent_id))).all())
+    rows = list(await session.scalars(select(DocPage).join(numbered, numbered.c.id == DocPage.id).where(numbered.c.n <= PAGE_LIMIT).order_by(*ORDER)))
+    totals = dict((await session.execute(select(DocPage.parent_id, func.count()).where(DocPage.site_id == site_id, where, visible(rel)).group_by(DocPage.parent_id))).all())
     out: dict[int | None, tuple[list[DocPage], int]] = {p: ([], int(totals.get(p, 0))) for p in parent_ids}
     for page in rows:
         out[page.parent_id][0].append(page)
     return out
 
 
-async def child_counts(session: AsyncSession, ids: list[int]) -> dict[int, int]:
-    if not ids:
+async def child_counts(session: AsyncSession, keys: list[int], rel: DocRelease | None = None) -> dict[int, int]:
+    """By page key: how many pages are directly below it in this version."""
+    if not keys:
         return {}
-    rows = await session.execute(select(DocPage.parent_id, func.count()).where(DocPage.parent_id.in_(ids)).group_by(DocPage.parent_id))
+    rows = await session.execute(select(DocPage.parent_id, func.count()).where(DocPage.parent_id.in_(keys), visible(rel)).group_by(DocPage.parent_id))
     return {pid: int(n) for pid, n in rows.all()}
 
 
-async def home(session: AsyncSession, site_id: int) -> DocPage | None:
+async def row_of(session: AsyncSession, key: int, rel: DocRelease | None = None) -> DocPage | None:
+    """The page in this version."""
+    return await session.scalar(select(DocPage).where(DocPage.page_key == key, visible(rel)).limit(1))
+
+
+async def home(session: AsyncSession, site_id: int, rel: DocRelease | None = None) -> DocPage | None:
     """The first page at the top: the site's start page."""
-    return await session.scalar(select(DocPage).where(DocPage.site_id == site_id, DocPage.parent_id.is_(None)).order_by(DocPage.position, DocPage.id).limit(1))
+    return await session.scalar(select(DocPage).where(DocPage.site_id == site_id, DocPage.parent_id.is_(None), visible(rel)).order_by(*ORDER).limit(1))
 
 
-async def by_path(session: AsyncSession, site_id: int, path: str) -> DocPage | None:
+async def by_path(session: AsyncSession, site_id: int, path: str, rel: DocRelease | None = None) -> DocPage | None:
     path = path.strip("/")
     if not path:
-        return await home(session, site_id)
-    return await session.scalar(select(DocPage).where(DocPage.site_id == site_id, DocPage.path == path).limit(1))
+        return await home(session, site_id, rel)
+    return await session.scalar(select(DocPage).where(DocPage.site_id == site_id, DocPage.path == path, visible(rel)).limit(1))
 
 
 def prefixes(path: str) -> list[str]:
@@ -353,81 +485,89 @@ def prefixes(path: str) -> list[str]:
     return ["/".join(parts[: i + 1]) for i in range(len(parts) - 1)]
 
 
-async def ancestors(session: AsyncSession, page: DocPage) -> list[DocPage]:
+async def ancestors(session: AsyncSession, page: DocPage, rel: DocRelease | None = None) -> list[DocPage]:
     """From the top down to its parent: one query by the prefixes of its address."""
     if not page.parent_id:
         return []
-    rows = {p.path: p for p in await session.scalars(select(DocPage).where(DocPage.site_id == page.site_id, DocPage.path.in_(prefixes(page.path))))}
+    q = select(DocPage).where(DocPage.site_id == page.site_id, DocPage.path.in_(prefixes(page.path)), visible(rel))
+    rows = {p.path: p for p in await session.scalars(q)}
     return [rows[p] for p in prefixes(page.path) if p in rows]
 
 
-async def _sibling(session: AsyncSession, page: DocPage, after: bool) -> DocPage | None:
-    q = select(DocPage).where(DocPage.site_id == page.site_id, _under(page.parent_id), DocPage.id != page.id)
+async def _sibling(session: AsyncSession, page: DocPage, after: bool, rel: DocRelease | None) -> DocPage | None:
+    q = select(DocPage).where(DocPage.site_id == page.site_id, _under(page.parent_id), DocPage.page_key != page.page_key, visible(rel))
     if after:
-        q = q.where((DocPage.position > page.position) | ((DocPage.position == page.position) & (DocPage.id > page.id))).order_by(DocPage.position, DocPage.id)
+        q = q.where((DocPage.position > page.position) | ((DocPage.position == page.position) & (DocPage.page_key > page.page_key))).order_by(*ORDER)
     else:
-        q = q.where((DocPage.position < page.position) | ((DocPage.position == page.position) & (DocPage.id < page.id))).order_by(DocPage.position.desc(), DocPage.id.desc())
+        q = q.where((DocPage.position < page.position) | ((DocPage.position == page.position) & (DocPage.page_key < page.page_key)))
+        q = q.order_by(DocPage.position.desc(), DocPage.page_key.desc())
     return await session.scalar(q.limit(1))
 
 
-async def neighbours(session: AsyncSession, page: DocPage) -> tuple[DocPage | None, DocPage | None]:
-    """The page before and after it in reading order (depth first), in a few queries along the tree."""
-    prev = await _sibling(session, page, after=False)
+async def neighbours(session: AsyncSession, page: DocPage, rel: DocRelease | None = None, up: list[DocPage] | None = None) -> tuple[DocPage | None, DocPage | None]:
+    """The page before and after it in reading order (depth first), in a few queries along the tree; ``up``: its
+    ancestors where they are read already."""
+    known = {p.page_key: p for p in up or []}
+
+    async def parent_of(row: DocPage) -> DocPage | None:
+        return known.get(row.parent_id) or await row_of(session, row.parent_id, rel) if row.parent_id else None
+
+    prev = await _sibling(session, page, False, rel)
     if prev is not None:  # the last page under the sibling before it
         for _ in range(MAX_DEPTH):
-            last = await session.scalar(select(DocPage).where(DocPage.parent_id == prev.id).order_by(DocPage.position.desc(), DocPage.id.desc()).limit(1))
+            q = select(DocPage).where(DocPage.parent_id == prev.page_key, visible(rel)).order_by(DocPage.position.desc(), DocPage.page_key.desc())
+            last = await session.scalar(q.limit(1))
             if last is None:
                 break
             prev = last
     elif page.parent_id:
-        prev = await session.get(DocPage, page.parent_id)
-    nxt = await session.scalar(select(DocPage).where(DocPage.parent_id == page.id).order_by(DocPage.position, DocPage.id).limit(1))
-    at = page
+        prev = await parent_of(page)
+    nxt = await session.scalar(select(DocPage).where(DocPage.parent_id == page.page_key, visible(rel)).order_by(*ORDER).limit(1))
+    at: DocPage | None = page
     for _ in range(MAX_DEPTH):
-        if nxt is not None:
+        if nxt is not None or at is None:
             break
-        nxt = await _sibling(session, at, after=True)
+        nxt = await _sibling(session, at, True, rel)
         if nxt is not None or not at.parent_id:
             break
-        at = await session.get(DocPage, at.parent_id)
-        if at is None:
-            break
+        at = await parent_of(at)
     return prev, nxt
 
 
-async def search_titles(session: AsyncSession, site_id: int, query: str, limit: int = 20) -> list[DocPage]:
+async def search_titles(session: AsyncSession, site_id: int, query: str, limit: int = 20, rel: DocRelease | None = None) -> list[DocPage]:
     """Pages whose title or address has all these words."""
-    q = select(DocPage).where(DocPage.site_id == site_id)
+    q = select(DocPage).where(DocPage.site_id == site_id, visible(rel))
     for word in query.lower().split()[:6]:
         like = f"%{word}%"
         q = q.where(or_(func.lower(DocPage.title).like(like), DocPage.path.like(like)))
     return list(await session.scalars(q.order_by(DocPage.depth, DocPage.position).limit(limit)))
 
 
-def item(page: DocPage, children_count: int = 0) -> DocPageItem:
+def item(page: DocPage, children_count: int = 0, rel: DocRelease | None = None) -> DocPageItem:
     return DocPageItem(
-        id=page.id, site_id=page.site_id, parent_id=page.parent_id, position=page.position, title=page.title, slug=page.slug, path=page.path,
-        depth=page.depth, children=children_count, paths=list(page.paths or []), edited_by=page.edited_by, edited_at=page.edited_at, drift=page.drift,
-        flagged_at=page.flagged_at, flag_reason=page.flag_reason, updated_at=page.updated_at,
+        id=page.page_key or page.id, site_id=page.site_id, release_id=rel.id if rel is not None and not rel.working else None, parent_id=page.parent_id,
+        position=page.position, title=page.title, slug=page.slug, path=page.path, depth=page.depth, children=children_count, paths=list(page.paths or []),
+        edited_by=page.edited_by, edited_at=page.edited_at, drift=page.drift, flagged_at=page.flagged_at, flag_reason=page.flag_reason, updated_at=page.updated_at,
     )  # fmt: skip
 
 
-async def get_page(session: AsyncSession, project_id: int, page_id: int) -> DocPage:
-    page = await session.get(DocPage, page_id)
-    if page is None or page.project_id != project_id:
-        raise NotFound(f"Doc page {page_id} not found")
+async def get_page(session: AsyncSession, project_id: int, page_id: int, rel: DocRelease | None = None) -> DocPage:
+    """A page (by its id: its key) in a version (None: the working one)."""
+    page = await row_of(session, page_id, rel)
+    if page is None or page.project_id != project_id or (rel is not None and rel.site_id != page.site_id):
+        raise NotFound(f"Doc page {page_id} not found" + (f" in version {rel.name}" if rel is not None else ""))
     return page
 
 
-async def publish_page(session: AsyncSession, page: DocPage) -> None:
-    counts = await child_counts(session, [page.id])
-    bus.publish(page.project_id, "doc_page.upserted", item(page, counts.get(page.id, 0)))
+async def publish_page(session: AsyncSession, page: DocPage, rel: DocRelease | None = None) -> None:
+    counts = await child_counts(session, [page.page_key], rel)
+    bus.publish(page.project_id, "doc_page.upserted", item(page, counts.get(page.page_key, 0), rel))
 
 
-async def _unique_page_slug(session: AsyncSession, site_id: int, parent_id: int | None, base: str, exclude_id: int | None) -> str:
-    q = select(DocPage.slug).where(DocPage.site_id == site_id, _under(parent_id), DocPage.slug.like(f"{base}%"))
-    if exclude_id is not None:
-        q = q.where(DocPage.id != exclude_id)
+async def _unique_page_slug(session: AsyncSession, site_id: int, parent_id: int | None, base: str, exclude_key: int | None, rel: DocRelease | None) -> str:
+    q = select(DocPage.slug).where(DocPage.site_id == site_id, _under(parent_id), DocPage.slug.like(f"{base}%"), visible(rel))
+    if exclude_key is not None:
+        q = q.where(DocPage.page_key != exclude_key)
     taken = set(await session.scalars(q))
     slug, n = base, 2
     while slug in taken:
@@ -435,51 +575,62 @@ async def _unique_page_slug(session: AsyncSession, site_id: int, parent_id: int 
     return slug
 
 
-async def _place(session: AsyncSession, page: DocPage, parent_id: int | None, position: int | None) -> DocPage | None:
+async def _shift(session: AsyncSession, site_id: int, parent_id: int | None, rel: DocRelease | None, span: Span, cond, by: int, exclude_key: int | None) -> None:  # noqa: ANN001
+    """Siblings in this version that meet ``cond`` move ``by`` places (split off from other versions first)."""
+    q = select(DocPage).where(DocPage.site_id == site_id, _under(parent_id), visible(rel), cond)
+    if exclude_key is not None:
+        q = q.where(DocPage.page_key != exclude_key)
+    for row in list(await session.scalars(q)):
+        row = await isolate(session, row, span)
+        row.position += by
+    await session.flush()
+
+
+async def _place(session: AsyncSession, page: DocPage, parent_id: int | None, position: int | None, rel: DocRelease | None, span: Span) -> DocPage | None:
     """Put the page among its new siblings at ``position`` (None: last). Returns the parent."""
     parent = None
     if parent_id is not None:
-        parent = await session.get(DocPage, parent_id)
+        parent = await row_of(session, parent_id, rel)
         if parent is None or parent.site_id != page.site_id:
-            raise ServiceError("The parent page is not a page of this site.")
-        if page.id is not None and (parent.id == page.id or parent.path.startswith(page.path + "/")):
+            raise ServiceError("The parent page is not a page of this site" + (f" in version {rel.name}." if rel is not None and not rel.working else "."))
+        if page.page_key is not None and (parent.page_key == page.page_key or parent.path.startswith(page.path + "/")):
             raise ServiceError("A page cannot be moved below itself.")
         if parent.depth + 1 >= MAX_DEPTH:
             raise ServiceError(f"Pages nest at most {MAX_DEPTH} deep.")
-    same = page.id is not None and page.parent_id == parent_id
-    count = int(await session.scalar(select(func.count()).select_from(DocPage).where(DocPage.site_id == page.site_id, _under(parent_id))) or 0)
+    known = page.page_key is not None
+    same = known and page.parent_id == parent_id
+    count = int(await session.scalar(select(func.count()).select_from(DocPage).where(DocPage.site_id == page.site_id, _under(parent_id), visible(rel))) or 0)
     if same:
         count -= 1
     at = count if position is None else min(position, count)
-    shift = select(DocPage.id).where(DocPage.site_id == page.site_id, _under(parent_id), DocPage.position >= at)
-    if page.id is not None:
-        shift = shift.where(DocPage.id != page.id)
-    if same:  # close the gap it leaves, then open one where it goes
-        await session.execute(update(DocPage).where(DocPage.site_id == page.site_id, _under(parent_id), DocPage.position > page.position, DocPage.id != page.id).values(position=DocPage.position - 1))
-    elif page.id is not None:
-        await session.execute(update(DocPage).where(DocPage.site_id == page.site_id, _under(page.parent_id), DocPage.position > page.position).values(position=DocPage.position - 1))
-    await session.execute(update(DocPage).where(DocPage.id.in_(shift)).values(position=DocPage.position + 1).execution_options(synchronize_session="fetch"))
+    if known:  # close the gap it leaves, then open one where it goes
+        await _shift(session, page.site_id, page.parent_id, rel, span, DocPage.position > page.position, -1, page.page_key)
+    if at < count:
+        await _shift(session, page.site_id, parent_id, rel, span, DocPage.position >= at, 1, page.page_key)
     page.parent_id, page.position = parent_id, at
     return parent
 
 
-async def _repath(session: AsyncSession, page: DocPage, parent: DocPage | None) -> None:
-    """Its address and depth from its parent's, and those of every page below it (level by level)."""
+async def _repath(session: AsyncSession, page: DocPage, parent: DocPage | None, rel: DocRelease | None, span: Span) -> None:
+    """Its address and depth from its parent's, and those of every page below it in this version (level by level)."""
     old = page.path
     page.path = f"{parent.path}/{page.slug}" if parent else page.slug
     page.depth = parent.depth + 1 if parent else 0
-    if not old or old == page.path or page.id is None:
+    if not old or old == page.path or page.page_key is None:
         return
     level = [page]
     for _ in range(MAX_DEPTH):
-        ids = {p.id: p for p in level}
-        below = list(await session.scalars(select(DocPage).where(DocPage.parent_id.in_(list(ids)))))
+        keys = {p.page_key: p for p in level}
+        below = list(await session.scalars(select(DocPage).where(DocPage.parent_id.in_(list(keys)), visible(rel))))
         if not below:
             break
+        moved = []
         for child in below:
-            up = ids[child.parent_id]
+            child = await isolate(session, child, span)
+            up = keys[child.parent_id]
             child.path, child.depth = f"{up.path}/{child.slug}", up.depth + 1
-        level = below
+            moved.append(child)
+        level = moved
 
 
 @dataclass
@@ -494,46 +645,57 @@ def _paths(values: list[str]) -> list[str]:
 
 async def create_page(
     session: AsyncSession, site: DocSite, author: Author, *, title: str, body: str = "", parent_id: int | None = None, position: int | None = None,
-    slug: str | None = None, paths: list[str] | None = None, reason: str = "",
+    slug: str | None = None, paths: list[str] | None = None, reason: str = "", rel: DocRelease | None = None,
 ) -> DocPage:  # fmt: skip
+    """In one version (None: the working one, and so in every version cut from now on)."""
     now = utcnow()
     title = title.strip()[:200]
-    page = DocPage(project_id=site.project_id, site_id=site.id, title=title, body=body, paths=_paths(paths or []), edited_by=author.name, edited_at=now, source_hash=source_hash(title, body))
-    parent = await _place(session, page, parent_id, position)
-    page.slug = await _unique_page_slug(session, site.id, parent_id, slug or slugify(title, "page"), None)
-    await _repath(session, page, parent)
+    span = await span_of(session, site.id, rel)
+    page = DocPage(
+        project_id=site.project_id, site_id=site.id, title=title, body=body, paths=_paths(paths or []), edited_by=author.name, edited_at=now,
+        source_hash=source_hash(title, body), since_seq=span[0], until_seq=span[1],
+    )  # fmt: skip
+    parent = await _place(session, page, parent_id, position, rel, span)
+    page.slug = await _unique_page_slug(session, site.id, parent_id, slug or slugify(title, "page"), None, rel)
+    await _repath(session, page, parent, rel, span)
     session.add(page)
     await session.flush()
+    page.page_key = page.id
     session.add(DocPageVersion(project_id=site.project_id, page_id=page.id, title=page.title, body=body, author=author.name, agent_id=author.agent_id, reason=(reason or "created")[:300], created_at=now))
     site.updated_at = now
     await session.commit()
-    await publish_page(session, page)
+    await publish_page(session, page, rel)
     return page
 
 
 async def update_page(
     session: AsyncSession, page: DocPage, author: Author, *, title: str | None = None, body: str | None = None, move: bool = False,
     parent_id: int | None = None, position: int | None = None, slug: str | None = None, paths: list[str] | None = None, reason: str = "",
+    rel: DocRelease | None = None,
 ) -> DocPage:  # fmt: skip
     """A new title or text is a new version (and makes its translations outdated); a move, a new slug or new linked
-    paths are none."""
+    paths are none. ``page`` is its row in ``rel`` (None: the working version); a change of title, text or place goes
+    to that version only, linked paths to the row (they matter in the working version only)."""
     now = utcnow()
+    changed = (title is not None and title.strip() != page.title) or (body is not None and body != page.body)
+    span = await span_of(session, page.site_id, rel)
+    if changed or move or position is not None or (slug is not None and slug != page.slug):
+        page = await isolate(session, page, span)
     repath = False
-    parent = await session.get(DocPage, page.parent_id) if page.parent_id else None
+    parent = await row_of(session, page.parent_id, rel) if page.parent_id else None
     if move or position is not None:
         target = parent_id if move else page.parent_id
-        parent = await _place(session, page, target, position)
+        parent = await _place(session, page, target, position, rel, span)
         if slug is None:  # its slug stays unless a sibling there has it
-            page.slug = await _unique_page_slug(session, page.site_id, target, page.slug, page.id)
+            page.slug = await _unique_page_slug(session, page.site_id, target, page.slug, page.page_key, rel)
         repath = True
     if slug is not None and slug != page.slug:
-        page.slug = await _unique_page_slug(session, page.site_id, page.parent_id, slug, page.id)
+        page.slug = await _unique_page_slug(session, page.site_id, page.parent_id, slug, page.page_key, rel)
         repath = True
     if repath:
-        await _repath(session, page, parent)
+        await _repath(session, page, parent, rel, span)
     if paths is not None:
         page.paths = _paths(paths)
-    changed = (title is not None and title.strip() != page.title) or (body is not None and body != page.body)
     if changed:
         page.title = title.strip()[:200] if title is not None else page.title
         page.body = body if body is not None else page.body
@@ -544,54 +706,67 @@ async def update_page(
     page.updated_at = now
     await touch(session, page.site_id)
     await session.commit()
-    await publish_page(session, page)
+    await publish_page(session, page, rel)
     return page
 
 
-async def confirm_page(session: AsyncSession, page: DocPage, author: Author, reason: str) -> DocPage:
+async def confirm_page(session: AsyncSession, page: DocPage, author: Author, reason: str, rel: DocRelease | None = None) -> DocPage:
     """Looked at and still right: the mark that it may be outdated goes, without a new version."""
     page.drift, page.flagged_at, page.flag_reason, page.reminded_at = 0, None, "", None
     page.edited_at = utcnow()
     await session.commit()
-    await publish_page(session, page)
+    await publish_page(session, page, rel)
     return page
 
 
-async def delete_page(session: AsyncSession, page: DocPage) -> None:
-    """With the pages below it and all their versions and translations."""
-    project_id, page_id, site_id, parent_id, position = page.project_id, page.id, page.site_id, page.parent_id, page.position
-    await session.delete(page)
-    await session.flush()
-    await session.execute(update(DocPage).where(DocPage.site_id == site_id, _under(parent_id), DocPage.position > position).values(position=DocPage.position - 1))
+async def delete_page(session: AsyncSession, page: DocPage, rel: DocRelease | None = None) -> None:
+    """With the pages below it, from this version (None: the working one); the other versions keep theirs. Gone from
+    every version, a page goes with all its versions and translations."""
+    project_id, key, site_id, parent_id, position = page.project_id, page.page_key, page.site_id, page.parent_id, page.position
+    span = await span_of(session, site_id, rel)
+    tree = [[page]]
+    for _ in range(MAX_DEPTH):
+        below = list(await session.scalars(select(DocPage).where(DocPage.parent_id.in_([p.page_key for p in tree[-1]]), visible(rel))))
+        if not below:
+            break
+        tree.append(below)
+    for level in reversed(tree):  # the deepest first: nothing goes by a cascade before its turn
+        for row in level:
+            await drop(session, row, span)
+    await _shift(session, site_id, parent_id, rel, span, DocPage.position > position, -1, None)
     await touch(session, site_id)
     await session.commit()
-    bus.publish(project_id, "doc_page.deleted", {"id": page_id, "site_id": site_id})
+    bus.publish(project_id, "doc_page.deleted", {"id": key, "site_id": site_id, "release_id": rel.id if rel is not None and not rel.working else None})
 
 
 # --- versions -------------------------------------------------------------------------------------------------
+# A page's saved states, in every version of the site: the history of all its rows.
 
 
-async def versions(session: AsyncSession, page_id: int, limit: int = 100) -> list[DocPageVersion]:
-    q = select(DocPageVersion).where(DocPageVersion.page_id == page_id).order_by(DocPageVersion.id.desc()).limit(limit)
+def _rows(page_key: int):
+    return select(DocPage.id).where(DocPage.page_key == page_key)
+
+
+async def versions(session: AsyncSession, page_key: int, limit: int = 100) -> list[DocPageVersion]:
+    q = select(DocPageVersion).where(DocPageVersion.page_id.in_(_rows(page_key))).order_by(DocPageVersion.id.desc()).limit(limit)
     return list(await session.scalars(q))
 
 
-async def count_versions(session: AsyncSession, page_id: int) -> int:
-    return int(await session.scalar(select(func.count()).select_from(DocPageVersion).where(DocPageVersion.page_id == page_id)) or 0)
+async def count_versions(session: AsyncSession, page_key: int) -> int:
+    return int(await session.scalar(select(func.count()).select_from(DocPageVersion).where(DocPageVersion.page_id.in_(_rows(page_key)))) or 0)
 
 
 async def get_version(session: AsyncSession, page: DocPage, version_id: int) -> DocPageVersion:
     version = await session.get(DocPageVersion, version_id)
-    if version is None or version.page_id != page.id:
+    if version is None or (await session.get(DocPage, version.page_id) or page).page_key != page.page_key:
         raise NotFound("Version not found")
     return version
 
 
-async def restore(session: AsyncSession, page: DocPage, version_id: int, author: Author) -> DocPage:
+async def restore(session: AsyncSession, page: DocPage, version_id: int, author: Author, rel: DocRelease | None = None) -> DocPage:
     version = await get_version(session, page, version_id)
     when = f"{version.created_at:%Y-%m-%d %H:%M}"
-    return await update_page(session, page, author, title=version.title, body=version.body, reason=f"restored the version of {when} by {version.author}")
-
+    return await update_page(session, page, author, title=version.title, body=version.body, reason=f"restored the version of {when} by {version.author}", rel=rel)
 
 # --- files ----------------------------------------------------------------------------------------------------
 

@@ -1,13 +1,15 @@
 """Served doc sites (#118, services/docs_public.py): public ones without login, private ones for people with a role
 in their project.
 
-- ``/docs/<slug>/[<lang>/]<page path>``: the page as HTML: the frontend's ``docs.html`` (a Vite entry of its own) with
+- ``/docs/<slug>/[<version>/][<lang>/]<page path>``: the page as HTML (without a version: the site's default one, #126): the frontend's ``docs.html`` (a Vite entry of its own) with
   the page's title, description, canonical address and hreflang alternates in its head, the page and its navigation
   rendered in ``#docs-root`` (what search engines read) and ``window.__PB_DOCS__`` = {site, page} for the script;
   without a frontend build a plain page. A private site without a signed-in reader: 401 with a sign-in form
   (``sign_in``: true in the state). ``/docs/<slug>/sitemap.xml`` and ``robots.txt``.
 - JSON under ``/api/public/docs/<slug>``: the site with its top level (``?lang=``), ``/nav?parent=&offset=&limit=``
-  (children, page by page), ``/page?path=&lang=``, ``/search?q=&lang=``, ``/files/<id>``. ETag on every view.
+  (children, page by page), ``/page?path=&lang=``, ``/search?q=&lang=``, ``/files/<id>``. ETag on every view. Each
+  takes ``?release=<version slug>`` (none: the default version); the site's view names the version shown
+  (``version``), the ones to switch to (``versions``) and the site's address without the version (``site_base``).
 - ``/custom/<page>?lang=``: a page of the site's own (#121, services/docs_custom.py), at ``p/<page>`` in the HTML.
 - ``POST /api/public/docs/<slug>/assistant`` {text, conversation?, lang?}: the site's assistant (#119, where
   ``assistant`` is true in the site's view), the answer streamed as NDJSON (``DocsAssistant.stream``); refused with
@@ -68,6 +70,13 @@ def _base(request: Request, site: DocSite) -> str:
     return "" if request.scope.get("state", {}).get(DOMAIN_SLUG) == site.slug else f"/docs/{site.slug}"
 
 
+Release = Query(default=None, max_length=40, description="A version's slug (#126); none: the site's default version")
+
+
+async def _version(session, request: Request, site: DocSite, release: str | None) -> public.Version:  # noqa: ANN001
+    return await public.version(session, site, release, _base(request, site))
+
+
 async def _site(session, request: Request, slug: str) -> DocSite:  # noqa: ANN001
     on_domain = request.scope.get("state", {}).get(DOMAIN_SLUG)
     if on_domain is not None and on_domain != slug:
@@ -95,58 +104,68 @@ async def _view(request: Request, site: DocSite, key: tuple, make) -> Response: 
 
 
 @router.get("/{slug}")
-async def site(slug: str, request: Request, session: Session, lang: str | None = Query(default=None, max_length=20)) -> Response:
+async def site(slug: str, request: Request, session: Session, lang: str | None = Query(default=None, max_length=20), release: str | None = Release) -> Response:
     """{name, slug, description, public, base, api, language, languages, lang, lang_base, project, updated_at, home,
-    nav: {items: [{id, title, path, children}], total, offset}} (the top level)."""
+    nav: {items: [{id, title, path, children}], total, offset} (the top level), version: {slug, name, working,
+    deprecated, default, released_on, notes}, versions: [{slug, name, working, deprecated, default, released_on}],
+    site_base}. ``base`` is the version's address (the site's for the default version)."""
     _limit(PAGES, request)
     found = await _site(session, request, slug)
     language = public.lang_of(found, lang)
-    return await _view(request, found, ("site", language), lambda: public.site_view(session, found, _base(request, found), language))
+    ver = await _version(session, request, found, release)
+    return await _view(request, found, ("site", language, ver.rel.id), lambda: public.site_view(session, found, ver.base, language, ver))
 
 
 @router.get("/{slug}/nav")
 async def nav(
     slug: str, request: Request, session: Session, parent: int | None = None, lang: str | None = Query(default=None, max_length=20),
-    offset: int = Query(default=0, ge=0), limit: int = Query(default=docs_service.PAGE_LIMIT, ge=1, le=docs_service.PAGE_LIMIT),
+    offset: int = Query(default=0, ge=0), limit: int = Query(default=docs_service.PAGE_LIMIT, ge=1, le=docs_service.PAGE_LIMIT), release: str | None = Release,
 ) -> Response:  # fmt: skip
     """The children of a page (none: the top), page by page: {items: [{id, title, path, children}], total, offset}."""
     _limit(PAGES, request)
     found = await _site(session, request, slug)
     language = public.lang_of(found, lang)
-    return await _view(request, found, ("nav", language, parent, offset, limit), lambda: public.nav(session, found, parent, language, offset, limit))
+    ver = await _version(session, request, found, release)
+    return await _view(request, found, ("nav", language, parent, offset, limit, ver.rel.id), lambda: public.nav(session, found, parent, language, offset, limit, ver.rel))
 
 
 @router.get("/{slug}/page")
-async def page(slug: str, request: Request, session: Session, path: str = Query(default="", max_length=2000), lang: str | None = Query(default=None, max_length=20)) -> Response:
+async def page(
+    slug: str, request: Request, session: Session, path: str = Query(default="", max_length=2000), lang: str | None = Query(default=None, max_length=20),
+    release: str | None = Release,
+) -> Response:  # fmt: skip
     """{id, title, path, lang, fallback, html, toc: [{level, id, text}], markdown, description, updated_at, breadcrumbs,
     prev, next, sidebar: [nav of the top, nav of each page on the way down], children: nav}"""
     _limit(PAGES, request)
     found = await _site(session, request, slug)
     language = public.lang_of(found, lang)
-    return await _view(request, found, ("page", language, path.strip("/")), lambda: public.page_view(session, found, path, _base(request, found), language))
+    ver = await _version(session, request, found, release)
+    return await _view(request, found, ("page", language, path.strip("/"), ver.rel.id), lambda: public.page_view(session, found, path, ver.base, language, ver.rel))
 
 
 @router.get("/{slug}/custom/{page_slug}")
-async def custom_page(slug: str, page_slug: str, request: Request, session: Session, lang: str | None = Query(default=None, max_length=20)) -> Response:
+async def custom_page(slug: str, page_slug: str, request: Request, session: Session, lang: str | None = Query(default=None, max_length=20), release: str | None = Release) -> Response:
     """A page of the site's own (#121: imprint, privacy …, its address p/<page_slug>): {id, slug, path, title, lang,
     fallback, html, toc, description, updated_at}."""
     _limit(PAGES, request)
     found = await _site(session, request, slug)
     language = public.lang_of(found, lang)
-    return await _view(request, found, ("custom", language, page_slug), lambda: docs_custom.view(session, found, page_slug, _base(request, found), language))
+    ver = await _version(session, request, found, release)
+    return await _view(request, found, ("custom", language, page_slug, ver.rel.id), lambda: docs_custom.view(session, found, page_slug, ver.base, language, ver.rel))
 
 
 @router.get("/{slug}/search")
 async def search(
     slug: str, request: Request, session: Session, q: str = Query(min_length=1, max_length=200), lang: str | None = Query(default=None, max_length=20),
-    limit: int = Query(default=10, ge=1, le=20),
+    limit: int = Query(default=10, ge=1, le=20), release: str | None = Release,
 ) -> JSONResponse:  # fmt: skip
     """[{title, path, url, snippet}] in that language: by words, and by meaning where semantic search runs. Header
     ``X-Search-Words-Only: 1`` when the site's vector searches of this minute were used up."""
     _limit(SEARCHES, request)
     found = await _site(session, request, slug)
     language = public.lang_of(found, lang)
-    hits, words_only = await public.search_hits(session, found, q, _base(request, found), language, limit)
+    ver = await _version(session, request, found, release)
+    hits, words_only = await public.search_hits(session, found, q, ver.base, language, limit, rel=ver.rel)
     headers = {"Cache-Control": "private, no-cache" if not found.public else "public, max-age=60"}
     if words_only:
         headers = {"Cache-Control": "private, no-cache", "X-Search-Words-Only": "1"}  # not cached: meaning comes back within the minute
@@ -174,6 +193,7 @@ class AssistantIn(BaseModel):
     text: str = Field(min_length=1, max_length=10000)  # the assistant's own, friendlier limit is lower
     conversation: str | None = Field(default=None, max_length=100)  # a follow-up: the conversation it goes on
     lang: str | None = Field(default=None, max_length=20)  # the visitor's language: one of the site's
+    release: str | None = Field(default=None, max_length=40)  # the version the visitor reads (its slug; none: the default one)
 
 
 def _same_site(request: Request, site: DocSite) -> None:
@@ -189,7 +209,8 @@ async def ask_assistant(slug: str, body: AssistantIn, request: Request, session:
     found = await _site(session, request, slug)
     _same_site(request, found)
     language = public.lang_of(found, body.lang)
-    chat, spec, ctx = await runs.docs_assistant.start(session, found, _client(request), body.text, body.conversation, language, _base(request, found))
+    ver = await _version(session, request, found, body.release)
+    chat, spec, ctx = await runs.docs_assistant.start(session, found, _client(request), body.text, body.conversation, language, ver.base, ver.rel)
     max_tokens = found.assistant_max_tokens
     await session.close()  # the answer takes a while: no database connection is held for it
     headers = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
@@ -239,38 +260,45 @@ async def html_page(slug: str, path: str, request: Request, session: Session) ->
     if path == "robots.txt":
         rules = "Allow: /" if found.public else "Disallow: /"
         return PlainTextResponse(f"User-agent: *\n{rules}\nSitemap: {site_url}/sitemap.xml\n")
+    ver = await public.version(session, found, None, base)
     if path == "sitemap.xml":
         if not found.public:
             return PlainTextResponse("Not found", status_code=404)
-        return Response(await public.sitemap(session, found, site_url), media_type="application/xml", headers={"Cache-Control": "public, max-age=600"})
+        return Response(await public.sitemap(session, found, site_url, ver.default), media_type="application/xml", headers={"Cache-Control": "public, max-age=600"})
     first, _, rest = path.partition("/")
+    asked = next((r for r in ver.releases if r.slug == first and (not r.hidden or r.id == ver.default.id)), None)
+    if asked is not None:  # a version of the site (#126): its address comes before the language
+        ver = public.Version(asked, ver.default, ver.releases, base)
+        path = rest
+        first, _, rest = path.partition("/")
     lang = found.language
     if first in (found.languages or []):
         lang, path = first, rest
     cache = {"Cache-Control": "public, max-age=60" if found.public else "private, no-store"}
-    key = (found.id, found.updated_at.isoformat(), base, "html", lang, path.strip("/"), _origin(request))
+    key = (found.id, found.updated_at.isoformat(), base, "html", ver.rel.id, lang, path.strip("/"), _origin(request))
     grant = public.preview_grant(request.cookies.get(public.PREVIEW_COOKIE))
     draft = grant.theme if grant is not None and grant.site_id == found.id else None  # a theme not saved yet (#128)
     if draft is not None:
         cache, key = {"Cache-Control": "no-store"}, (*key, id(grant))
     elif (done := public.CACHE.get(key)) is not None:
         return HTMLResponse(done, headers=cache)
-    view = jsonable_encoder(await public.site_view(session, found, base, lang))
+    view = jsonable_encoder(await public.site_view(session, found, ver.base, lang, ver))
     if draft is not None:
         view["theme"] = docs_theme.public(draft, f"{public.api_base(found)}/files")
-    here = public.lang_base(found, base, lang)
+    here = public.lang_base(found, ver.base, lang)
     theme = public.theme_head(found, draft)
     custom = None
     if (m := path.strip("/")).startswith("p/") and "/" not in m[2:] and any(f["path"] == m for f in view["footer"]):  # a page of its own (#121)
-        custom = jsonable_encoder(await docs_custom.view(session, found, m[2:], base, lang))
+        custom = jsonable_encoder(await docs_custom.view(session, found, m[2:], ver.base, lang, ver.rel))
     try:
-        page_view = jsonable_encoder(await public.page_view(session, found, path, base, lang)) if view["nav"]["items"] and custom is None else None
+        page_view = jsonable_encoder(await public.page_view(session, found, path, ver.base, lang, ver.rel)) if view["nav"]["items"] and custom is None else None
     except NotFound:
         return HTMLResponse(public.document(template, {"site": view, "page": None}, public.head_html(view, None, site_url + "/", {}), public.body_html(view, None), lang, theme), status_code=404)
     shown = custom or page_view
     page_path = shown["path"] if shown and path.strip("/") else ""
     canonical = f"{_origin(request)}{here}/{page_path}"
-    alternates = {code: f"{site_url}{'' if code == found.language else '/' + code}/{page_path}" for code in view["languages"]}
+    version_url = _origin(request) + ver.base
+    alternates = {code: f"{version_url}{'' if code == found.language else '/' + code}/{page_path}" for code in view["languages"]}
     if len(alternates) > 1:
         alternates["x-default"] = alternates[found.language]
     state = {"site": view, "page": page_view, "custom": custom}

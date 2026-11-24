@@ -661,6 +661,12 @@ class DocPage(Timestamps, Base):
     site_id: Mapped[int] = mapped_column(ForeignKey("doc_sites.id", ondelete="CASCADE"), index=True)
     parent_id: Mapped[int | None] = mapped_column(ForeignKey("doc_pages.id", ondelete="CASCADE"), index=True)
     position: Mapped[int] = mapped_column(Integer, default=0)
+    # Versions of the site (#126, services/docs_releases.py): a row holds the page in the versions ``since_seq`` up to
+    # ``until_seq`` (None: up to the working version); ``page_key`` is the page across versions (the id of its row
+    # with the highest range), what ``parent_id``, links (doc-page:<key>) and every API name it by.
+    page_key: Mapped[int | None] = mapped_column(ForeignKey("doc_pages.id", ondelete="CASCADE"), index=True)
+    since_seq: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    until_seq: Mapped[int | None] = mapped_column(Integer)
     title: Mapped[str] = mapped_column(String(200))
     slug: Mapped[str] = mapped_column(String(120))
     path: Mapped[str] = mapped_column(String(2000), default="")  # its address under the site: the slugs from the top (kept on every move)
@@ -676,6 +682,27 @@ class DocPage(Timestamps, Base):
     flagged_at: Mapped[datetime | None] = mapped_column(DateTime)  # since when it may be outdated (an edit clears it)
     flag_reason: Mapped[str] = mapped_column(Text, default="")
     reminded_at: Mapped[datetime | None] = mapped_column(DateTime)  # the manager last heard it is stale
+
+
+class DocRelease(Timestamps, Base):
+    """A version of a doc site (#126, services/docs_releases.py): the working one (``working``, one per site, what is
+    written now) or one cut from it (``seq``: the order of cutting). The working one's ``seq`` is the one the next cut
+    gets. ``hidden``: not served (for the working one: the switch whether it is public at all)."""
+
+    __tablename__ = "doc_releases"
+    __table_args__ = (UniqueConstraint("site_id", "slug"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    site_id: Mapped[int] = mapped_column(ForeignKey("doc_sites.id", ondelete="CASCADE"), index=True)
+    seq: Mapped[int] = mapped_column(Integer, default=1)
+    working: Mapped[bool] = mapped_column(Boolean, default=False)
+    name: Mapped[str] = mapped_column(String(80))
+    slug: Mapped[str] = mapped_column(String(40))  # its address segment: /docs/<site>/<slug>/
+    notes: Mapped[str] = mapped_column(Text, default="")
+    released_on: Mapped[datetime | None] = mapped_column(DateTime)
+    deprecated: Mapped[bool] = mapped_column(Boolean, default=False)
+    hidden: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)  # what visitors get at /docs/<site>/ (none: the latest released)
 
 
 class DocPageVersion(Base):

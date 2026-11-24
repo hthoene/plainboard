@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from plainboard_protocol import CompletionResult, CompletionSpec, GitCommit, GitLogSpec, GitPresentSpec
-from sqlalchemy import String, cast, func, select
+from sqlalchemy import String, and_, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..models import Assignment, AssignmentStatus, DocPage, DocPageVersion, DocSite, DocWatch, Landing, LandingStatus, Project, Repository, Run, RunStatus, RunTrigger, Task, utcnow
@@ -76,8 +76,9 @@ DEFAULT_PROVIDER = "claude_code"
 
 
 def linked():
-    """Pages with code paths of their own: the only ones a change of code is matched against."""
-    return cast(DocPage.paths, String) != "[]"
+    """Pages of the working version with code paths of their own: the only ones a change of code is matched against
+    (released versions are only corrected by hand, #126)."""
+    return and_(cast(DocPage.paths, String) != "[]", DocPage.until_seq.is_(None))
 
 
 @dataclass
@@ -413,7 +414,7 @@ class DocsWatcher:
                 found.append({"ref": hit.ref, "sim": round(hit.similarity or 0, 4), "to": label})
                 if (hit.similarity or 0) >= threshold and hit.source_id.isdigit():
                     page = await s.get(DocPage, int(hit.source_id))
-                    if page is not None and page.project_id == project.id:
+                    if page is not None and page.project_id == project.id and page.until_seq is None:
                         concerns.setdefault(page.id, Concern(page)).reasons.append(f"close in meaning to {label} ({hit.similarity:.2f})")
         await flow_log.record(s, project.id, "docs.near", model=model.name, threshold=threshold, nearest=found)
 
@@ -447,6 +448,7 @@ class DocsWatcher:
         stale = (DocPage.drift >= DRIFT_STALE) | (DocPage.flagged_at < now - timedelta(days=STALE_DAYS))
         if dead:
             stale = stale | DocPage.id.in_(list(dead)[:PATTERNS])
+        stale = and_(stale, DocPage.until_seq.is_(None))  # the working version's
         sites = {site.id: site for site in await s.scalars(select(DocSite).where(DocSite.project_id == project.id))}
         for site in sites.values():
             pages = list(await s.scalars(select(DocPage).where(DocPage.site_id == site.id, due, stale).order_by(DocPage.drift.desc(), DocPage.id).limit(PAGES_NAMED + 1)))
@@ -497,4 +499,4 @@ def _by_site(pages: list[DocPage]) -> dict[int, list[DocPage]]:
 
 
 def _line(page: DocPage, why: str) -> str:
-    return f'- doc page {page.id} "{page.title}" (/{page.path}): {why}'
+    return f'- doc page {page.page_key} "{page.title}" (/{page.path}): {why}'

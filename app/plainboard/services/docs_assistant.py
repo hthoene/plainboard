@@ -27,7 +27,7 @@ from plainboard_protocol.leaks import scrub
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import Agent, DocSite, DocTranslation, Project, Run, RunTrigger, utcnow
+from ..models import Agent, DocRelease, DocSite, DocTranslation, Project, Run, RunTrigger, utcnow
 from . import board as board_service
 from . import docs as docs_service
 from . import docs_public as public
@@ -132,9 +132,10 @@ def url_of(base: str, path: str) -> str:
     return f"{base}/{path}" if path else f"{base}/"
 
 
-async def page_text(session: AsyncSession, site: DocSite, path: str, lang: str, base: str) -> tuple[str, str, str] | None:
-    """(title, url, plain text) of a served page in that language (the original where it has no translation yet)."""
-    page = await docs_service.by_path(session, site.id, path.strip().strip("/"))
+async def page_text(session: AsyncSession, site: DocSite, path: str, lang: str, base: str, rel: DocRelease | None = None) -> tuple[str, str, str] | None:
+    """(title, url, plain text) of a served page of that version in that language (the original where it has no
+    translation yet)."""
+    page = await docs_service.by_path(session, site.id, path.strip().strip("/"), rel)
     if page is None or page.site_id != site.id:
         return None
     title, body = page.title, page.body
@@ -143,30 +144,33 @@ async def page_text(session: AsyncSession, site: DocSite, path: str, lang: str, 
         if translated is not None and translated.translated_at:
             title, body = translated.title or page.title, translated.body
     here = public.lang_base(site, base, lang)
-    rendered = public.render(body, base=here, files_base=f"{public.api_base(site)}/files", page_paths=await public.linked_paths(session, site.id, body))
+    rendered = public.render(body, base=here, files_base=f"{public.api_base(site)}/files", page_paths=await public.linked_paths(session, site.id, body, rel=rel))
     return title, url_of(here, page.path), rendered.text
 
 
-async def search_text(session: AsyncSession, site: DocSite, query: str, lang: str, base: str, limit: int = 8) -> tuple[str, list[dict]]:
-    hits = await public.search(session, site, query, base, lang, limit)
+async def search_text(session: AsyncSession, site: DocSite, query: str, lang: str, base: str, limit: int = 8, rel: DocRelease | None = None) -> tuple[str, list[dict]]:
+    hits = await public.search(session, site, query, base, lang, limit, rel)
     if not hits:
         return "No page matches. Try other words.", []
     return "\n".join(f"- [{h['title']}]({h['url']}) (path {h['path'] or '/'}): {h['snippet']}" for h in hits), hits
 
 
-async def context_for(session: AsyncSession, site: DocSite, question: str, lang: str, base: str) -> tuple[str, list[dict]]:
-    """The pages that match the question best, with the start of their text: the prompt's head start."""
-    hits = await public.search(session, site, question[:200], base, lang, HITS)
+async def context_for(session: AsyncSession, site: DocSite, question: str, lang: str, base: str, rel: DocRelease | None = None) -> tuple[str, list[dict]]:
+    """The pages of the version the visitor reads that match the question best, with the start of their text: the
+    prompt's head start."""
+    hits = await public.search(session, site, question[:200], base, lang, HITS, rel)
     parts = []
     for hit in hits:
-        found = await page_text(session, site, hit["path"], lang, base)
+        found = await page_text(session, site, hit["path"], lang, base, rel)
         text = found[2] if found else hit["snippet"]
         parts.append(f"## [{hit['title']}]({hit['url']})\n{text[:PAGE_CHARS]}{'…' if len(text) > PAGE_CHARS else ''}")
     return ("\n\n".join(parts) if parts else "(No page matched the question: search with other words.)"), hits
 
 
-def question_prompt(question: str, lang: str, pages: str) -> str:
-    return f"Visitor's language: {lang}\n\nPages that match the question:\n\n{pages}\n\n---\nThe visitor asks:\n{question}"
+def question_prompt(question: str, lang: str, pages: str, version: str = "") -> str:
+    """``version``: the documentation's version the visitor reads (their questions are about that one)."""
+    read = f"\nDocumentation version the visitor reads: {version}" if version else ""
+    return f"Visitor's language: {lang}{read}\n\nPages that match the question:\n\n{pages}\n\n---\nThe visitor asks:\n{question}"
 
 
 async def board_text(session: AsyncSession, project: Project, query: str, lang: str) -> str:

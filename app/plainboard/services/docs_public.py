@@ -28,7 +28,7 @@ from markdown_it import MarkdownIt
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import DocPage, DocSite, DocTranslation, Project
+from ..models import DocPage, DocRelease, DocSite, DocTranslation, Project
 from . import docs as docs_service
 from . import docs_custom, docs_theme
 from .errors import NotFound, ServiceError
@@ -92,12 +92,13 @@ def _resolve(value: str, base: str, files_base: str, page_paths: dict[int, str])
     return value
 
 
-async def linked_paths(session: AsyncSession, site_id: int, *bodies: str) -> dict[int, str]:
-    """The addresses of the pages these texts link to (doc-page:<id>), in one query."""
+async def linked_paths(session: AsyncSession, site_id: int, *bodies: str, rel: DocRelease | None = None) -> dict[int, str]:
+    """The addresses of the pages these texts link to (doc-page:<id>) in this version, in one query."""
     ids = {int(m) for body in bodies for m in docs_service.PAGE_REF.findall(body or "")}
     if not ids:
         return {}
-    return dict((await session.execute(select(DocPage.id, DocPage.path).where(DocPage.site_id == site_id, DocPage.id.in_(ids)))).all())
+    q = select(DocPage.page_key, DocPage.path).where(DocPage.site_id == site_id, DocPage.page_key.in_(ids), docs_service.visible(rel))
+    return dict((await session.execute(q)).all())
 
 
 def describe(text: str, size: int = 160) -> str:
@@ -154,11 +155,13 @@ async def titles(session: AsyncSession, site: DocSite, ids: list[int], lang: str
     return dict(rows.all())
 
 
-async def nav(session: AsyncSession, site: DocSite, parent_id: int | None, lang: str, offset: int = 0, limit: int = docs_service.PAGE_LIMIT) -> dict:
+async def nav(
+    session: AsyncSession, site: DocSite, parent_id: int | None, lang: str, offset: int = 0, limit: int = docs_service.PAGE_LIMIT, rel: DocRelease | None = None
+) -> dict:
     """{items: [{id, title, path, children}], total, offset}: one page of a page's children (None: the top)."""
-    rows, counts, total = await docs_service.children(session, site.id, parent_id, offset, limit)
+    rows, counts, total = await docs_service.children(session, site.id, parent_id, offset, limit, rel)
     named = await titles(session, site, [p.id for p in rows], lang)
-    items = [{"id": p.id, "title": named.get(p.id, p.title), "path": p.path, "children": counts.get(p.id, 0)} for p in rows]
+    items = [{"id": p.page_key, "title": named.get(p.id, p.title), "path": p.path, "children": counts.get(p.page_key, 0)} for p in rows]
     return {"items": items, "total": total, "offset": offset}
 
 
@@ -166,11 +169,46 @@ def api_base(site: DocSite) -> str:
     return f"/api/public/docs/{site.slug}"
 
 
-async def site_view(session: AsyncSession, site: DocSite, base: str, lang: str) -> dict:
-    top = await nav(session, site, None, lang)
+@dataclass
+class Version:
+    """The version a visitor reads (#126, services/docs_releases.py) and where it lives: ``base`` is the site's
+    address with the version's segment (none for the default one), ``site_base`` without it."""
+
+    rel: DocRelease
+    default: DocRelease
+    releases: list[DocRelease]
+    site_base: str
+
+    @property
+    def base(self) -> str:
+        return self.site_base if self.rel.id == self.default.id else f"{self.site_base}/{self.rel.slug}"
+
+    def view(self) -> dict:
+        from . import docs_releases
+
+        r = self.rel
+        return {
+            "version": {"slug": r.slug, "name": r.name, "working": r.working, "deprecated": r.deprecated, "default": r.id == self.default.id, "released_on": r.released_on, "notes": r.notes},
+            "versions": docs_releases.public_list(self.releases, self.default), "site_base": self.site_base,
+        }  # fmt: skip
+
+
+async def version(session: AsyncSession, site: DocSite, slug: str | None, site_base: str) -> Version:
+    """The version a visitor asked for (none: the default one); a hidden or unknown one is 404."""
+    from . import docs_releases
+
+    rel, default, rels = await docs_releases.served(session, site, slug)
+    return Version(rel, default, rels, site_base)
+
+
+async def site_view(session: AsyncSession, site: DocSite, base: str, lang: str, ver: Version | None = None) -> dict:
+    """``base``: the version's address (``Version.base``)."""
+    rel = ver.rel if ver else None
+    top = await nav(session, site, None, lang, rel=rel)
     project = await session.get(Project, site.project_id)
     first = top["items"][0]["path"] if top["items"] else None
     return {
+        **(ver.view() if ver else {}),
         "name": site.name, "slug": site.slug, "description": site.description, "public": site.public, "base": base, "api": api_base(site),
         "language": site.language, "languages": [site.language, *(site.languages or [])], "lang": lang, "lang_base": lang_base(site, base, lang),
         "project": project.name if project else "", "updated_at": site.updated_at, "home": first, "nav": top,
@@ -179,10 +217,11 @@ async def site_view(session: AsyncSession, site: DocSite, base: str, lang: str) 
     }  # fmt: skip
 
 
-async def page_view(session: AsyncSession, site: DocSite, path: str, base: str, lang: str) -> dict:
-    """A page by its address ("" : the home page). ``sidebar``: the top level and the children of every page on the
-    way down to it (each with ``children`` counts), what a navigation shows opened at this page."""
-    page = await docs_service.by_path(session, site.id, path)
+async def page_view(session: AsyncSession, site: DocSite, path: str, base: str, lang: str, rel: DocRelease | None = None) -> dict:
+    """A page by its address ("" : the home page) in a version (``base``: its address). ``sidebar``: the top level and
+    the children of every page on the way down to it (each with ``children`` counts), what a navigation shows opened
+    at this page."""
+    page = await docs_service.by_path(session, site.id, path, rel)
     if page is None:
         raise NotFound("Not found")
     title, body, fallback, translated = page.title, page.body, False, None
@@ -193,23 +232,23 @@ async def page_view(session: AsyncSession, site: DocSite, path: str, base: str, 
         else:
             fallback = True
     here = lang_base(site, base, lang)
-    rendered = render(body, base=here, files_base=f"{api_base(site)}/files", page_paths=await linked_paths(session, site.id, body))
-    up = await docs_service.ancestors(session, page)
-    prev, nxt = await docs_service.neighbours(session, page)
+    rendered = render(body, base=here, files_base=f"{api_base(site)}/files", page_paths=await linked_paths(session, site.id, body, rel=rel))
+    up = await docs_service.ancestors(session, page, rel)
+    prev, nxt = await docs_service.neighbours(session, page, rel, up)
     named = await titles(session, site, [p.id for p in [*up, *(x for x in (prev, nxt) if x)]], lang)
     near = lambda p: {"title": named.get(p.id, p.title), "path": p.path} if p else None  # noqa: E731
-    parents = [None, *(p.id for p in up), page.id]
-    opened = await docs_service.levels(session, site.id, parents)
+    parents = [None, *(p.page_key for p in up), page.page_key]
+    opened = await docs_service.levels(session, site.id, parents, rel)
     listed = [p for rows, _ in opened.values() for p in rows]
-    counts = await docs_service.child_counts(session, [p.id for p in listed])
+    counts = await docs_service.child_counts(session, [p.page_key for p in listed], rel)
     named |= await titles(session, site, [p.id for p in listed], lang)
-    entry = lambda p: {"id": p.id, "title": named.get(p.id, p.title), "path": p.path, "children": counts.get(p.id, 0)}  # noqa: E731
+    entry = lambda p: {"id": p.page_key, "title": named.get(p.id, p.title), "path": p.path, "children": counts.get(p.page_key, 0)}  # noqa: E731
     sidebar = [{"items": [entry(p) for p in opened[parent][0]], "total": opened[parent][1], "offset": 0} for parent in parents[:-1]]
-    if page.id not in {i["id"] for level in sidebar for i in level["items"]}:  # far down a long list: its own place in it
+    if page.page_key not in {i["id"] for level in sidebar for i in level["items"]}:  # far down a long list: its own place in it
         sidebar[-1]["items"].append(entry(page))
-    kids, total = opened[page.id]
+    kids, total = opened[page.page_key]
     return {
-        "id": page.id, "title": title, "path": page.path, "lang": lang, "fallback": fallback, "html": rendered.html, "toc": rendered.toc, "markdown": body,
+        "id": page.page_key, "title": title, "path": page.path, "lang": lang, "fallback": fallback, "html": rendered.html, "toc": rendered.toc, "markdown": body,
         "description": describe(rendered.text) or site.description, "updated_at": translated.translated_at if translated and not fallback else page.edited_at,
         "breadcrumbs": [near(p) for p in up], "prev": near(prev), "next": near(nxt), "sidebar": sidebar,
         "children": {"items": [entry(k) for k in kids], "total": total, "offset": 0},
@@ -233,23 +272,26 @@ def _snippet(text: str, terms: list[str], size: int = 200) -> str:
     return ("…" if start else "") + flat[start : start + size].strip() + ("…" if start + size < len(flat) else "")
 
 
-async def search(session: AsyncSession, site: DocSite, query: str, base: str, lang: str, limit: int = 10) -> list[dict]:
-    return (await search_hits(session, site, query, base, lang, limit))[0]
+async def search(session: AsyncSession, site: DocSite, query: str, base: str, lang: str, limit: int = 10, rel: DocRelease | None = None) -> list[dict]:
+    return (await search_hits(session, site, query, base, lang, limit, rel=rel))[0]
 
 
-async def search_hits(session: AsyncSession, site: DocSite, query: str, base: str, lang: str, limit: int = 10, *, budget: bool = True) -> tuple[list[dict], bool]:
+async def search_hits(
+    session: AsyncSession, site: DocSite, query: str, base: str, lang: str, limit: int = 10, *, budget: bool = True, rel: DocRelease | None = None
+) -> tuple[list[dict], bool]:  # fmt: skip
     """By words in the pages of this language (title, address and text; the database finds at most ``CANDIDATES``,
     those with all the words first; title words count three times) and, where semantic search runs, by meaning over
     the site's pages; fused by rank. Each hit: id, title, path, url, snippet. Also whether the site's vector searches
     were used up (``VECTOR_SEARCHES``), so it searched by words only. ``budget=False`` (the site's own doc agent)
-    neither counts against nor is limited by the visitors' budget."""
+    neither counts against nor is limited by the visitors' budget. Only pages of the version ``rel`` (None: the working
+    one); a hit's id is the page's key."""
     terms = _terms(query) or [query.lower().strip()[:50]]
     if lang == site.language:
-        q = select(DocPage.id, DocPage.title, DocPage.body, DocPage.path).where(DocPage.site_id == site.id)
+        q = select(DocPage.id, DocPage.title, DocPage.body, DocPage.path, DocPage.page_key).where(DocPage.site_id == site.id, docs_service.visible(rel))
         title_col, body_col = DocPage.title, DocPage.body
     else:
-        q = select(DocTranslation.page_id, DocTranslation.title, DocTranslation.body, DocPage.path).join(DocPage, DocPage.id == DocTranslation.page_id)
-        q = q.where(DocTranslation.site_id == site.id, DocTranslation.lang == lang)
+        q = select(DocTranslation.page_id, DocTranslation.title, DocTranslation.body, DocPage.path, DocPage.page_key).join(DocPage, DocPage.id == DocTranslation.page_id)
+        q = q.where(DocTranslation.site_id == site.id, DocTranslation.lang == lang, docs_service.visible(rel))
         title_col, body_col = DocTranslation.title, DocTranslation.body
     has = [or_(func.lower(title_col).like(f"%{t}%"), func.lower(body_col).like(f"%{t}%"), DocPage.path.like(f"%{t}%")) for t in terms]
     order = (DocPage.depth, DocPage.position, DocPage.id)
@@ -261,11 +303,11 @@ async def search_hits(session: AsyncSession, site: DocSite, query: str, base: st
                 break
             found.setdefault(row[0], row)
     scored = []
-    for pid, title, body, path in found.values():
+    for pid, title, body, path, _ in found.values():
         t, b = title.lower(), (body or "").lower()
         scored.append((sum(3 * t.count(w) + min(b.count(w), 10) + (2 if w in path else 0) + 5 * (w in t or w in b or w in path) for w in terms), pid))
     by_words = [pid for _, pid in sorted(scored, key=lambda x: -x[0])]
-    by_meaning = await _by_meaning(session, site, query, budget=budget)
+    by_meaning = await _by_meaning(session, site, query, budget=budget, rel=rel)
     words_only = by_meaning is None
     by_meaning = by_meaning or []
     fused: dict[int, float] = {}
@@ -275,24 +317,24 @@ async def search_hits(session: AsyncSession, site: DocSite, query: str, base: st
     best = sorted(fused, key=lambda pid: -fused[pid])[:limit]
     missing = [pid for pid in best if pid not in found]
     if missing:  # found by meaning only: their text in this language
-        for row in (await session.execute(select(DocPage.id, DocPage.title, DocPage.body, DocPage.path).where(DocPage.id.in_(missing)))).all():
+        for row in (await session.execute(select(DocPage.id, DocPage.title, DocPage.body, DocPage.path, DocPage.page_key).where(DocPage.id.in_(missing)))).all():
             found[row[0]] = row
         if lang != site.language:
             rows = await session.execute(select(DocTranslation.page_id, DocTranslation.title, DocTranslation.body).where(DocTranslation.page_id.in_(missing), DocTranslation.lang == lang))
             for pid, title, body in rows.all():
                 if body:
-                    found[pid] = (pid, title, body, found[pid][3])
+                    found[pid] = (pid, title, body, found[pid][3], found[pid][4])
     here = lang_base(site, base, lang)
     out = []
     for pid in best:
         if pid not in found:
             continue
-        _, title, body, path = found[pid]
-        out.append({"id": pid, "title": title, "path": path, "url": _url(here, path), "snippet": _snippet(render(body, base=here, files_base="", page_paths={}).text, terms)})
+        _, title, body, path, key = found[pid]
+        out.append({"id": key, "title": title, "path": path, "url": _url(here, path), "snippet": _snippet(render(body, base=here, files_base="", page_paths={}).text, terms)})
     return out, words_only
 
 
-async def _by_meaning(session: AsyncSession, site: DocSite, query: str, *, budget: bool = True) -> list[int] | None:
+async def _by_meaning(session: AsyncSession, site: DocSite, query: str, *, budget: bool = True, rel: DocRelease | None = None) -> list[int] | None:
     """The site's pages nearest in meaning (the index holds the pages in the site's own language; the models are
     multilingual, so a query in another language finds them too). None when the site's vector searches of this
     minute are used up (public search and the doc assistant together): then words alone must do."""
@@ -312,15 +354,17 @@ async def _by_meaning(session: AsyncSession, site: DocSite, query: str, *, budge
     ids = [int(h.source_id) for h in hits if h.source_id.isdigit()]
     if not ids:
         return []
-    mine = set(await session.scalars(select(DocPage.id).where(DocPage.id.in_(ids), DocPage.site_id == site.id)))
+    mine = set(await session.scalars(select(DocPage.id).where(DocPage.id.in_(ids), DocPage.site_id == site.id, docs_service.visible(rel))))
     return [i for i in ids if i in mine][:10]
 
 
 # --- for search engines ---------------------------------------------------------------------------------------
 
 
-async def sitemap(session: AsyncSession, site: DocSite, site_url: str) -> str:
-    paths = list(await session.scalars(select(DocPage.path).where(DocPage.site_id == site.id).order_by(DocPage.depth, DocPage.position).limit(SITEMAP_LIMIT)))
+async def sitemap(session: AsyncSession, site: DocSite, site_url: str, rel: DocRelease | None = None) -> str:
+    """The default version's pages (``rel``)."""
+    q = select(DocPage.path).where(DocPage.site_id == site.id, docs_service.visible(rel)).order_by(DocPage.depth, DocPage.position).limit(SITEMAP_LIMIT)
+    paths = list(await session.scalars(q))
     urls = [f"{site_url}/"] + [f"{site_url}/{p}" for p in paths]
     for lang in site.languages or []:
         urls += [f"{site_url}/{lang}/"] + [f"{site_url}/{lang}/{p}" for p in paths]

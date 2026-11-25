@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createContext, useContext } from "react";
 import { api } from "../../api/client";
-import type { Attachment, DocCustomPage, DocDomain, DocPage, DocPageItem, DocPages, DocRelease, DocSite, DocTranslation, DocVersion } from "../../api/types";
+import type { Attachment, DocCustomPage, DocDomain, DocOutline, DocPage, DocPageItem, DocPages, DocRelease, DocSite, DocTranslation, DocVersion } from "../../api/types";
 
 /** The version of the site being edited (#126): its id, null for the working version. Every page route takes it. */
 export const ReleaseContext = createContext<number | null>(null);
@@ -27,6 +27,7 @@ export const dk = {
   domain: (pid: number, site: number) => ["docs", pid, "domain", site] as const,
   find: (pid: number, site: number, q: string, release: number | null = null) => ["docs", pid, "find", site, q, release ?? "w"] as const,
   custom: (pid: number, site: number) => ["docs", pid, "custom", site] as const,
+  outline: (pid: number, site: number, release: number | null = null) => ["docs", pid, "outline", site, release ?? "w"] as const,
 };
 
 export const base = (pid: number) => `/projects/${pid}/docs`;
@@ -87,6 +88,12 @@ export function useFindPages(pid: number, site: number, q: string) {
     enabled: q.length > 0,
     placeholderData: (prev) => prev,
   });
+}
+
+/** The site's areas and groups (#159) in the version worked on. */
+export function useDocOutline(pid: number, site: number) {
+  const release = useRelease();
+  return useQuery({ queryKey: dk.outline(pid, site, release), queryFn: () => api.get<DocOutline>(rel(`${base(pid)}/sites/${site}/outline`, release)) });
 }
 
 export const useDocCustomPages = (pid: number, site: number) =>

@@ -34,7 +34,7 @@ from .. import db
 from ..models import Attachment, DocApiKey, DocPage, DocRelease, DocSite, DocTranslation, User, utcnow
 from . import board as board_service
 from . import docs as docs_service
-from . import docs_custom, docs_public, docs_releases
+from . import docs_areas, docs_custom, docs_public, docs_releases
 from . import personal_tokens as token_service
 from . import users as user_service
 from .errors import NotFound, ServiceError
@@ -188,7 +188,7 @@ async def info(session: AsyncSession, site: DocSite, api: str) -> dict:
         "name": site.name, "slug": site.slug, "description": site.description, "published": site.published, "public": site.public,
         "language": site.language, "languages": [site.language, *(site.languages or [])], "versioned": bool(rels),
         "default_version": default.slug if rels else None, "versions": [_version_out(r, default) for r in rels if not r.hidden or r.id == default.id],
-        "pages": count or 0, "updated_at": site.updated_at, "api": api,
+        "pages": count or 0, "updated_at": site.updated_at, "api": api, **await docs_areas.outline(session, site.id, rel),
     }  # fmt: skip
 
 
@@ -226,12 +226,12 @@ def _item(page: DocPage, sc: Scope, translated: DocTranslation | None, fallback:
     title, _, updated = _text(page, translated)
     return {
         "id": page.page_key, "parent_id": page.parent_id, "position": page.position, "depth": page.depth, "path": page.path, "title": title,
-        "lang": sc.lang, "fallback": fallback, "version": sc.version, "updated_at": updated,
+        "lang": sc.lang, "fallback": fallback, "version": sc.version, "updated_at": updated, "area_id": page.area_id, "group_id": page.group_id,
     }  # fmt: skip
 
 
 async def tree(session: AsyncSession, site: DocSite, sc: Scope, cursor: int, limit: int, since: datetime | None) -> dict:
-    """{items: [{id, parent_id, position, depth, path, title, lang, fallback, version, updated_at}], next_cursor}: the
+    """{items: [{id, parent_id, position, depth, path, title, lang, fallback, version, updated_at, area_id, group_id}], next_cursor}: the
     pages in the order they were made, ``limit`` at a time (``next_cursor`` null: the last ones)."""
     rows = await _batch(session, site, sc, cursor, limit, since)
     named = await _translations(session, site, rows, sc.lang)

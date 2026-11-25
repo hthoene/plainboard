@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models import DocPage, DocRelease, DocSite, utcnow
 from ..schemas import DocReleaseOut
 from . import docs as docs_service
+from . import docs_areas
 from .errors import NotFound, ServiceError
 
 SLUG = re.compile(r"^[a-z0-9][a-z0-9._-]{0,39}$")
@@ -210,6 +211,7 @@ async def delete(session: AsyncSession, site: DocSite, rel: DocRelease) -> None:
     for row in list(await session.scalars(q.order_by(DocPage.depth.desc()))):  # the deepest first: nothing goes by a cascade before its turn
         if not any(row.since_seq <= seq <= (row.until_seq or 0) for seq in others):
             await docs_service.remove_row(session, row)
+    await docs_areas.release_deleted(session, site.id, rel.seq, others)
     await session.delete(rel)
     await _changed(session, site)
 

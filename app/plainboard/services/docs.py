@@ -188,6 +188,10 @@ AGENT_GUIDE = """You are the doc agent of the doc site "{name}" (slug {slug}, /d
 - Keep a short overview of your site in your own notes (remember: which page covers what) and update it when you add,
   move or remove pages.
 - Keep pages short and find before you write (list_docs query): change a page rather than add a second one.
+- A large site (many pages at the top): order the top level with areas (a switcher such as Guides, Reference, Project)
+  and groups (headings within an area) via doc_outline, and give each top-level page its area and group
+  (write_doc_page area/group). Introduce or reshape them as a restructuring (propose_doc_restructure). The doc spec
+  decides over this.
 - Versions (list_docs shows the site's): every tool works on the working version unless you name one (version), and
   update jobs after landings are about the working version. A released version describes the product as it was
   released: change it only to correct an error that is wrong there too, never for new features or later changes.
@@ -350,7 +354,7 @@ async def span_of(session: AsyncSession, site_id: int, rel: DocRelease | None) -
 
 _COPIED = (
     "project_id", "site_id", "parent_id", "position", "page_key", "title", "slug", "path", "depth", "body", "source_hash", "paths", "moved_from", "edited_by",
-    "edited_at", "drift", "flagged_at", "flag_reason", "reminded_at", "created_at",
+    "edited_at", "drift", "flagged_at", "flag_reason", "reminded_at", "created_at", "area_id", "group_id",
 )  # fmt: skip
 
 
@@ -573,6 +577,7 @@ def item(page: DocPage, children_count: int = 0, rel: DocRelease | None = None) 
         id=page.page_key or page.id, site_id=page.site_id, release_id=rel.id if rel is not None and not rel.working else None, parent_id=page.parent_id,
         position=page.position, title=page.title, slug=page.slug, path=page.path, depth=page.depth, children=children_count, paths=list(page.paths or []),
         edited_by=page.edited_by, edited_at=page.edited_at, drift=page.drift, flagged_at=page.flagged_at, flag_reason=page.flag_reason, updated_at=page.updated_at,
+        area_id=page.area_id, group_id=page.group_id,
     )  # fmt: skip
 
 
@@ -661,6 +666,9 @@ async def _repath(session: AsyncSession, page: DocPage, parent: DocPage | None, 
         level = moved
 
 
+KEEP: object = object()  # update_page: not given, stays as it is
+
+
 @dataclass
 class Author:
     name: str
@@ -673,9 +681,13 @@ def _paths(values: list[str]) -> list[str]:
 
 async def create_page(
     session: AsyncSession, site: DocSite, author: Author, *, title: str, body: str = "", parent_id: int | None = None, position: int | None = None,
-    slug: str | None = None, paths: list[str] | None = None, reason: str = "", rel: DocRelease | None = None,
+    slug: str | None = None, paths: list[str] | None = None, reason: str = "", rel: DocRelease | None = None, area_id: int | None = None,
+    group_id: int | None = None,
 ) -> DocPage:  # fmt: skip
-    """In one version (None: the working one, and so in every version cut from now on)."""
+    """In one version (None: the working one, and so in every version cut from now on). ``area_id``, ``group_id``:
+    its place in the navigation, pages at the top only (services/docs_areas.py)."""
+    from . import docs_areas
+
     now = utcnow()
     title = title.strip()[:200]
     span = await span_of(session, site.id, rel)
@@ -686,6 +698,8 @@ async def create_page(
     parent = await _place(session, page, parent_id, position, rel, span)
     page.slug = await _unique_page_slug(session, site.id, parent_id, slug or slugify(title, "page"), None, rel)
     await _repath(session, page, parent, rel, span)
+    if area_id is not None or group_id is not None:
+        await docs_areas.place(session, site, page, area_id, group_id, rel)
     session.add(page)
     await session.flush()
     page.page_key = page.id
@@ -699,15 +713,19 @@ async def create_page(
 async def update_page(
     session: AsyncSession, page: DocPage, author: Author, *, title: str | None = None, body: str | None = None, move: bool = False,
     parent_id: int | None = None, position: int | None = None, slug: str | None = None, paths: list[str] | None = None, reason: str = "",
-    rel: DocRelease | None = None,
+    rel: DocRelease | None = None, area_id: int | None | object = KEEP, group_id: int | None | object = KEEP,
 ) -> DocPage:  # fmt: skip
     """A new title or text is a new version (and makes its translations outdated); a move, a new slug or new linked
     paths are none. ``page`` is its row in ``rel`` (None: the working version); a change of title, text or place goes
-    to that version only, linked paths to the row (they matter in the working version only)."""
+    to that version only, linked paths to the row (they matter in the working version only). ``area_id``,
+    ``group_id`` (given to change them; None: none): its place in the navigation, pages at the top only."""
+    from . import docs_areas
+
     now = utcnow()
     changed = (title is not None and title.strip() != page.title) or (body is not None and body != page.body)
     span = await span_of(session, page.site_id, rel)
-    if changed or move or position is not None or (slug is not None and slug != page.slug):
+    placed = area_id is not KEEP or group_id is not KEEP
+    if changed or move or position is not None or (slug is not None and slug != page.slug) or placed:
         page = await isolate(session, page, span)
     repath = False
     parent = await row_of(session, page.parent_id, rel) if page.parent_id else None
@@ -722,6 +740,16 @@ async def update_page(
         repath = True
     if repath:
         await _repath(session, page, parent, rel, span)
+    if placed or page.parent_id is not None:
+        site = await session.get(DocSite, page.site_id)
+        assert site is not None
+        new_area = page.area_id if area_id is KEEP else area_id
+        new_group = page.group_id if group_id is KEEP else group_id
+        if group_id is not KEEP and area_id is KEEP and group_id is not None:  # into a group: into its area, if it has one
+            new_area = (await docs_areas.get_group(session, site, group_id, rel)).area_id or new_area  # type: ignore[arg-type]
+        if page.parent_id is not None and not placed:
+            new_area = new_group = None  # moved below another page
+        await docs_areas.place(session, site, page, new_area, new_group, rel)  # type: ignore[arg-type]
     if paths is not None:
         page.paths = _paths(paths)
     if changed:

@@ -8,8 +8,9 @@ import { Assistant } from "./Assistant";
 import { customSlug, inVersion, knownCustom, knownPage, langBase, loadCustom, loadNav, loadPage, NotFoundError, pageUrl, parseUrl, prefetch, versionBase } from "./api";
 import { Content } from "./Content";
 import { SearchDialog } from "./Search";
+import { AreaCards, areaOf, AreaSwitcher, areaStart, shownAreas } from "./NavParts";
 import { levelKey, Tree } from "./Sidebar";
-import type { CustomView, Nav, NavItem, PageView, SiteView, VersionItem } from "./types";
+import type { CustomView, Nav, NavArea, NavItem, PageView, SiteView, VersionItem } from "./types";
 
 /** The name of a language in that language ("Deutsch", "Français"), as a language switcher shows it. */
 export function languageName(code: string): string {
@@ -243,8 +244,17 @@ export function DocsSite({ site, initial, initialCustom = null }: { site: SiteVi
   const logo = theme ? (look.dark ? theme.logo_dark : theme.logo) : null;
   const links = theme?.links ?? [];
   const footer = site.footer ?? [];
+  // Areas (#159): the one of the page shown, the others in the switcher and as cards on the home page.
+  const top = levels.get(levelKey(lang, null))?.items ?? site.nav.items;
+  const areas = shownAreas(site, top);
+  const area = areaOf(areas, top, page?.path ?? where.path);
+  const areaProps = { areas, hrefOf: (a: NavArea) => pageUrl(site, lang, areaStart(top, a)), onGo: go };
   const tree = (
-    <Tree
+    <>
+      {areas.length > 1 && area && <AreaSwitcher {...areaProps} current={area} />}
+      <Tree
+      area={area}
+      currentPath={page?.path ?? where.path}
       site={site}
       lang={lang}
       levels={levels}
@@ -256,6 +266,7 @@ export function DocsSite({ site, initial, initialCustom = null }: { site: SiteVi
       onNavigate={onNavigate}
       onPrefetch={onPrefetch}
     />
+    </>
   );
   // Another version (#126): a document of its own, at the same page when it is there.
   const [switching, setSwitching] = useState(false);
@@ -401,7 +412,10 @@ export function DocsSite({ site, initial, initialCustom = null }: { site: SiteVi
           ) : !page ? (
             <Message title={site.name} text={site.description || t("docsSite.empty")} />
           ) : (
+            <>
+            {areas.length > 1 && where.path === "" && <AreaCards {...areaProps} site={site} top={top} />}
             <Article site={site} page={page} lang={lang} home={home} onNavigate={onNavigate} onPrefetch={onPrefetch} />
+            </>
           )}
           <footer className="doc-foot">
             {footer.length > 0 && (

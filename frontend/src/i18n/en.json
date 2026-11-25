@@ -1882,6 +1882,10 @@
   },
   "docsSite": {
     "pages": "Pages",
+    "areas": "Areas",
+    "areaChoose": "Area: {{area}}. Choose another",
+    "areaTopics_one": "{{count}} topic",
+    "areaTopics_other": "{{count}} topics",
     "menu": "Menu",
     "close": "Close",
     "search": "Search",
@@ -2144,7 +2148,9 @@
       "slug": "Address",
       "slugHint": "The last part of its address. Links between pages follow a change.",
       "paths": "Code paths",
-      "pathsHint": "Files or folders this page describes, one per line. When a change lands there, the doc agent looks at this page."
+      "pathsHint": "Files or folders this page describes, one per line. When a change lands there, the doc agent looks at this page.",
+      "areaHint": "The part of the site it is in: its switcher shows the pages of one area at a time.",
+      "groupHint": "The heading it stands under in the navigation."
     },
     "state": {
       "current": "current",
@@ -2414,6 +2420,36 @@
       },
       "example": "Example",
       "exampleHint": "Send the key as Authorization: Bearer <key>. This one downloads the default version as a zip."
+    },
+    "outline": {
+      "section": "Navigation",
+      "sectionHint": "Order for large sites: areas a reader switches between (such as Guides, Reference, Project) and groups that put headings over the pages at the top. Choose a page's area and group in its settings.",
+      "empty": "No areas or groups yet: the navigation shows the pages as a tree. Add areas when the site has many pages at the top.",
+      "addArea": "Add area",
+      "addGroup": "Add group",
+      "newArea": "New area",
+      "newGroup": "New group",
+      "editArea": "Edit area",
+      "editGroup": "Edit group",
+      "edit": "Edit",
+      "up": "Move up",
+      "down": "Move down",
+      "title": "Title",
+      "titleIn": "Title in {{language}}",
+      "description": "Short description",
+      "descriptionHint": "One line under its name in the switcher and on the home page.",
+      "descriptionIn": "Short description in {{language}}",
+      "icon": "Icon",
+      "area": "Area",
+      "areaHint": "Without an area, the group shows in every area.",
+      "noArea": "No area",
+      "group": "Group",
+      "noGroup": "No group",
+      "groups": "Groups",
+      "everyArea": "Groups in every area",
+      "rules": "Pages without an area show in every area, pages without a group above the groups. Areas and groups belong to the version you are editing, like the pages. The doc agent can set them up too.",
+      "deleteAreaHint": "Its pages and groups stay, without an area. Only in the version you are editing.",
+      "deleteGroupHint": "Its pages stay, without a group. Only in the version you are editing."
     },
     "custom": {
       "section": "Footer pages",

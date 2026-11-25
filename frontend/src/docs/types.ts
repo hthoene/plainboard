@@ -6,6 +6,25 @@ export interface NavItem {
   path: string;
   /** How many pages are directly below it. */
   children: number;
+  /** Pages at the top: their area and group (#159). */
+  area?: number | null;
+  group?: number | null;
+}
+
+/** An area of the navigation (#159): a switcher at the top of it, the site's parts. */
+export interface NavArea {
+  id: number;
+  title: string;
+  description: string;
+  /** A lucide icon name (areaIcons.ts). */
+  icon: string;
+}
+
+/** A heading over pages at the top, in an area or (none) in every one. */
+export interface NavGroup {
+  id: number;
+  area: number | null;
+  title: string;
 }
 
 export interface Nav {
@@ -37,6 +56,9 @@ export interface SiteView {
   updated_at: string;
   home: string | null;
   nav: Nav;
+  /** Areas and groups of the navigation (#159); none: the tree as it is. */
+  areas?: NavArea[];
+  groups?: NavGroup[];
   /** Its AI assistant is on (#119): POST {api}/assistant. */
   assistant?: boolean;
   /** Its own look (#121): null for the look every site has (the colours and font come with the page's head). */

@@ -1378,6 +1378,35 @@ export interface DocPageItem {
   flagged_at: string | null;
   flag_reason: string;
   updated_at: string;
+  /** Pages at the top: their area and group in the navigation (#159). */
+  area_id?: number | null;
+  group_id?: number | null;
+}
+
+/** An area of a doc site's navigation (#159): its id is the same in every version. */
+export interface DocArea {
+  id: number;
+  title: string;
+  description: string;
+  /** A lucide icon name ("": the default). */
+  icon: string;
+  position: number;
+  /** Its title and description in the site's further languages. */
+  texts: Record<string, { title?: string; description?: string }>;
+}
+
+/** A heading over pages at the top, in an area or (none) in every one. */
+export interface DocGroup {
+  id: number;
+  area_id: number | null;
+  title: string;
+  position: number;
+  texts: Record<string, { title?: string }>;
+}
+
+export interface DocOutline {
+  areas: DocArea[];
+  groups: DocGroup[];
 }
 
 export type DocTranslationState = "current" | "outdated" | "missing" | "failed";

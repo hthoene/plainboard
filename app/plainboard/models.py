@@ -717,6 +717,45 @@ class DocPage(Timestamps, Base):
     flagged_at: Mapped[datetime | None] = mapped_column(DateTime)  # since when it may be outdated (an edit clears it)
     flag_reason: Mapped[str] = mapped_column(Text, default="")
     reminded_at: Mapped[datetime | None] = mapped_column(DateTime)  # the manager last heard it is stale
+    # Its area and group in the navigation (#159, services/docs_areas.py): pages at the top only, by their keys.
+    area_id: Mapped[int | None] = mapped_column(ForeignKey("doc_areas.id", ondelete="SET NULL"), index=True)
+    group_id: Mapped[int | None] = mapped_column(ForeignKey("doc_groups.id", ondelete="SET NULL"), index=True)
+
+
+class DocArea(Timestamps, Base):
+    """An area of a doc site's navigation (#159, services/docs_areas.py): the pages at the top in sections like
+    "Guides" or "Reference", chosen in a switcher. Versioned like pages: a row holds it in the versions ``since_seq``
+    up to ``until_seq`` (None: up to the working one); ``area_key`` names it across versions (what pages point at)."""
+
+    __tablename__ = "doc_areas"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    site_id: Mapped[int] = mapped_column(ForeignKey("doc_sites.id", ondelete="CASCADE"), index=True)
+    area_key: Mapped[int | None] = mapped_column(ForeignKey("doc_areas.id", ondelete="CASCADE"), index=True)
+    since_seq: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    until_seq: Mapped[int | None] = mapped_column(Integer)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    title: Mapped[str] = mapped_column(String(100))
+    description: Mapped[str] = mapped_column(String(200), default="")
+    icon: Mapped[str] = mapped_column(String(40), default="")  # a lucide icon name (book-open), "": the default
+    texts: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, server_default="{}")  # lang -> {title, description}
+
+
+class DocGroup(Timestamps, Base):
+    """A group of pages at the top of a doc site (#159): a heading in the navigation, inside an area or, without one,
+    in every area (or on a site without areas). Versioned like ``DocArea`` (``group_key``)."""
+
+    __tablename__ = "doc_groups"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    site_id: Mapped[int] = mapped_column(ForeignKey("doc_sites.id", ondelete="CASCADE"), index=True)
+    group_key: Mapped[int | None] = mapped_column(ForeignKey("doc_groups.id", ondelete="CASCADE"), index=True)
+    since_seq: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    until_seq: Mapped[int | None] = mapped_column(Integer)
+    area_id: Mapped[int | None] = mapped_column(ForeignKey("doc_areas.id", ondelete="SET NULL"), index=True)  # its area's key
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    title: Mapped[str] = mapped_column(String(100))
+    texts: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, server_default="{}")  # lang -> {title}
 
 
 class DocRelease(Timestamps, Base):

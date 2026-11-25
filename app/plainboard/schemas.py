@@ -1997,6 +1997,8 @@ class DocPageItem(ORM):
     flagged_at: UTCDateTime | None = None
     flag_reason: str = ""
     updated_at: UTCDateTime
+    area_id: int | None = None  # its area and group in the navigation (#159): pages at the top only
+    group_id: int | None = None
 
 
 class DocCrumb(BaseModel):
@@ -2026,6 +2028,8 @@ class DocPageCreate(BaseModel):
     slug: DocSlug | None = None
     paths: list[Annotated[str, Field(min_length=1, max_length=300)]] = Field(default_factory=list, max_length=50)
     reason: str = Field(default="", max_length=300)
+    area_id: int | None = None  # its area and group in the navigation (#159): pages at the top only
+    group_id: int | None = None
 
 
 class DocPageUpdate(BaseModel):
@@ -2039,6 +2043,49 @@ class DocPageUpdate(BaseModel):
     slug: DocSlug | None = None
     paths: list[Annotated[str, Field(min_length=1, max_length=300)]] | None = Field(default=None, max_length=50)
     reason: str = Field(default="", max_length=300)
+    area_id: int | None = None  # given: its area and group change (None: none); pages at the top only
+    group_id: int | None = None
+
+
+class DocAreaIn(BaseModel):
+    """An area of a doc site's navigation (#159). Changing it: only what is given changes."""
+
+    title: str | None = Field(default=None, min_length=1, max_length=100)
+    description: str | None = Field(default=None, max_length=200)
+    icon: str | None = Field(default=None, max_length=40)
+    texts: dict[str, dict[str, str]] | None = None  # lang -> {title, description}
+    position: int | None = Field(default=None, ge=0)
+
+
+class DocGroupIn(BaseModel):
+    """A group of a doc site's navigation (#159). Changing it: only what is given changes (area_id None: no area)."""
+
+    title: str | None = Field(default=None, min_length=1, max_length=100)
+    area_id: int | None = None
+    texts: dict[str, dict[str, str]] | None = None  # lang -> {title}
+    position: int | None = Field(default=None, ge=0)
+
+
+class DocAreaOut(BaseModel):
+    id: int  # its key: the same in every version
+    title: str
+    description: str
+    icon: str
+    position: int
+    texts: dict[str, dict[str, str]] = {}
+
+
+class DocGroupOut(BaseModel):
+    id: int
+    area_id: int | None
+    title: str
+    position: int
+    texts: dict[str, dict[str, str]] = {}
+
+
+class DocOutlineOut(BaseModel):
+    areas: list[DocAreaOut]
+    groups: list[DocGroupOut]
 
 
 class DocVersionOut(ORM):

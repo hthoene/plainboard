@@ -135,7 +135,7 @@ def test_a_public_site_is_served_without_login_as_html_json_and_search(client, p
 
     view = client.get("/api/public/docs/handbook").json()
     assert view["name"] == "Handbook" and view["home"] == "welcome" and view["base"] == "/docs/handbook"
-    assert view["nav"] == {"items": [{"id": home["id"], "title": "Welcome", "path": "welcome", "children": 1}], "total": 1, "offset": 0}
+    assert view["nav"] == {"items": [{"id": home["id"], "title": "Welcome", "path": "welcome", "children": 1, "area": None, "group": None}], "total": 1, "offset": 0}
     assert client.get("/api/public/docs/handbook/nav", params={"parent": home["id"]}).json()["items"] == [{"id": api["id"], "title": "Payments API", "path": "welcome/payments-api", "children": 0}]
     got = client.get("/api/public/docs/handbook/page", params={"path": "welcome/payments-api"}).json()
     assert got["toc"] == [{"level": 2, "id": "webhooks", "text": "Webhooks"}] and got["breadcrumbs"] == [{"title": "Welcome", "path": "welcome"}]

@@ -12,11 +12,11 @@ from __future__ import annotations
 from fastapi import APIRouter, File, Query, Request, UploadFile
 
 from ..schemas import (
-    AttachmentOut, DocApiKeyCreate, DocApiKeyCreated, DocApiKeyOut, DocCloudflareIn, DocCustomPageCreate, DocCustomPageOut, DocCustomPageUpdate, DocTheme, DocThemePreviewOut, DocCrumb, DocDnsOut, DocDomainIn, DocDomainOut, DocKeysIn, DocPageCreate, DocPageItem, DocPageOut, DocPagesOut,
+    AttachmentOut, DocAreaIn, DocAreaOut, DocGroupIn, DocGroupOut, DocOutlineOut, DocApiKeyCreate, DocApiKeyCreated, DocApiKeyOut, DocCloudflareIn, DocCustomPageCreate, DocCustomPageOut, DocCustomPageUpdate, DocTheme, DocThemePreviewOut, DocCrumb, DocDnsOut, DocDomainIn, DocDomainOut, DocKeysIn, DocPageCreate, DocPageItem, DocPageOut, DocPagesOut,
     DocPageUpdate, DocReleaseCreate, DocReleaseOut, DocReleaseUpdate, DocSiteCreate, DocSiteOut, DocSiteUpdate, DocTranslationIn, DocTranslationItem, DocTranslationOut, DocVerifyOut, DocVersionOut,
 )  # fmt: skip
 from ..services import docs as docs_service
-from ..services import docs_api, docs_custom, docs_domains, docs_releases, docs_theme, docs_translate
+from ..services import docs_api, docs_areas, docs_custom, docs_domains, docs_releases, docs_theme, docs_translate
 from ..services import projects as project_service
 from ..services.errors import NotFound
 from .deps import Session, Who
@@ -185,6 +185,64 @@ async def page_by_path(project_id: int, site_id: int, session: Session, path: st
     if page is None:
         raise NotFound("Doc page not found")
     return await _page_out(session, page, rel)
+
+
+# --- areas and groups of the navigation (#159, services/docs_areas.py) --------------------------------------------
+
+
+@router.get("/sites/{site_id}/outline", response_model=DocOutlineOut)
+async def outline(project_id: int, site_id: int, session: Session, release: int | None = Release) -> DocOutlineOut:
+    """The site's areas and groups in that version (none: the working version), in their order."""
+    site = await docs_service.get_site(session, project_id, site_id)
+    return DocOutlineOut.model_validate(await docs_areas.outline(session, site.id, await docs_releases.get(session, site, release)))
+
+
+@router.post("/sites/{site_id}/areas", response_model=DocAreaOut, status_code=201)
+async def create_area(project_id: int, site_id: int, body: DocAreaIn, session: Session, release: int | None = Release) -> DocAreaOut:
+    site = await docs_service.get_site(session, project_id, site_id)
+    rel = await docs_releases.get(session, site, release)
+    area = await docs_areas.create_area(session, site, **{k: v for k, v in body.model_dump().items() if v is not None or k == "position"}, rel=rel)
+    return DocAreaOut.model_validate(docs_areas.area_out(area))
+
+
+@router.patch("/sites/{site_id}/areas/{area_id}", response_model=DocAreaOut)
+async def update_area(project_id: int, site_id: int, area_id: int, body: DocAreaIn, session: Session, release: int | None = Release) -> DocAreaOut:
+    site = await docs_service.get_site(session, project_id, site_id)
+    rel = await docs_releases.get(session, site, release)
+    area = await docs_areas.update_area(session, site, await docs_areas.get_area(session, site, area_id, rel), rel, **body.model_dump(exclude_unset=True))
+    return DocAreaOut.model_validate(docs_areas.area_out(area))
+
+
+@router.delete("/sites/{site_id}/areas/{area_id}", status_code=204)
+async def delete_area(project_id: int, site_id: int, area_id: int, session: Session, release: int | None = Release) -> None:
+    """From that version only; its pages and groups stay, without an area."""
+    site = await docs_service.get_site(session, project_id, site_id)
+    rel = await docs_releases.get(session, site, release)
+    await docs_areas.delete_area(session, site, await docs_areas.get_area(session, site, area_id, rel), rel)
+
+
+@router.post("/sites/{site_id}/groups", response_model=DocGroupOut, status_code=201)
+async def create_group(project_id: int, site_id: int, body: DocGroupIn, session: Session, release: int | None = Release) -> DocGroupOut:
+    site = await docs_service.get_site(session, project_id, site_id)
+    rel = await docs_releases.get(session, site, release)
+    group = await docs_areas.create_group(session, site, **{k: v for k, v in body.model_dump().items() if v is not None or k in ("position", "area_id")}, rel=rel)
+    return DocGroupOut.model_validate(docs_areas.group_out(group))
+
+
+@router.patch("/sites/{site_id}/groups/{group_id}", response_model=DocGroupOut)
+async def update_group(project_id: int, site_id: int, group_id: int, body: DocGroupIn, session: Session, release: int | None = Release) -> DocGroupOut:
+    site = await docs_service.get_site(session, project_id, site_id)
+    rel = await docs_releases.get(session, site, release)
+    group = await docs_areas.update_group(session, site, await docs_areas.get_group(session, site, group_id, rel), rel, **body.model_dump(exclude_unset=True))
+    return DocGroupOut.model_validate(docs_areas.group_out(group))
+
+
+@router.delete("/sites/{site_id}/groups/{group_id}", status_code=204)
+async def delete_group(project_id: int, site_id: int, group_id: int, session: Session, release: int | None = Release) -> None:
+    """From that version only; its pages stay, without a group."""
+    site = await docs_service.get_site(session, project_id, site_id)
+    rel = await docs_releases.get(session, site, release)
+    await docs_areas.delete_group(session, site, await docs_areas.get_group(session, site, group_id, rel), rel)
 
 
 @router.post("/sites/{site_id}/pages", response_model=DocPageOut, status_code=201)

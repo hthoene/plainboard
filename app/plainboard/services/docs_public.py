@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import DocPage, DocRelease, DocSite, DocTranslation, Project
 from . import docs as docs_service
-from . import docs_custom, docs_theme
+from . import docs_areas, docs_custom, docs_theme
 from .errors import NotFound, ServiceError
 from .util import slugify
 
@@ -178,6 +178,9 @@ async def nav(
     rows, counts, total = await docs_service.children(session, site.id, parent_id, offset, limit, rel)
     named = await titles(session, site, [p.id for p in rows], lang)
     items = [{"id": p.page_key, "title": named.get(p.id, p.title), "path": p.path, "children": counts.get(p.page_key, 0)} for p in rows]
+    if parent_id is None:  # the top: each page's area and group (#159)
+        for item, p in zip(items, rows, strict=True):
+            item["area"], item["group"] = p.area_id, p.group_id
     return {"items": items, "total": total, "offset": offset}
 
 
@@ -233,6 +236,7 @@ async def site_view(session: AsyncSession, site: DocSite, base: str, lang: str, 
         "project": project.name if project else "", "updated_at": site.updated_at, "home": first, "nav": top,
         "assistant": site.assistant_enabled, "theme": docs_theme.public(site.theme or {}, f"{api_base(site)}/files"),
         "footer": await docs_custom.footer(session, site, lang),
+        **dict(zip(("areas", "groups"), docs_areas.served(await docs_areas.areas(session, site.id, rel), await docs_areas.groups(session, site.id, rel), lang), strict=True)),
     }  # fmt: skip
 
 
@@ -261,7 +265,10 @@ async def page_view(session: AsyncSession, site: DocSite, path: str, base: str, 
     listed = [p for rows, _ in opened.values() for p in rows]
     counts = await docs_service.child_counts(session, [p.page_key for p in listed], rel)
     named |= await titles(session, site, [p.id for p in listed], lang)
-    entry = lambda p: {"id": p.page_key, "title": named.get(p.id, p.title), "path": p.path, "children": counts.get(p.page_key, 0)}  # noqa: E731
+    def entry(p: DocPage) -> dict:
+        out = {"id": p.page_key, "title": named.get(p.id, p.title), "path": p.path, "children": counts.get(p.page_key, 0)}
+        return out | {"area": p.area_id, "group": p.group_id} if p.parent_id is None else out  # the top: its area and group (#159)
+
     sidebar = [{"items": [entry(p) for p in opened[parent][0]], "total": opened[parent][1], "offset": 0} for parent in parents[:-1]]
     if page.page_key not in {i["id"] for level in sidebar for i in level["items"]}:  # far down a long list: its own place in it
         sidebar[-1]["items"].append(entry(page))

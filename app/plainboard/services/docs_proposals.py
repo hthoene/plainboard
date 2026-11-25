@@ -85,7 +85,8 @@ async def due(session: AsyncSession, site: DocSite, now: datetime) -> tuple[int,
 def check_text(why: str, refused: list[DocProposal]) -> str:
     text = (
         f"Your doc site grew since its structure was last looked at: {why}. Check once whether a larger restructuring would "
-        "clearly help its readers: a new outline, merging or splitting pages, new sections. Look at the tree (list_docs, level by "
+        "clearly help its readers: a new outline, merging or splitting pages, new sections, or for a large site areas and groups "
+        "of its top-level pages (doc_outline). Look at the tree (list_docs, level by "
         "level) and at contents only where needed, not every page. Most of the time it fits: then change nothing and say so in "
         "one line. Only when the benefit is clear and substantial, propose it with propose_doc_restructure (reason, outline now "
         "and proposed, the pages concerned). Never restructure yourself: the user decides, and PlainBoard orders it when approved."
@@ -154,6 +155,7 @@ async def settle(session: AsyncSession, proposal: DocProposal, decision: Decisio
         "doc-page: links stay valid, and its slug where you can (old addresses of moved pages still find it by its slug).\n"
         "- Merge: move the content into the page that stays, link that one where the other was linked (list_docs query), then "
         "delete the other (write_doc_page delete). Split: a new page for the part, linked from the old one.\n"
+        "- Areas and groups of the navigation: doc_outline, then write_doc_page area/group for each top-level page.\n"
         "- Keep each page's code paths, keep the doc spec, update your site overview in your notes, and report briefly what changed."
     )
 

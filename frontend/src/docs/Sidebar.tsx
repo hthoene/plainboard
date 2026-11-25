@@ -1,9 +1,9 @@
 import clsx from "clsx";
 import { ChevronRight, Loader2 } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { pageUrl } from "./api";
-import type { Nav, NavItem, SiteView } from "./types";
+import type { Nav, NavArea, NavGroup, NavItem, SiteView } from "./types";
 
 export const levelKey = (lang: string, parent: number | null) => `${lang}:${parent ?? "top"}`;
 
@@ -18,6 +18,10 @@ export interface TreeProps {
   onMore: (parent: number | null) => void;
   onNavigate: (href: string) => void;
   onPrefetch: (href: string) => void;
+  /** The area shown (#159): only its pages at the top, and those of no area. */
+  area?: NavArea | null;
+  /** The address of the page shown: a closed group opens for it. */
+  currentPath?: string;
 }
 
 /** The site's pages as a tree: each level comes when it is opened, long levels a part at a time, so a site of
@@ -54,6 +58,7 @@ function Level(props: TreeProps & { parent: number | null; depth: number }) {
     ) : null;
   }
   const more = level.total - level.items.length;
+  if (depth === 0 && (site.areas?.length || site.groups?.length)) return <Grouped {...props} items={level.items} more={more} />;
   return (
     <ul role={depth ? "group" : "tree"} className={clsx(depth > 0 && "doc-tree-sub")}>
       {level.items.map((item) => (
@@ -112,5 +117,70 @@ function Item(props: TreeProps & { item: NavItem; depth: number; href: string })
       </div>
       {open && item.children > 0 && <Level {...props} parent={item.id} depth={depth + 1} />}
     </li>
+  );
+}
+
+/** The top level in order (#159): the pages of the area shown and those of none, then each group under its heading
+ * (the groups of that area and those of none). A group can be closed; the browser keeps that per site. */
+function Grouped(props: TreeProps & { items: NavItem[]; more: number }) {
+  const { t } = useTranslation();
+  const { area, items, site, lang, more, loading } = props;
+  const store = `pb-doc-groups:${site.slug}`;
+  const [closed, setClosed] = useState<Set<number>>(() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem(store) ?? "[]") as number[]);
+    } catch {
+      return new Set();
+    }
+  });
+  const areaIds = new Set((site.areas ?? []).map((a) => a.id));
+  const here = (id: number | null | undefined) => !area || id == null || !areaIds.has(id) || id === area.id;
+  const groups: NavGroup[] = (site.groups ?? []).filter((g) => here(g.area));
+  const groupIds = new Set(groups.map((g) => g.id));
+  const shown = items.filter((i) => here(i.area));
+  const loose = shown.filter((i) => i.group == null || !groupIds.has(i.group));
+  const row = (item: NavItem) => <Item key={item.id} {...props} item={item} depth={0} href={pageUrl(site, lang, item.path)} />;
+  const toggle = (id: number) =>
+    setClosed((old) => {
+      const next = new Set(old);
+      if (!next.delete(id)) next.add(id);
+      try {
+        localStorage.setItem(store, JSON.stringify([...next]));
+      } catch {
+        // private mode: kept for this visit only
+      }
+      return next;
+    });
+  const head = (props.currentPath ?? "").split("/")[0];
+  return (
+    <div role="tree">
+      {loose.length > 0 && <ul role="group">{loose.map(row)}</ul>}
+      {groups.map((g) => {
+        const pages = shown.filter((i) => i.group === g.id);
+        if (!pages.length) return null;
+        // A closed group still opens for the page shown in it.
+        const shut = closed.has(g.id) && !pages.some((i) => i.path === head);
+        const id = `doc-group-${g.id}`;
+        return (
+          <div key={g.id} className="doc-tree-group">
+            <button type="button" className="doc-tree-head" aria-expanded={!shut} aria-controls={id} onClick={() => toggle(g.id)}>
+              <span>{g.title}</span>
+              <ChevronRight className={clsx("size-3.5 transition-transform", !shut && "rotate-90")} aria-hidden />
+            </button>
+            {!shut && (
+              <ul role="group" id={id} aria-label={g.title}>
+                {pages.map(row)}
+              </ul>
+            )}
+          </div>
+        );
+      })}
+      {more > 0 && (
+        <button type="button" className="doc-tree-more" style={{ paddingLeft: 30 }} onClick={() => props.onMore(null)} disabled={loading.has(levelKey(lang, null))}>
+          {loading.has(levelKey(lang, null)) ? <Loader2 className="size-3.5 animate-spin" /> : null}
+          {t("docsSite.more", { count: more })}
+        </button>
+      )}
+    </div>
   );
 }

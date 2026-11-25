@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 from ..models import Assignment, DocPage, DocSite, utcnow
 from ..services import board as board_service
 from ..services import docs as docs_service
-from ..services import docs_api, docs_proposals, docs_public, docs_releases
+from ..services import docs_api, docs_areas, docs_proposals, docs_public, docs_releases
 from ..services.util import truncate
 from .registry import ALL, DOC_AGENT, DOCS, MANAGER, ToolContext, ToolError, local_tool, tool
 
@@ -67,7 +67,21 @@ def _page_line(p: DocPage, children: int) -> str:
     mark = f" [marked outdated: {truncate(p.flag_reason, 160)}]" if p.flagged_at else ""
     linked = f" paths: {', '.join(p.paths)}" if p.paths else ""
     below = f" ({children} below)" if children else ""
-    return f"- {p.page_key} /{p.path} \"{p.title}\"{below} (edited {p.edited_at:%Y-%m-%d} by {p.edited_by}){linked}{mark}"
+    place = "".join(f" {k} {v}" for k, v in (("area", p.area_id), ("group", p.group_id)) if v)
+    place = f" [{place.strip()}]" if place else ""
+    return f"- {p.page_key} /{p.path} \"{p.title}\"{place}{below} (edited {p.edited_at:%Y-%m-%d} by {p.edited_by}){linked}{mark}"
+
+
+async def _outline(ctx: ToolContext, site: DocSite, rel) -> list[str]:  # noqa: ANN001
+    """The site's areas and groups (#159), for the top level of list_docs."""
+    areas = await docs_areas.areas(ctx.session, site.id, rel)
+    groups = await docs_areas.groups(ctx.session, site.id, rel)
+    if not areas and not groups:
+        return []
+    lines = ["Navigation (doc_outline):"]
+    lines += [f"- area {docs_areas.area_out(a)['id']} \"{a.title}\" ({a.icon or 'book-open'}): {a.description}" for a in areas]
+    lines += [f"- group {docs_areas.group_out(g)['id']} \"{g.title}\"" + (f" in area {g.area_id}" if g.area_id else "") for g in groups]
+    return [*lines, ""]
 
 
 VERSION = "A released version of the site (name, e.g. 1.0); empty = the working version"
@@ -134,6 +148,8 @@ async def list_docs(ctx: ToolContext, args: ListDocsArgs) -> str:
         title = f"Pages of {name} marked as possibly outdated ({total}):"
     else:
         rows, _, total = await docs_service.children(ctx.session, site.id, args.parent, args.offset, LISTED, rel)
+        if not args.parent and not args.offset:
+            head = head + await _outline(ctx, site, rel)
         where = f"below page {args.parent}" if args.parent else "at the top"
         title = f"Pages of {name} {where} ({args.offset + 1}-{args.offset + len(rows)} of {total}):" if rows else f"No pages {where}{_in(rel)}."
     counts = await docs_service.child_counts(ctx.session, [p.page_key for p in rows], rel)
@@ -182,6 +198,12 @@ class WriteDocPageArgs(BaseModel):
     still_current: bool = Field(default=False, description="Checked after a change: still right, clear its outdated mark")
     version: str | None = Field(default=None, max_length=80, description="A released version to correct (name); empty = the working version")
     delete: bool = Field(default=False, description="Delete the page and those below it: only in a restructuring the user approved")
+    area: int | None = Field(default=None, ge=0, description="Top-level pages: its area id (doc_outline), 0 = none")
+    group: int | None = Field(default=None, ge=0, description="Top-level pages: its group id (doc_outline), 0 = none")
+
+
+def _placed(args: WriteDocPageArgs) -> dict:
+    return {k: (v or None) for k, v in (("area_id", args.area), ("group_id", args.group)) if v is not None}
 
 
 async def _links(ctx: ToolContext, site: DocSite, body: str, folder: str, rel) -> tuple[str, str]:  # noqa: ANN001
@@ -214,7 +236,7 @@ async def write_doc_page(ctx: ToolContext, args: WriteDocPageArgs) -> str:
         body, fixed = await _links(ctx, site, args.body or "", parent.path if parent else "", rel)
         page = await docs_service.create_page(
             ctx.session, site, author, title=args.title, body=body, parent_id=args.parent or None, position=args.position,
-            slug=args.slug, paths=args.paths, reason=args.reason, rel=rel,
+            slug=args.slug, paths=args.paths, reason=args.reason, rel=rel, **_placed(args),
         )  # fmt: skip
         done = f"Created doc page {page.page_key} /{page.path} in {site.slug}{_in(rel)}.{fixed}"
     else:
@@ -239,11 +261,56 @@ async def write_doc_page(ctx: ToolContext, args: WriteDocPageArgs) -> str:
         versions = await docs_service.count_versions(ctx.session, page.page_key)
         page = await docs_service.update_page(
             ctx.session, page, author, title=args.title, body=body, move=args.move, parent_id=args.parent or None, position=args.position,
-            slug=args.slug, paths=args.paths, reason=args.reason, rel=rel,
+            slug=args.slug, paths=args.paths, reason=args.reason, rel=rel, **_placed(args),
         )  # fmt: skip
         changed = await docs_service.count_versions(ctx.session, page.page_key) > versions
         done = f"Doc page {page.page_key} /{page.path}{_in(rel)} {'saved as a new version' if changed else 'updated (text unchanged)'}.{fixed}"
     return done
+
+
+class DocOutlineArgs(BaseModel):
+    kind: Literal["area", "group"]
+    id: int | None = Field(default=None, description="The area's/group's id to change; empty = a new one")
+    title: str | None = Field(default=None, max_length=100)
+    description: str | None = Field(default=None, max_length=200, description="Area: one short line of what it holds")
+    icon: str | None = Field(default=None, max_length=40, description=f"Area: {', '.join(docs_areas.ICONS)}")
+    area: int | None = Field(default=None, ge=0, description="Group: its area id, 0 = none (in every area)")
+    position: int | None = Field(default=None, ge=0, description="Place among the areas/groups, 0 = first")
+    texts: dict[str, dict[str, str]] | None = Field(default=None, description="Translations: {lang: {title, description}}")
+    delete: bool = Field(default=False, description="Delete it (its pages stay, without it)")
+    version: str | None = Field(default=None, max_length=80, description=VERSION)
+
+
+@tool(
+    "doc_outline",
+    "Areas (a switcher, e.g. Guides/Reference) and groups (headings) that order the top-level pages of your doc site; "
+    "assign pages with write_doc_page area/group.",
+    DocOutlineArgs,
+    roles=(DOC_AGENT,),
+)
+async def doc_outline(ctx: ToolContext, args: DocOutlineArgs) -> str:
+    site = await ctx.session.get(DocSite, ctx.agent.doc_site_id) if ctx.agent.doc_site_id else None
+    if site is None:
+        raise ToolError("Only a doc agent changes the navigation of its site.")
+    rel = await _version(ctx, site, args.version)
+    area = args.kind == "area"
+    fields: dict = {k: v for k, v in (("title", args.title), ("texts", args.texts), ("position", args.position)) if v is not None}
+    if area:
+        fields |= {k: v for k, v in (("description", args.description), ("icon", args.icon)) if v is not None}
+    elif args.area is not None:
+        fields["area_id"] = args.area or None
+    if args.id is None:
+        if not args.title:
+            raise ToolError(f"A new {args.kind} needs a title.")
+        row = await (docs_areas.create_area if area else docs_areas.create_group)(ctx.session, site, **fields, rel=rel)
+        out = docs_areas.area_out(row) if area else docs_areas.group_out(row)  # type: ignore[arg-type]
+        return f"Created {args.kind} {out['id']} \"{row.title}\"{_in(rel)}."
+    row = await (docs_areas.get_area if area else docs_areas.get_group)(ctx.session, site, args.id, rel)
+    if args.delete:
+        await (docs_areas.delete_area if area else docs_areas.delete_group)(ctx.session, site, row, rel)  # type: ignore[arg-type, operator]
+        return f"Deleted {args.kind} {args.id}{_in(rel)}; its pages stay, without it."
+    await (docs_areas.update_area if area else docs_areas.update_group)(ctx.session, site, row, rel, **fields)  # type: ignore[arg-type, operator]
+    return f"Changed {args.kind} {args.id}{_in(rel)}."
 
 
 class ProposeRestructureArgs(BaseModel):

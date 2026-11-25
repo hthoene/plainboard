@@ -29,13 +29,13 @@ import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } 
 import { useTranslation } from "react-i18next";
 import { api, errorMessage } from "../../api/client";
 import type { Attachment, DocPage, DocSite, DocTranslationItem } from "../../api/types";
-import { Button, ErrorText, Field, IconButton, Input, Modal, Segmented, Spinner, Textarea } from "../../components/ui";
+import { Button, ErrorText, Field, FieldRow, IconButton, Input, Modal, Segmented, Select, Spinner, Textarea } from "../../components/ui";
 import { formatDateTime, timeAgo } from "../../lib/format";
 import { useAutoGrow, useDismiss, useMediaQuery } from "../../lib/hooks";
 import { useDraft } from "../../lib/drafts";
 import { diffLines, type Row } from "../chat/ToolCode";
 import { DocMarkdown } from "./DocMarkdown";
-import { base, rel, releaseHref, releaseOf, useDocPage, useDocsRefresh, useDocTranslation, useDocVersion, useDocVersions, useFindPages, useRelease } from "./queries";
+import { base, rel, releaseHref, releaseOf, useDocOutline, useDocPage, useDocsRefresh, useDocTranslation, useDocVersion, useDocVersions, useFindPages, useRelease } from "./queries";
 
 type Mode = "write" | "preview" | "split";
 
@@ -601,13 +601,62 @@ function PageDetails({ pid, page }: { pid: number; page: DocPage }) {
   const [paths, setPaths] = useState(page.paths.join("\n"));
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  const outline = useDocOutline(pid, page.site_id);
+  const [area, setArea] = useState(page.area_id ?? null);
+  const [group, setGroup] = useState(page.group_id ?? null);
+  const areas = outline.data?.areas ?? [];
+  const groups = (outline.data?.groups ?? []).filter((g) => area === null || g.area_id === null || g.area_id === area);
+  const placeable = page.parent_id === null && areas.length + (outline.data?.groups.length ?? 0) > 0;
+  const placed = area !== (page.area_id ?? null) || group !== (page.group_id ?? null);
   const list = paths.split("\n").map((p) => p.trim()).filter(Boolean);
-  const dirty = slug !== page.slug || list.join("\n") !== page.paths.join("\n");
+  const dirty = slug !== page.slug || list.join("\n") !== page.paths.join("\n") || placed;
   return (
     <div className="space-y-3 border-y border-line py-3">
       <Field label={t("docs.page.slug")} hint={t("docs.page.slugHint")}>
         <Input value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-"))} />
       </Field>
+      {placeable && (
+        <FieldRow>
+          <Field label={t("docs.outline.area")} hint={t("docs.page.areaHint")} group>
+            <Select
+              value={area ?? ""}
+              aria-label={t("docs.outline.area")}
+              onChange={(e) => {
+                const next = e.target.value ? Number(e.target.value) : null;
+                setArea(next);
+                const g = outline.data?.groups.find((x) => x.id === group);
+                if (g && g.area_id !== null && g.area_id !== next) setGroup(null);
+              }}
+            >
+              <option value="">{t("docs.outline.noArea")}</option>
+              {areas.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.title}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label={t("docs.outline.group")} hint={t("docs.page.groupHint")} group>
+            <Select
+              value={group ?? ""}
+              aria-label={t("docs.outline.group")}
+              onChange={(e) => {
+                const next = e.target.value ? Number(e.target.value) : null;
+                setGroup(next);
+                const g = outline.data?.groups.find((x) => x.id === next);
+                if (g?.area_id != null) setArea(g.area_id);
+              }}
+            >
+              <option value="">{t("docs.outline.noGroup")}</option>
+              {groups.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.title}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </FieldRow>
+      )}
       <Field label={t("docs.page.paths")} hint={t("docs.page.pathsHint")}>
         <Textarea rows={3} value={paths} onChange={(e) => setPaths(e.target.value)} placeholder="app/plainboard/services/docs.py" className="font-mono" />
       </Field>
@@ -620,7 +669,7 @@ function PageDetails({ pid, page }: { pid: number; page: DocPage }) {
             setBusy(true);
             setError(null);
             try {
-              await api.patch(rel(`${base(pid)}/pages/${page.id}`, release), { ...(slug !== page.slug ? { slug } : {}), paths: list });
+              await api.patch(rel(`${base(pid)}/pages/${page.id}`, release), { ...(slug !== page.slug ? { slug } : {}), ...(placed ? { area_id: area, group_id: group } : {}), paths: list });
               await refresh();
             } catch (e) {
               setError(e);

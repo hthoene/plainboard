@@ -1384,6 +1384,8 @@ export interface DocPageItem {
   /** Pages at the top: their area and group in the navigation (#159). */
   area_id?: number | null;
   group_id?: number | null;
+  /** Written by people only: the doc agent reads and links it but never changes it (#166). */
+  human_only?: boolean;
 }
 
 /** An area of a doc site's navigation (#159): its id is the same in every version. */

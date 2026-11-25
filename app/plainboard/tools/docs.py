@@ -69,7 +69,8 @@ def _page_line(p: DocPage, children: int) -> str:
     below = f" ({children} below)" if children else ""
     place = "".join(f" {k} {v}" for k, v in (("area", p.area_id), ("group", p.group_id)) if v)
     place = f" [{place.strip()}]" if place else ""
-    return f"- {p.page_key} /{p.path} \"{p.title}\"{place}{below} (edited {p.edited_at:%Y-%m-%d} by {p.edited_by}){linked}{mark}"
+    human = f" [{docs_service.HUMAN_ONLY}: read and link only]" if p.human_only else ""
+    return f"- {p.page_key} /{p.path} \"{p.title}\"{place}{below}{human} (edited {p.edited_at:%Y-%m-%d} by {p.edited_by}){linked}{mark}"
 
 
 async def _outline(ctx: ToolContext, site: DocSite, rel) -> list[str]:  # noqa: ANN001
@@ -177,6 +178,8 @@ async def read_doc_page(ctx: ToolContext, args: ReadDocPageArgs) -> str:
     facts = [f"site {site.slug}{_in(rel)}", f"/{page.path}", f"edited {page.edited_at:%Y-%m-%d} by {page.edited_by}"]
     if page.paths:
         facts.append(f"paths: {', '.join(page.paths)}")
+    if page.human_only:
+        facts.append(f"{docs_service.HUMAN_ONLY}: read and link only, never change it")
     mark = f"\nMarked as possibly outdated: {page.flag_reason}" if page.flagged_at else ""
     body = page.body or "(empty)"
     part = body[args.offset : args.offset + READ_CHARS]
@@ -245,7 +248,12 @@ async def write_doc_page(ctx: ToolContext, args: WriteDocPageArgs) -> str:
         site = await ctx.session.get(DocSite, page.site_id)
         assert site is not None
         _own(ctx, site)
+        if page.human_only:
+            raise ToolError(f"Not changed: doc page {page.page_key} is {docs_service.HUMAN_ONLY}. Read and link it, but leave it as it is.")
         if args.delete:
+            if human := await docs_service.human_pages(ctx.session, page, rel):
+                ids = ", ".join(str(p.page_key) for p in human[:20])
+                raise ToolError(f"Not deleted: pages below it are {docs_service.HUMAN_ONLY} ({ids}) and would go with it. Leave them as they are.")
             if not await docs_proposals.may_delete(ctx.session, site.id, ctx.run.assignment_id):
                 raise ToolError("Not deleted: pages go only in a restructuring the user approved (propose_doc_restructure).")
             await docs_service.delete_page(ctx.session, page, rel)

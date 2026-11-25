@@ -2006,6 +2006,7 @@ class DocPageItem(ORM):
     updated_at: UTCDateTime
     area_id: int | None = None  # its area and group in the navigation (#159): pages at the top only
     group_id: int | None = None
+    human_only: bool = False  # written by people only: the doc agent never changes it (#166)
 
 
 class DocCrumb(BaseModel):
@@ -2052,6 +2053,7 @@ class DocPageUpdate(BaseModel):
     reason: str = Field(default="", max_length=300)
     area_id: int | None = None  # given: its area and group change (None: none); pages at the top only
     group_id: int | None = None
+    human_only: bool | None = None  # written by people only (#166): in every version of the page
 
 
 class DocAreaIn(BaseModel):

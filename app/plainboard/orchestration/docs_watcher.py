@@ -397,7 +397,7 @@ class DocsWatcher:
                 more = f" (and {len(subjects) - COMMIT_SUBJECTS} more)" if len(subjects) > COMMIT_SUBJECTS else ""
                 changes.append(f"- commits in {repo.name}: " + "; ".join(truncate(m, 120) for m in subjects[:COMMIT_SUBJECTS]) + more)
         for page in await s.scalars(select(DocPage).where(DocPage.project_id == project.id, linked())):
-            if not page.paths:
+            if not page.paths or page.human_only:  # written by people only (#166): no work for the doc agent
                 continue
             touched = [c for c in commits if any(matches(f, page.paths) for f in c.files)]
             if touched:
@@ -422,7 +422,7 @@ class DocsWatcher:
                 found.append({"ref": hit.ref, "sim": round(hit.similarity or 0, 4), "to": label})
                 if (hit.similarity or 0) >= threshold and hit.source_id.isdigit():
                     page = await s.get(DocPage, int(hit.source_id))
-                    if page is not None and page.project_id == project.id and page.until_seq is None:
+                    if page is not None and page.project_id == project.id and page.until_seq is None and not page.human_only:
                         concerns.setdefault(page.id, Concern(page)).reasons.append(f"close in meaning to {label} ({hit.similarity:.2f})")
         await flow_log.record(s, project.id, "docs.near", model=model.name, threshold=threshold, nearest=found)
 
@@ -458,7 +458,7 @@ class DocsWatcher:
         stale = (DocPage.drift >= DRIFT_STALE) | (DocPage.flagged_at < now - timedelta(days=STALE_DAYS)) | dead_link
         if dead:
             stale = stale | DocPage.id.in_(list(dead)[:PATTERNS])
-        stale = and_(stale, DocPage.until_seq.is_(None))  # the working version's
+        stale = and_(stale, DocPage.until_seq.is_(None), DocPage.human_only.is_(False))  # the working version's, not those written by people only (#166)
         sites = {site.id: site for site in await s.scalars(select(DocSite).where(DocSite.project_id == project.id))}
         for site in sites.values():
             pages = list(await s.scalars(select(DocPage).where(DocPage.site_id == site.id, due, stale).order_by(DocPage.drift.desc(), DocPage.id).limit(PAGES_NAMED + 1)))

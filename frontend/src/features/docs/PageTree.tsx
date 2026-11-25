@@ -12,6 +12,7 @@ import {
   MoreHorizontal,
   Search,
   Trash2,
+  UserPen,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -218,6 +219,11 @@ function Row({ ctx, item, depth, before, last, parentItem }: { ctx: Ctx; item: D
         >
           {item.title}
         </button>
+        {item.human_only && (
+          <span title={t("docs.page.humanOnly")} className="shrink-0 text-fg-3">
+            <UserPen className="size-3.5" aria-label={t("docs.page.humanOnly")} />
+          </span>
+        )}
         {item.flagged_at && (
           <span title={t("docs.page.flagged", { reason: item.flag_reason || "–" })} className="shrink-0 text-fg-2">
             <CircleAlert className="size-3.5" aria-label={t("docs.page.mayBeOutdated")} />

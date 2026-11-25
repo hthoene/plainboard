@@ -722,6 +722,9 @@ class DocPage(Timestamps, Base):
     # Its area and group in the navigation (#159, services/docs_areas.py): pages at the top only, by their keys.
     area_id: Mapped[int | None] = mapped_column(ForeignKey("doc_areas.id", ondelete="SET NULL"), index=True)
     group_id: Mapped[int | None] = mapped_column(ForeignKey("doc_groups.id", ondelete="SET NULL"), index=True)
+    # Written by people only (#166): the doc agent reads and links it but never changes it; the docs watcher orders no
+    # work on it. Set on every row of the page (all its versions) at once.
+    human_only: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 
 
 class DocArea(Timestamps, Base):

@@ -29,7 +29,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } 
 import { useTranslation } from "react-i18next";
 import { api, errorMessage } from "../../api/client";
 import type { Attachment, DocPage, DocSite, DocTranslationItem } from "../../api/types";
-import { Button, ErrorText, Field, FieldRow, IconButton, Input, Modal, Segmented, Select, Spinner, Textarea } from "../../components/ui";
+import { Button, ErrorText, Field, FieldRow, IconButton, Input, Modal, Segmented, Select, Spinner, Textarea, Toggle } from "../../components/ui";
 import { formatDateTime, timeAgo } from "../../lib/format";
 import { useAutoGrow, useDismiss, useMediaQuery } from "../../lib/hooks";
 import { useDraft } from "../../lib/drafts";
@@ -604,12 +604,13 @@ function PageDetails({ pid, page }: { pid: number; page: DocPage }) {
   const outline = useDocOutline(pid, page.site_id);
   const [area, setArea] = useState(page.area_id ?? null);
   const [group, setGroup] = useState(page.group_id ?? null);
+  const [humanOnly, setHumanOnly] = useState(!!page.human_only);
   const areas = outline.data?.areas ?? [];
   const groups = (outline.data?.groups ?? []).filter((g) => area === null || g.area_id === null || g.area_id === area);
   const placeable = page.parent_id === null && areas.length + (outline.data?.groups.length ?? 0) > 0;
   const placed = area !== (page.area_id ?? null) || group !== (page.group_id ?? null);
   const list = paths.split("\n").map((p) => p.trim()).filter(Boolean);
-  const dirty = slug !== page.slug || list.join("\n") !== page.paths.join("\n") || placed;
+  const dirty = slug !== page.slug || list.join("\n") !== page.paths.join("\n") || placed || humanOnly !== !!page.human_only;
   return (
     <div className="space-y-3 border-y border-line py-3">
       <Field label={t("docs.page.slug")} hint={t("docs.page.slugHint")}>
@@ -660,6 +661,10 @@ function PageDetails({ pid, page }: { pid: number; page: DocPage }) {
       <Field label={t("docs.page.paths")} hint={t("docs.page.pathsHint")}>
         <Textarea rows={3} value={paths} onChange={(e) => setPaths(e.target.value)} placeholder="app/plainboard/services/docs.py" className="font-mono" />
       </Field>
+      <div className="space-y-1">
+        <Toggle checked={humanOnly} onChange={setHumanOnly} label={t("docs.page.humanOnly")} />
+        <p className="text-fg-3">{t("docs.page.humanOnlyHint")}</p>
+      </div>
       <div className="flex items-center gap-2">
         <Button
           variant="primary"
@@ -669,7 +674,7 @@ function PageDetails({ pid, page }: { pid: number; page: DocPage }) {
             setBusy(true);
             setError(null);
             try {
-              await api.patch(rel(`${base(pid)}/pages/${page.id}`, release), { ...(slug !== page.slug ? { slug } : {}), ...(placed ? { area_id: area, group_id: group } : {}), paths: list });
+              await api.patch(rel(`${base(pid)}/pages/${page.id}`, release), { ...(slug !== page.slug ? { slug } : {}), ...(placed ? { area_id: area, group_id: group } : {}), ...(humanOnly !== !!page.human_only ? { human_only: humanOnly } : {}), paths: list });
               await refresh();
             } catch (e) {
               setError(e);

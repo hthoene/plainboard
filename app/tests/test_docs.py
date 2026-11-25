@@ -945,3 +945,74 @@ def test_the_doc_agent_proposes_a_restructuring_once_the_site_grew_and_the_user_
         page(client, pid, s["id"], title=f"Late {i}", body="Text.")
     client.portal.call(watcher.tick, now + timedelta(days=30))
     assert len(checks()) == 1
+
+
+def test_a_page_written_by_people_only_is_read_but_never_changed_or_handed_to_the_doc_agent(client, project):
+    from plainboard.models import Assignment, DocPage, Landing, LandingStatus, utcnow
+    from sqlalchemy import select
+
+    pid = project["id"]
+    client.patch(f"/api/projects/{pid}", json={"auto_wake_manager": False})
+    repo = client.post(f"/api/projects/{pid}/repositories", json={"name": "api", "url": "https://github.com/acme/api.git"}).json()
+    s = site(client, pid)
+    writer = s["agent"]["id"]
+    guide = page(client, pid, s["id"], title="Guide", body="All about it.")
+    mine = page(client, pid, s["id"], title="Payments", body="My own words.", parent_id=guide["id"], paths=["app/pay"])
+    other = page(client, pid, s["id"], title="Orders", body="Orders.", paths=["app/orders"])
+    marked = client.patch(f"/api/projects/{pid}/docs/pages/{mine['id']}", json={"human_only": True}).json()
+    assert marked["human_only"] is True and marked["body"] == "My own words." and marked["versions"] == 1
+
+    # The doc agent reads and links it, but changes, moves and deletes nothing of it, nor plans to.
+    chat(client, writer, "\n".join([
+        "TOOL list_docs " + json.dumps({"site": "handbook", "parent": guide["id"]}),
+        "TOOL read_doc_page " + json.dumps({"page": mine["id"]}),
+        "TOOL write_doc_page " + json.dumps({"page": mine["id"], "body": "Better words.", "reason": "clearer"}),
+        "TOOL write_doc_page " + json.dumps({"page": mine["id"], "move": True, "parent": 0, "reason": "to the top"}),
+        "TOOL write_doc_page " + json.dumps({"page": guide["id"], "delete": True, "reason": "merged"}),
+        "TOOL propose_doc_restructure " + json.dumps({"title": "Merge", "reason": "Readers find it faster in one page.", "before": "- Guide\n  - Payments", "after": "- Guide", "pages": [guide["id"], mine["id"]]}),
+        "TOOL write_doc_page " + json.dumps({"site": "handbook", "title": "Refunds", "body": f"See [payments](doc-page:{mine['id']}).", "reason": "new page"}),
+    ]))  # fmt: skip
+    wait_for(lambda: idle(client, pid))
+    listed, read, edit, move, delete, proposed, linked = tool_results(client, writer)[-7:]
+    assert f'- {mine["id"]} /guide/payments "Payments" [written by people only: read and link only]' in listed
+    assert "written by people only: read and link only, never change it" in read and "My own words." in read
+    assert edit == move == f"Not changed: doc page {mine['id']} is written by people only. Read and link it, but leave it as it is."
+    assert delete.startswith(f"Not deleted: pages below it are written by people only ({mine['id']})")
+    assert f"Pages {mine['id']} are written by people only: plan no change to them" in proposed
+    assert linked.startswith("Created doc page ")
+    kept = client.get(f"/api/projects/{pid}/docs/pages/{mine['id']}").json()
+    assert kept["body"] == "My own words." and kept["parent_id"] == guide["id"] and kept["human_only"] is True
+
+    # The watcher hands no work on it to the doc agent: not after a landing, not as a stale page.
+    fake = runner(client)
+    fake.commits = [GitCommit(sha="a" * 40, message="Start", files=["README.md"])]
+    watcher = client.app_ref.state.docs_watcher
+    now = utcnow()
+    client.portal.call(watcher.tick, now)
+
+    async def land(s):
+        s.add(Landing(project_id=pid, repository_id=repo["id"], branch="be/pay", title="Pay and order", status=LandingStatus.MERGED, merged_at=now + timedelta(minutes=1)))
+        await s.commit()
+
+    db(client, land)
+    fake.commits = [GitCommit(sha="c" * 40, message="Pay and order", files=["app/pay/x.py", "app/orders/y.py"]), *fake.commits]
+    client.portal.call(watcher.tick, now + timedelta(minutes=20))
+    wait_for(lambda: idle(client, pid))
+
+    async def orders(s):
+        return [a.instructions for a in await s.scalars(select(Assignment).where(Assignment.agent_id == writer, Assignment.title != "").order_by(Assignment.id))]
+
+    texts = [t for t in db(client, orders) if t.startswith("Pages of your doc site")]
+    assert len(texts) == 1 and f'doc page {other["id"]} "Orders"' in texts[0] and "Payments" not in texts[0]
+    assert client.get(f"/api/projects/{pid}/docs/pages/{mine['id']}").json()["flagged_at"] is None
+
+    async def drift(s):
+        for key in (mine["id"], other["id"]):
+            (await s.get(DocPage, key)).drift = 12
+        await s.commit()
+
+    db(client, drift)
+    client.portal.call(watcher.tick, now + timedelta(days=2))
+    wait_for(lambda: idle(client, pid))
+    stale = [t for t in db(client, orders) if t.startswith("Pages of your doc site that are probably stale")]
+    assert len(stale) == 1 and f'doc page {other["id"]} "Orders"' in stale[0] and "Payments" not in stale[0]

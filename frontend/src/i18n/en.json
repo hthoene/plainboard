@@ -2147,7 +2147,7 @@
       "history_one": "History ({{count}} edit)",
       "history_other": "History ({{count}} edits)",
       "onSite": "Show on the site",
-      "settings": "Address and code paths",
+      "settings": "Page settings",
       "mode": "View",
       "write": "Write",
       "split": "Side by side",
@@ -2170,7 +2170,9 @@
       "paths": "Code paths",
       "pathsHint": "Files or folders this page describes, one per line. When a change lands there, the doc agent looks at this page.",
       "areaHint": "The part of the site it is in: its switcher shows the pages of one area at a time.",
-      "groupHint": "The heading it stands under in the navigation."
+      "groupHint": "The heading it stands under in the navigation.",
+      "humanOnly": "Written by people only",
+      "humanOnlyHint": "The doc agent may read and link this page but never changes it. Translations still follow."
     },
     "state": {
       "current": "current",

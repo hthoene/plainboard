@@ -22,6 +22,7 @@ from ..models import Agent, Assignment, Decision, DecisionStatus, DocPage, DocPa
 from ..schemas import DecisionOption, TaskCreate
 from . import board as board_service
 from . import decisions as decision_service
+from . import docs as docs_service
 from .errors import ServiceError
 from .util import truncate
 
@@ -89,7 +90,7 @@ def check_text(why: str, refused: list[DocProposal]) -> str:
         "of its top-level pages (doc_outline). Look at the tree (list_docs, level by "
         "level) and at contents only where needed, not every page. Most of the time it fits: then change nothing and say so in "
         "one line. Only when the benefit is clear and substantial, propose it with propose_doc_restructure (reason, outline now "
-        "and proposed, the pages concerned). Never restructure yourself: the user decides, and PlainBoard orders it when approved."
+        "and proposed, the pages concerned); pages written by people only stay as and where they are. Never restructure yourself: the user decides, and PlainBoard orders it when approved."
     )
     if refused:
         text += "\nThe user declined these, don't propose them again:\n" + "\n".join(f"- {p.title}: {truncate(' '.join(p.after.split()), 200)}" for p in refused[:DECLINED_NAMED])
@@ -111,6 +112,8 @@ async def propose(
     rows = {p.page_key: p for p in await session.scalars(select(DocPage).where(DocPage.site_id == site.id, DocPage.until_seq.is_(None), DocPage.page_key.in_(keys)))} if keys else {}
     if unknown := [k for k in keys if k not in rows]:
         raise ServiceError(f"Not pages of {site.slug}: {', '.join(map(str, unknown[:20]))}.")
+    if human := [k for k in keys if rows[k].human_only]:  # #166: they stay as they are, where they are
+        raise ServiceError(f"Pages {', '.join(map(str, human[:20]))} are {docs_service.HUMAN_ONLY}: plan no change to them; leave them where they are.")
     concerned = "\n".join(f"- {rows[k].title} (/{rows[k].path}, doc-page:{k})" for k in keys[:100])
     details = f"{reason.strip()}\n\n**Outline now**\n```\n{before.strip()}\n```\n\n**Outline proposed**\n```\n{after.strip()}\n```" + (
         f"\n\n**Pages concerned**\n{concerned}" if concerned else ""

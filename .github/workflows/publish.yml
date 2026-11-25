@@ -163,7 +163,7 @@ jobs:
       - name: Nothing to publish
         if: env.PUBLISH != 'true'
         run: echo "::notice::Built, not published. Add the secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN to publish to Docker Hub."
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         if: env.PUBLISH == 'true'
         with:
           path: digests

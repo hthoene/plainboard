@@ -57,6 +57,13 @@ OTHERS_FROM = 5 * 2**30  # another project's manager hears it if that much of th
 TRIM_LARGE = 4 * 2**30  # shared tool caches from this size are trimmed above the target ...
 TRIM_KEEP = 2 * 2**30  # ... never below this, nor below half their size
 TRIM_AGAIN = timedelta(hours=3)
+# The regular cleanup (orchestration/cleanup.py) keeps the disk small all the time, not only from the target: daily, what is
+# made again when needed and nobody works with; after an assignment, the agent's extra work folders without own work.
+ROUTINE_EVERY = timedelta(days=1)
+ROUTINE_IDLE = timedelta(hours=12)  # build outputs, and a project's home folders and caches, go once untouched this long
+TMP_DAYS = 3  # leftovers in the temp folder go once nothing in them changed for this many days
+ROUTINE_TRIM = 2**50  # shared tool caches are trimmed daily down to TRIM_LARGE..TRIM_KEEP, whatever the disk
+UNSURE_FROM = 2**30  # unsure items from this size are named to the manager, never deleted by PlainBoard
 
 
 @dataclass
@@ -354,6 +361,54 @@ async def listing(session: AsyncSession, runner, machine: MachineUsage | None = 
             items.append(Item(c, pid, reason=reason))
     items.sort(key=lambda i: -i.candidate.bytes)
     return Listing(items, projects, agents, busy, machine, folders)
+
+
+def routine_items(listing: Listing, project_id: int, now: float) -> list[Item]:
+    """What the daily cleanup deletes of a project by itself: only what is safe (made again when needed, nobody works
+    there, no work that is nowhere else). Extra work folders and removed agents' folders at once; build outputs once their
+    agent was idle ``ROUTINE_IDLE``; the project's home folders and own caches once unchanged that long. Shared tool caches
+    are trimmed instead, unsure and busy ones stay."""
+    idle = ROUTINE_IDLE.total_seconds()
+    out = []
+    for i in listing.visible(project_id):
+        c = i.candidate
+        if c.safety != "safe" or c.bytes < SMALL or c.tool:
+            continue
+        if c.what in ("workdir", "folder"):
+            out.append(i)
+        elif c.what == "build":
+            since = next((f.idle_since for f in listing.folders if c.path.startswith(f.path.rstrip("/") + "/")), 0.0)
+            if now - since >= idle:
+                out.append(i)
+        elif c.modified and now - c.modified >= idle:
+            out.append(i)
+    return out
+
+
+def unsure_items(listing: Listing, project_id: int) -> list[Item]:
+    return [i for i in listing.visible(project_id) if i.candidate.safety == "unsure" and i.candidate.bytes >= UNSURE_FROM]
+
+
+def routine_text(went: list[CleanedItem], trimmed: list[CleanedItem], unsure: list[Item], project_id: int, busy: set[int]) -> str:
+    """The manager's note after the daily cleanup: what of his project went, which shared caches it uses were trimmed, what
+    is unsure (only named). Nothing to do unless he sees a reason."""
+    lines = ["Regular cleanup (daily, keeps the disk small; the target is a ceiling, not a budget):"]
+    if went:
+        lines.append(f"Deleted of your project, all made again when needed: {format_bytes(sum(i.bytes for i in went))}: " + ", ".join(f"{i.path} {format_bytes(i.bytes)}" for i in sorted(went, key=lambda i: -i.bytes)[:10]) + ".")
+    if trimmed:
+        lines.append("Trimmed shared caches your project uses (oldest entries): " + ", ".join(f"{i.path} by {format_bytes(i.bytes)}" for i in trimmed) + ".")
+    if unsure:
+        lines.append("Not deleted, unsure (may hold someone's work; delete with delete_cleanup force=true if it is only made again, or have its member clean up):")
+        lines += [item_line(i, project_id, busy) for i in unsure[:5]]
+    return "\n".join(lines)
+
+
+def after_text(agent: str, went: list[CleanedItem]) -> str:
+    return (
+        f"{agent}'s assignment ended: PlainBoard deleted its extra work folders without own work, {format_bytes(sum(i.bytes for i in went))}: "
+        + ", ".join(f"{i.path} {format_bytes(i.bytes)}" for i in went[:10])
+        + ". Nothing to do."
+    )
 
 
 def item_line(item: Item, project_id: int, busy: set[int]) -> str:

@@ -348,11 +348,12 @@ class CleanupSpec(BaseModel):
     level: CleanupLevel  # soft: what costs nothing to rebuild; hard: also installed dependencies
     need: int  # bytes to free; cleaning stops once that much is gone
     folders: list[CleanupFolder] = Field(default_factory=list)
+    tmp_days: float = 0  # > 0: also leftovers in the temp folder nothing changed in for that long (the regular cleanup)
 
 
 class CleanedItem(BaseModel):
     path: str
-    what: Literal["build", "cache", "folder", "workdir", "logs", "home"]
+    what: Literal["build", "cache", "folder", "workdir", "logs", "home", "tmp"]
     bytes: int
     users: list[str] = Field(default_factory=list)  # trimmed shared cache: the agent folders whose clones use its tool
 
@@ -383,6 +384,7 @@ class CleanupCandidate(BaseModel):
 
 class CandidatesSpec(BaseModel):
     folders: list[CleanupFolder] = Field(default_factory=list)  # every agent folder of the projects without a folder of their own
+    home: bool = True  # False: only what is in these folders, not the shared home
 
 
 class UnpushedSpec(BaseModel):

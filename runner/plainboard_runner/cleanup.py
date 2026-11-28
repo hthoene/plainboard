@@ -13,6 +13,7 @@ nothing may work in it (no process has its working directory there). What goes, 
 
 1. job logs past their retention;
 2. files in the package caches of the shared home that were not used for a month (hard: a week);
+   leftovers in the temp folder nothing changed in for ``tmp_days`` (regular cleanup only, see ``tmp_leftovers``);
 3. folders no agent has any more, entirely, but only if everything in them is a git clone without
    changes, stash or unpushed commits (else only their build outputs, as below);
 4. build outputs in the folders of idle agents, the longest idle first: only folders git ignores
@@ -31,7 +32,9 @@ import logging
 import os
 import re
 import shutil
+import stat
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -280,6 +283,56 @@ def trim_cache(root: Path, older_than: float) -> int:
     return freed
 
 
+TMP_OWN = ("plainboard-", "systemd-private-", "tmux-", "ssh-", "snap-private")  # the runner's own (sign-ins), the system's, live sessions
+
+
+def _newest(path: Path) -> float:
+    """The newest change of the path or of anything in it."""
+    newest = path.lstat().st_mtime
+    for dirpath, dirnames, files in os.walk(path):
+        for name in dirnames + files:
+            try:
+                newest = max(newest, os.lstat(os.path.join(dirpath, name)).st_mtime)
+            except OSError:
+                pass
+    return newest
+
+
+def tmp_leftovers(older_than: float, root: Path | None = None) -> list[Path]:
+    """Entries at the top of the temp folder left behind: the runner's user's (the agents'), files or folders, nothing
+    in them changed since ``older_than`` and no process works in them. Never hidden ones (sockets, locks), links,
+    sockets or pipes, nor the runner's own (sign-ins) and the system's."""
+    root = root or Path(tempfile.gettempdir())
+    cwds = _cwds()
+    uid = os.getuid()
+    found = []
+    try:
+        entries = sorted(root.iterdir())
+    except OSError:
+        return []
+    for path in entries:
+        try:
+            st = path.lstat()
+            if path.name.startswith((".", *TMP_OWN)) or st.st_uid != uid or not (stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode)):
+                continue
+            if any(_within(c, str(path)) for c in cwds) or _newest(path) >= older_than:
+                continue
+        except OSError:
+            continue
+        found.append(path)
+    return found
+
+
+def _unlink(path: Path, result: CleanupResult) -> None:
+    try:
+        n = _file_bytes(path.lstat())
+        path.unlink()
+    except OSError:
+        return
+    result.items.append(CleanedItem(path=str(path), what="tmp", bytes=n))
+    result.freed += n
+
+
 def _valid(entry: CleanupFolder) -> Path | None:
     """An agent's folder: exactly two levels below the workspaces root, no link."""
     root = config.WORKSPACES_ROOT.resolve()
@@ -309,6 +362,13 @@ def run(spec: CleanupSpec, now: float | None = None) -> CleanupResult:
             if freed:
                 result.items.append(CleanedItem(path=str(root), what="cache", bytes=freed))
                 result.freed += freed
+
+    if spec.tmp_days > 0:
+        for path in tmp_leftovers(now - spec.tmp_days * 86400):
+            if path.is_dir():
+                _remove([path], "tmp", result)
+            else:
+                _unlink(path, result)
 
     min_idle = MIN_IDLE_SECONDS[spec.level]
     for entry in sorted(spec.folders, key=lambda f: (not f.orphan, f.idle_since)):
@@ -612,7 +672,7 @@ def candidates(spec: CandidatesSpec, only: set[str] | None = None, sizes: bool =
 
     home = Path.home()
     tools = {str(home / rel): tool for rel, (tool, _) in TOOL_CACHES.items()}
-    for path, what in home_folders(home):
+    for path, what in home_folders(home) if spec.home else []:
         if not wanted(path):
             continue
         if what == "cache":

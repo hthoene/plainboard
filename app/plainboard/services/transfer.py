@@ -61,7 +61,7 @@ class Table:
 
 
 AGENT = {"created_by_agent_id": "agents"}
-# Not moved: doc_watch (where the docs watcher read, starts anew), search_documents and search_cursors (services/search), made again from these on the other side,
+# Not moved: doc_watch and repo_tags (where the docs watcher read, starts anew), search_documents and search_cursors (services/search), made again from these on the other side,
 # idea_changes (what can be undone right now: its ids are this side's), and promotions (#129: like landings and trains, the flow of this side).
 TABLES: tuple[Table, ...] = (
     Table("projects", sealed=("github_token_enc",), reset={"workspace_path": None, "account_id": None, "account_ids": [], "blocked_account_ids": None, "runner_id": None, "owner_id": None}),

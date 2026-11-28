@@ -218,7 +218,7 @@ class DocPages(Indexer):
         return Doc(
             kind=DOC, source_id=str(page.id), ref=f"doc page {page.page_key or page.id}", title=page.title, body=page.body, at=page.created_at,
             facts=_facts(f"site {row.site} ({row.site_slug})", f"edited by {page.edited_by}" if page.edited_by else None, None if page.until_seq is None else "an earlier version"),
-            links={"doc_page_id": page.page_key or page.id},
+            links={"doc_page_id": page.page_key or page.id}, sections=True,  # a chunk per section: the docs watcher names it (#190)
         )  # fmt: skip
 
     def existing(self, project_id: int) -> Select:

@@ -521,6 +521,8 @@ def grouped(items: list[Item], project_id: int, busy: set[int], safeties: tuple[
 def tool_listing(listing: Listing, project: Project, f: Forecast | None, settings: dict[str, Any]) -> str:
     """For list_cleanup: the forecast, then what may go by safety, the biggest first."""
     lines = [forecast_text(f, settings) + "." if f else "Disk use not known yet."]
+    if measured := [i.candidate.measured for i in listing.items if i.candidate.measured]:
+        lines.append(f"Sizes measured {duration(max(0.0, time.time() - min(measured)))} ago.")
     if names := busy_names(listing, project.id):
         lines.append("Busy now: " + ", ".join(names) + ".")
     items = listing.visible(project.id)

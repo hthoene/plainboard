@@ -40,7 +40,7 @@ from pathlib import Path
 
 from plainboard_protocol import SCRATCH, CandidatesSpec, CleanedItem, CleanupCandidate, CleanupFolder, CleanupResult, CleanupSpec, DeleteSpec, TrimSpec, UnpushedSpec, UnpushedWork
 
-from . import config, jobs
+from . import config, disk, jobs
 from .usage import folder_of
 
 log = logging.getLogger(__name__)
@@ -70,21 +70,8 @@ def _git(repo: Path, *args: str) -> str:
 
 
 def _size(paths: list[Path]) -> dict[Path, int]:
-    """Bytes on disk of each path, at the lowest priority."""
-    if not paths:
-        return {}
-    cmd = ["du", "-skx", "--", *map(str, paths)]
-    if shutil.which("ionice"):
-        cmd = ["ionice", "-c3", *cmd]
-    if shutil.which("nice"):
-        cmd = ["nice", "-n19", *cmd]
-    out = subprocess.run(cmd, capture_output=True, timeout=3600).stdout.decode(errors="replace")
-    sizes: dict[Path, int] = {}
-    for line in out.splitlines():
-        kb, _, path = line.partition("\t")
-        if kb.isdigit():
-            sizes[Path(path)] = int(kb) * 1024
-    return sizes
+    """Bytes on disk of each path, at the lowest priority (disk.py)."""
+    return {Path(p): n for p, (n, _) in disk.sizes([str(p) for p in paths]).items()}
 
 
 def _cwds(proc: Path = Path("/proc")) -> set[str]:
@@ -395,6 +382,7 @@ def run(spec: CleanupSpec, now: float | None = None) -> CleanupResult:
                 continue
             result.skipped.append(f"{folder}: kept, {reason}")
         _remove(build_outputs(folder, spec.level), "build", result)
+    forget_sizes([i.path for i in result.items])
     log.info("Cleaned up %d bytes (%s, %d items)", result.freed, spec.level, len(result.items))
     return result
 
@@ -415,29 +403,16 @@ TOOL_CACHES = {
     ".cache/uv": ("uv", ("pyproject.toml", "requirements.txt", "setup.py")),
     ".cache/go-build": ("go", ("go.mod",)),
 }
-SIZES_TTL = 900  # sizes of candidates are measured again after this, or after a deletion
+SIZES_TTL = 3600  # sizes of candidates are measured again after this; what a cleanup touched at once
 _sizes: dict[str, tuple[int, float]] = {}  # path → bytes, newest change in it
+_measured: dict[str, float] = {}  # path → when its size was measured
 _mentions: dict[tuple[str, ...], dict[str, list[str]]] = {}
 _sized_at = 0.0
 
 
 def _survey(paths: list[Path]) -> dict[Path, tuple[int, float]]:
-    """Bytes on disk and the newest change of each path and of each entry right in it, in one walk at the lowest priority."""
-    if not paths:
-        return {}
-    cmd = ["du", "-akx", "-d1", "--time", "--time-style=+%s", "--", *map(str, paths)]
-    if shutil.which("ionice"):
-        cmd = ["ionice", "-c3", *cmd]
-    if shutil.which("nice"):
-        cmd = ["nice", "-n19", *cmd]
-    out = subprocess.run(cmd, capture_output=True, timeout=3600).stdout.decode(errors="replace")
-    found: dict[Path, tuple[int, float]] = {}
-    for line in out.splitlines():
-        kb, _, rest = line.partition("\t")
-        at, _, path = rest.partition("\t")
-        if kb.isdigit():
-            found[Path(path)] = (int(kb) * 1024, float(at) if at.isdigit() else 0.0)
-    return found
+    """Bytes on disk and the newest change of each path and of each entry right in it, at the lowest priority (disk.py)."""
+    return {Path(p): v for p, v in disk.sizes([str(p) for p in paths], children=True).items()}
 _RANK = {"safe": 0, "busy": 1, "unsure": 2, "keep": 3}
 
 
@@ -456,12 +431,15 @@ def _layers(paths: list[Path]) -> list[list[Path]]:
 
 
 def _measure(paths: list[Path]) -> dict[str, tuple[int, float]]:
-    global _sizes, _mentions, _sized_at
+    global _sizes, _measured, _mentions, _sized_at
     if time.time() - _sized_at > SIZES_TTL:
-        _sizes, _mentions, _sized_at = {}, {}, time.time()
+        _sizes, _measured, _mentions, _sized_at = {}, {}, {}, time.time()
     missing = [p for p in paths if str(p) not in _sizes]
+    now = time.time()
     for batch in _layers(missing):
-        _sizes.update({str(p): n for p, n in _survey(batch).items() if str(p) not in _sizes or p in batch})
+        for p, n in _survey(batch).items():
+            if str(p) not in _sizes or p in batch:
+                _sizes[str(p)], _measured[str(p)] = n, now
     return _sizes
 
 
@@ -518,9 +496,15 @@ def users(folders: list[Path], markers: tuple[str, ...]) -> list[str]:
     return [str(f) for f in folders if any((r / m).is_file() for r in repos(f) for m in markers)]
 
 
-def forget_sizes() -> None:
+def forget_sizes(paths: list[str] | None = None) -> None:
+    """Measure again: all, or what is in these paths or holds them."""
     global _sized_at
-    _sized_at = 0.0
+    if paths is None:
+        _sized_at = 0.0
+        return
+    for key in [k for k in _sizes if any(_within(k, p) or _within(p, k) for p in paths)]:
+        _sizes.pop(key, None)
+        _measured.pop(key, None)
 
 
 def home_folders(home: Path | None = None) -> list[tuple[Path, str]]:
@@ -775,6 +759,7 @@ def candidates(spec: CandidatesSpec, only: set[str] | None = None, sizes: bool =
         measured = _measure([Path(c.path) for c in found])
         for c in found:
             c.bytes, c.modified = measured.get(c.path, (0, 0.0))
+            c.measured = _measured.get(c.path, 0.0)
             if c.what in ("home", "cache"):
                 inside = sorted(((Path(p).name, n) for p, (n, _) in measured.items() if os.path.dirname(p) == c.path), key=lambda e: -e[1])
                 c.entries = dict(inside[:6])
@@ -836,7 +821,7 @@ def trim(spec: TrimSpec) -> CleanupResult:
             result.items.append(CleanedItem(path=str(root), what="cache", bytes=freed, users=users(folders, markers)))
             result.freed += freed
             log.info("Trimmed the %s cache %s by %d bytes", tool, root, freed)
-    forget_sizes()
+    forget_sizes([i.path for i in result.items])
     return result
 
 
@@ -858,6 +843,6 @@ def delete(spec: DeleteSpec) -> CleanupResult:
             _remove_workdir(Path(path), result)
         else:
             _remove([Path(path)], c.what, result)
-    forget_sizes()
+    forget_sizes([i.path for i in result.items])
     log.info("Deleted %d bytes on request (%d items)", result.freed, len(result.items))
     return result

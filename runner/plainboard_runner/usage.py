@@ -12,13 +12,12 @@ import asyncio
 import json
 import logging
 import os
-import shutil
 import time
 from pathlib import Path
 
 from plainboard_protocol import CpuBucket, FolderUsage, MachineUsage, ProcessMemory, VolumeUsage
 
-from . import config
+from . import config, disk
 from .trains import trains_root
 
 log = logging.getLogger(__name__)
@@ -61,34 +60,9 @@ def targets() -> list[tuple[Path, str]]:
 
 
 async def du(paths: list[str], timeout: float = MEASURE_TIMEOUT_SECONDS) -> dict[str, int]:
-    """Bytes on disk of each path, on its own file system, at the lowest priority. What is done by the timeout counts."""
-    if not paths:
-        return {}
-    cmd = ["du", "-skx", "--", *paths]
-    if shutil.which("ionice"):
-        cmd = ["ionice", "-c3", *cmd]
-    if shutil.which("nice"):
-        cmd = ["nice", "-n19", *cmd]
-    proc = await asyncio.create_subprocess_exec(*cmd, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-    sizes: dict[str, int] = {}
-
-    async def read() -> None:
-        assert proc.stdout
-        async for raw in proc.stdout:
-            kb, _, path = raw.decode(errors="replace").rstrip("\n").partition("\t")
-            if kb.isdigit():
-                sizes[path] = int(kb) * 1024
-        await proc.wait()
-
-    try:
-        await asyncio.wait_for(read(), timeout)
-    except TimeoutError:
-        log.warning("Measuring the folders took longer than %ss; stopped", timeout)
-    finally:
-        if proc.returncode is None:
-            proc.kill()
-            await proc.wait()
-    return sizes
+    """Bytes on disk of each path, on its own file system, at the lowest priority (disk.py). What is done by the timeout counts."""
+    found = await asyncio.to_thread(disk.sizes, paths, timeout)
+    return {p: n for p, (n, _) in found.items()}
 
 
 def _load() -> None:

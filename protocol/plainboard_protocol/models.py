@@ -383,6 +383,7 @@ class CleanupCandidate(BaseModel):
     entries: dict[str, int] = Field(default_factory=dict)  # home and cache: its biggest top-level entries, bytes
     parent: str = ""  # home: the folder at the top of the home it is in (a folder of several agents' work); build: the home folder it is in
     agents: list[int] = Field(default_factory=list)  # home: the agents (PLAINBOARD_AGENT) whose processes work in it now
+    measured: float = 0  # unix time its size was measured (sizes are kept for a while)
 
 
 class CandidatesSpec(BaseModel):

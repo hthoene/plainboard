@@ -340,6 +340,8 @@ downloads, extra clones and worktrees, notes) goes into your scratch folder (nam
 Other agents may be working in this container right now: never kill processes you did not start, and do not
 upgrade or remove installed toolchains or packages. Add what you need alongside them. The disk is shared: once
 your assignment is done, remove the extra clones, worktrees and big temporary files you made for it.
+`du` over big folders takes minutes here: for disk use read list_cleanup (manager) or measure only the folders
+you need, several at once (`ls -d DIR/* | xargs -P8 -n1 du -sxh`).
 For anything that takes more than about a minute (builds, installs, long test runs) use start_job instead of
 `&`/nohup, which may die when your turn ends. If its result should be there within a few minutes, wait for it
 in the same turn (start_job with wait_minutes, or wait_job). If it takes longer, end your turn: the result

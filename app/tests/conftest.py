@@ -441,6 +441,13 @@ class FakeRunner:
             commits = commits[: shas.index(spec.since)]
         return GitLogResult(branch=spec.base or "main", head=head, total=total, commits=commits[: spec.limit])
 
+    async def git_tags(self, spec):
+        """``self.tags`` (newest first, with their changes as the test sets them)."""
+        from plainboard_protocol import GitTagsResult
+
+        self.tag_specs = getattr(self, "tag_specs", []) + [spec]
+        return GitTagsResult(tags=list(getattr(self, "tags", []))[: spec.limit])
+
     async def git_present(self, spec):
         """Every commit asked is on the base branch and every path there, except ``self.gone`` (shas whose files went too)."""
         from plainboard_protocol import GitPresentResult

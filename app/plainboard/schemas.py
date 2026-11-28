@@ -1849,6 +1849,7 @@ class DocSiteUpdate(BaseModel):
     spec: str | None = Field(default=None, max_length=20000)
     versioned: bool | None = None  # versions (#126): off again, they stay but are not served
     restructure_check: bool | None = None  # its doc agent proposes larger restructurings now and then (#156)
+    check_budget: int | None = Field(default=None, ge=0, le=200_000)  # tokens of pages its doc agent checks a day (#190); 0: none
     published: bool | None = None
     public: bool | None = None
     languages: list[str] | None = Field(default=None, max_length=30)  # further languages, translated
@@ -2002,6 +2003,7 @@ class DocSiteOut(ORM):
     agent: DocAgentOut | None = None  # its doc agent, the only agent that writes it
     versioned: bool = False  # uses versions (#126): off, it always shows the current state and visitors see no versions
     restructure_check: bool = True  # its doc agent proposes larger restructurings now and then (#156)
+    check_budget: int = 4000  # tokens of pages its doc agent checks a day, the riskiest first (#190); 0: none
     releases: list[DocReleaseOut] = []  # its versions (#126): the working one first, then the released ones, newest first
     url: str  # its address under this PlainBoard: /docs/<slug>/
     pages: int = 0

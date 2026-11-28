@@ -515,6 +515,8 @@ class GitLogSpec(BaseModel):
     limit: int = Field(default=1000, ge=1, le=5000)  # the newest ones
     upto: str | None = Field(default=None, pattern=r"^[0-9a-f]{7,64}$")  # the older history: read from this commit instead of the head, when it is on the branch
     skip: int = Field(default=0, ge=0)  # with upto: after its newest this many (the pages read already)
+    diffs: int = Field(default=0, ge=0, le=500)  # the newest this many commits come with their changed lines (the docs watcher, #190)
+    diff_chars: int = Field(default=8000, ge=0, le=200_000)  # of each such diff
 
 
 class GitCommit(BaseModel):
@@ -527,6 +529,7 @@ class GitCommit(BaseModel):
     file_count: int = 0
     insertions: int = 0
     deletions: int = 0
+    diff: str = ""  # with GitLogSpec.diffs: its changed lines (git show -U0, lock files left out), cut at diff_chars
 
 
 class GitLogResult(BaseModel):
@@ -534,6 +537,33 @@ class GitLogResult(BaseModel):
     head: str = ""  # the branch's commit now: where the next call starts (with upto: the commit read from)
     total: int | None = None  # the branch's commits without merges (None: a runner from before it)
     commits: list[GitCommit] = Field(default_factory=list)  # newest first
+
+
+class GitTagsSpec(BaseModel):
+    """A repository's tags (releases), newest first; for those not ``known`` yet also what changed since the tag
+    before them (the docs watcher, #190). An empty ``known``: only the list."""
+
+    credentials: Credentials
+    key: str = Field(pattern=TRAIN_KEY)
+    remote: RepoSpec
+    limit: int = Field(default=100, ge=1, le=1000)
+    known: list[Annotated[str, Field(max_length=250)]] = Field(default_factory=list, max_length=1000)
+    diffs: int = Field(default=5, ge=0, le=50)  # new tags that come with the changes since their previous tag
+    diff_chars: int = Field(default=20000, ge=0, le=200_000)
+
+
+class GitTag(BaseModel):
+    name: str
+    sha: str = ""  # the commit it names
+    date: str = ""  # ISO 8601: when it was made (an annotated tag) or its commit's date
+    subject: str = ""  # its message's first line (annotated) or its commit's
+    previous: str = ""  # the tag before it, with the changes below
+    subjects: list[str] = Field(default_factory=list)  # of the commits since ``previous``
+    diff: str = ""  # their changed lines since ``previous`` (-U0, lock files left out), cut at diff_chars
+
+
+class GitTagsResult(BaseModel):
+    tags: list[GitTag] = Field(default_factory=list)
 
 
 class GitPresentSpec(BaseModel):

@@ -1299,6 +1299,8 @@ export interface DocSite {
   versioned: boolean;
   /** Its doc agent proposes larger restructurings now and then, the user decides (#156). */
   restructure_check: boolean;
+  /** Tokens of page text its doc agent re-checks a day, the riskiest pages first (#190); 0: none. */
+  check_budget: number;
   /** Its versions: the working one first, then the released ones, the newest first. */
   releases: DocRelease[];
   created_at: string;

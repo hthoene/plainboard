@@ -670,6 +670,10 @@ class DocSite(Timestamps, Base):
     restructure_check: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
     structure_checked_at: Mapped[datetime | None] = mapped_column(DateTime)
     structure_pages: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # The daily rolling check (#190, orchestration/docs_watcher.py): its doc agent gets the riskiest pages, together at
+    # most this many tokens of text a day (0: none). And how far the watcher read decisions and files for it.
+    check_budget: Mapped[int] = mapped_column(Integer, default=4000, server_default="4000")
+    changes_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
 class DocProposal(Timestamps, Base):
@@ -879,6 +883,23 @@ class DocWatch(Base):
     head: Mapped[str] = mapped_column(String(64), default="")
     landed_at: Mapped[datetime | None] = mapped_column(DateTime)
     checked_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class RepoTag(Base):
+    """A tag (release) of a project's repository, as the docs watcher read them (#190): its doc agents hear of a new one
+    with what changed since the one before, and see them (tools releases, changes_since). Not moved with the project:
+    read anew from the repository there."""
+
+    __tablename__ = "repo_tags"
+    __table_args__ = (UniqueConstraint("repository_id", "name", name="uq_repo_tags_name"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    repository_id: Mapped[int] = mapped_column(ForeignKey("repositories.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(250))
+    sha: Mapped[str] = mapped_column(String(64), default="")
+    tagged_at: Mapped[datetime | None] = mapped_column(DateTime)  # when it was made (naive UTC)
+    subject: Mapped[str] = mapped_column(String(300), default="")
+    seen_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)  # when the watcher first read it
 
 
 class Decision(Timestamps, Base):

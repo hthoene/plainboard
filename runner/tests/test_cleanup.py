@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 from plainboard_protocol import CleanupFolder, CleanupSpec, UnpushedSpec
@@ -342,3 +343,17 @@ def test_temp_leftovers_go_only_when_nothing_in_them_changed_for_days_and_nobody
             os.utime(path, (old, old))
     monkeypatch.setattr(cleanup, "_cwds", lambda: {str(tmp / "busy-dir")})
     assert [p.name for p in cleanup.tmp_leftovers(time.time() - 3 * DAY, tmp)] == ["old-dir", "old-file.log"]
+
+
+def test_sizes_kept_but_measured_again_where_a_cleanup_touched(monkeypatch):
+    measured = []
+    monkeypatch.setattr(cleanup, "_survey", lambda paths: measured.extend(paths) or {p: (1, 0.0) for p in paths})
+    cleanup.forget_sizes()
+    a, b, c = Path("/w/a"), Path("/w/a/target"), Path("/w/b")
+    cleanup._measure([a, b, c])
+    cleanup._measure([a, b, c])
+    assert measured == [a, b, c]  # kept
+    cleanup.forget_sizes(["/w/a/target/debug"])
+    cleanup._measure([a, b, c])
+    assert measured == [a, b, c, a, b]  # what holds the deleted path, not the rest
+    assert cleanup._measured[str(c)] <= cleanup._measured[str(a)]

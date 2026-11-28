@@ -380,6 +380,7 @@ class CleanupCandidate(BaseModel):
     tool: str = ""  # a shared tool cache (sccache, cargo, npm, pip, ...): nobody's, PlainBoard trims it itself
     modified: float = 0  # unix time of the newest change anywhere in it
     entries: dict[str, int] = Field(default_factory=dict)  # home and cache: its biggest top-level entries, bytes
+    measured: float = 0  # unix time its size was measured (sizes are kept for a while)
 
 
 class CandidatesSpec(BaseModel):

@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Check, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
+import { useOptimistic } from "../../lib/hooks";
 import { useTranslation } from "react-i18next";
 import { api, errorMessage } from "../../api/client";
 import { checks, qk, useAccounts, useDirectory, useLimits, useMe, useMeta, useProjects, useSettings } from "../../api/queries";
@@ -253,8 +254,11 @@ export function Step({ n, item, title, last, children }: { n: number; item: Stat
 export function Sharing({ account, patch }: { account: Account; patch: (body: Record<string, unknown>) => Promise<boolean> }) {
   const { t } = useTranslation();
   const people = (useDirectory().data ?? []).filter((p) => p.id !== account.owner_id);
+  // Shown at once, saved behind it (#188).
+  const [chosen, choose] = useOptimistic(account.share);
+  const [sharedWith, shareWith] = useOptimistic(account.shared_with);
   const toggle = (id: number) =>
-    patch({ shared_with: account.shared_with.includes(id) ? account.shared_with.filter((x) => x !== id) : [...account.shared_with, id] });
+    void shareWith(sharedWith.includes(id) ? sharedWith.filter((x) => x !== id) : [...sharedWith, id], (shared_with) => patch({ shared_with }));
 
   return (
     <div className="space-y-1.5" data-part="account-sharing">
@@ -264,21 +268,21 @@ export function Sharing({ account, patch }: { account: Account; patch: (body: Re
           <button
             key={share}
             role="radio"
-            aria-checked={account.share === share}
-            onClick={() => share !== account.share && patch({ share })}
-            className={clsx("rounded-sm px-2.5 py-1 ring-1 transition-colors", account.share === share ? "bg-sunk ring-fg" : "ring-line hover:bg-sunk")}
+            aria-checked={chosen === share}
+            onClick={() => share !== chosen && void choose(share, () => patch({ share }))}
+            className={clsx("rounded-sm px-2.5 py-1 ring-1 transition-colors", chosen === share ? "bg-sunk ring-fg" : "ring-line hover:bg-sunk")}
           >
             {t(`accounts.share.${share}`)}
           </button>
         ))}
       </div>
-      {account.share === "people" &&
+      {chosen === "people" &&
         (people.length ? (
           <ul className="flex flex-wrap gap-x-3 gap-y-0.5">
             {people.map((p) => (
               <li key={p.id}>
                 <label className="flex cursor-pointer items-center gap-1.5 py-0.5">
-                  <input type="checkbox" checked={account.shared_with.includes(p.id)} onChange={() => toggle(p.id)} />
+                  <input type="checkbox" checked={sharedWith.includes(p.id)} onChange={() => toggle(p.id)} />
                   <span className="truncate">{p.name || p.username}</span>
                 </label>
               </li>
@@ -297,13 +301,15 @@ function GiveToProjects({ account, onChange }: { account: Account; onChange: (ac
   const { t } = useTranslation();
   const qc = useQueryClient();
   const projects = (useProjects().data ?? []).filter((p) => p.role === "member" || p.role === "owner");
-  const given = account.project_ids ?? [];
+  const [given, give] = useOptimistic(account.project_ids ?? []);
   if (!projects.length) return null;
   const toggle = (projectId: number) =>
-    onChange(async () => {
-      await api.put(`/projects/${projectId}/given-accounts/${account.id}`, { given: !given.includes(projectId) });
-      await Promise.all([qc.invalidateQueries({ queryKey: ["project-accounts", projectId] }), qc.invalidateQueries({ queryKey: ["given-accounts", projectId] })]);
-    });
+    void give(given.includes(projectId) ? given.filter((id) => id !== projectId) : [...given, projectId], () =>
+      onChange(async () => {
+        await api.put(`/projects/${projectId}/given-accounts/${account.id}`, { given: !given.includes(projectId) });
+        await Promise.all([qc.invalidateQueries({ queryKey: ["project-accounts", projectId] }), qc.invalidateQueries({ queryKey: ["given-accounts", projectId] })]);
+      }),
+    );
 
   return (
     <div className="space-y-1.5" data-part="account-projects">

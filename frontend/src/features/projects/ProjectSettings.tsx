@@ -2,8 +2,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api, errorMessage } from "../../api/client";
-import { checks, qk, useAccounts, useAgents, useMeta, useRepositories, useSettings } from "../../api/queries";
-import type { CheckResult, Project, RetentionPreview } from "../../api/types";
+import { checks, patchProject, qk, useAccounts, useAgents, useMeta, useRepositories, useSettings } from "../../api/queries";
+import type { CheckResult, RetentionPreview } from "../../api/types";
 import { ApiKeyEditor } from "../../components/ApiKeyEditor";
 import { SaveRow, SavedAtOnce, SettingsLayout, type SettingsSection } from "../../components/SettingsLayout";
 import { Button, ErrorText, Field, Input, Modal, PageHead, Select, Textarea, Toggle } from "../../components/ui";
@@ -77,9 +77,8 @@ export function ProjectSettings({ onOpenTeam, onDeleted }: { onOpenTeam: () => v
     const body: Record<string, unknown> = Object.fromEntries(keys.map((k) => [k, form[k]]));
     if ("workspace_path" in body) body.workspace_path = form.workspace_path.trim() || null;
     if ("github_token" in body && !form.github_token) delete body.github_token;
-    await api.patch<Project>(`/projects/${project.id}`, body);
+    await patchProject(qc, project.id, body);
     set({ github_token: "" });
-    await qc.invalidateQueries({ queryKey: qk.projects });
   };
   // Which subscriptions the project may use is an admin's call and has a route of its own, but it is
   // one form: stored with the same button as the fields around it, and first, because the
@@ -254,10 +253,7 @@ export function ProjectSettings({ onOpenTeam, onDeleted }: { onOpenTeam: () => v
           <div className="space-y-1">
             <Toggle
               checked={project.fast_checks}
-              onChange={async (v) => {
-                await api.patch<Project>(`/projects/${project.id}`, { fast_checks: v });
-                await qc.invalidateQueries({ queryKey: qk.projects });
-              }}
+              onChange={(v) => patchProject(qc, project.id, { fast_checks: v })}
               label={t("projects.fastChecks")}
             />
             <p className="text-fg-3">{t("projects.fastChecksHint")}</p>
@@ -276,10 +272,7 @@ export function ProjectSettings({ onOpenTeam, onDeleted }: { onOpenTeam: () => v
           <div className="space-y-1">
             <Toggle
               checked={project.limit_pause}
-              onChange={async (v) => {
-                await api.patch<Project>(`/projects/${project.id}`, { limit_pause: v });
-                await qc.invalidateQueries({ queryKey: qk.projects });
-              }}
+              onChange={(v) => patchProject(qc, project.id, { limit_pause: v })}
               label={t("projects.limitPause")}
             />
             <p className="text-fg-3">{t("projects.limitPauseHint")}</p>
@@ -443,10 +436,7 @@ export function ProjectSettings({ onOpenTeam, onDeleted }: { onOpenTeam: () => v
             {meta.data?.semantic_search ? (
               <Toggle
                 checked={project.semantic_search}
-                onChange={async (v) => {
-                  await api.patch<Project>(`/projects/${project.id}`, { semantic_search: v });
-                  await qc.invalidateQueries({ queryKey: qk.projects });
-                }}
+                onChange={(v) => patchProject(qc, project.id, { semantic_search: v })}
                 label={t("projects.semanticSearch")}
               />
             ) : (

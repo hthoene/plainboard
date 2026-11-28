@@ -24,8 +24,8 @@ export function SchedulesView() {
   const [editing, setEditing] = useState<Schedule | "new" | null>(null);
 
   const toggle = async (s: Schedule, enabled: boolean) => {
-    await api.patch(`/projects/${project.id}/schedules/${s.id}`, { enabled });
-    qc.invalidateQueries({ queryKey: qk.schedules(project.id) });
+    const fresh = await api.patch<Schedule>(`/projects/${project.id}/schedules/${s.id}`, { enabled });
+    qc.setQueryData<Schedule[]>(qk.schedules(project.id), (list) => list?.map((x) => (x.id === fresh.id ? fresh : x)));
   };
 
   return (

@@ -3,7 +3,7 @@ import clsx from "clsx";
 import { Fragment, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../../api/client";
-import { qk, useApiMutation } from "../../api/queries";
+import { putSettings, useApiMutation } from "../../api/queries";
 import type { SearchModelOption, SearchModelState, SearchStatus } from "../../api/types";
 import { Button, ErrorText, Modal, Toggle } from "../../components/ui";
 
@@ -61,9 +61,8 @@ export function SearchEditor({ enabled }: { enabled: boolean }) {
         <Toggle
           checked={enabled}
           onChange={async (v) => {
-            await api.put("/settings", { values: { semantic_search: v } });
-            await qc.invalidateQueries({ queryKey: qk.settings });
-            await qc.invalidateQueries({ queryKey: STATUS });
+            await putSettings(qc, { semantic_search: v });
+            void qc.invalidateQueries({ queryKey: STATUS });
           }}
           label={t("search.toggle")}
         />

@@ -21,7 +21,7 @@ import {
   type TextareaHTMLAttributes,
 } from "react";
 import { createPortal } from "react-dom";
-import { useAutoGrow } from "../lib/hooks";
+import { useAutoGrow, useOptimistic } from "../lib/hooks";
 
 type Variant = "primary" | "secondary" | "ghost" | "danger";
 
@@ -396,15 +396,26 @@ export function SwitchTrack({ checked }: { checked: boolean }) {
   );
 }
 
-export function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: ReactNode }) {
+/** An on/off switch. An `onChange` that saves returns its promise: the switch flips at once, and flips back
+ * with the error shown when the save fails (#188). */
+export function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => unknown; label: ReactNode }) {
+  const [shown, change] = useOptimistic(checked);
+  const [error, setError] = useState<unknown>(null);
+  const flip = () => {
+    setError(null);
+    change(!shown, onChange).catch(setError);
+  };
   return (
-    <label className="flex cursor-pointer items-center gap-2 select-none">
-      <button type="button" role="switch" aria-checked={checked} onClick={() => onChange(!checked)} className="flex shrink-0">
-        <SwitchTrack checked={checked} />
-      </button>
-      {/* Trim the text box to cap height and baseline so the letters, not the line box, are centred on the switch in every design's font. */}
-      <span className="[text-box:trim-both_cap_alphabetic]">{label}</span>
-    </label>
+    <>
+      <label className="flex cursor-pointer items-center gap-2 select-none">
+        <button type="button" role="switch" aria-checked={shown} onClick={flip} className="flex shrink-0">
+          <SwitchTrack checked={shown} />
+        </button>
+        {/* Trim the text box to cap height and baseline so the letters, not the line box, are centred on the switch in every design's font. */}
+        <span className="[text-box:trim-both_cap_alphabetic]">{label}</span>
+      </label>
+      <ErrorText error={error} />
+    </>
   );
 }
 
@@ -546,24 +557,34 @@ export function Segmented<T extends string | number>({
   "aria-label": ariaLabel,
 }: {
   value: T;
-  onChange: (value: T) => void;
+  /** One that saves returns its promise: the choice shows at once, and goes back with the error shown when it fails. */
+  onChange: (value: T) => unknown;
   options: { value: T; label: ReactNode }[];
   className?: string;
   "aria-label"?: string;
 }) {
+  const [shown, change] = useOptimistic(value);
+  const [error, setError] = useState<unknown>(null);
+  const choose = (next: T) => {
+    setError(null);
+    change(next, onChange).catch(setError);
+  };
   return (
-    <div role="group" aria-label={ariaLabel} className={clsx("inline-flex shrink-0 rounded-sm ring-1 ring-line-2 ring-inset", className)}>
-      {options.map((option) => (
-        <button
-          key={String(option.value)}
-          type="button"
-          aria-pressed={option.value === value}
-          onClick={() => onChange(option.value)}
-          className={clsx("h-8 rounded-sm px-2.5 whitespace-nowrap transition-colors touch:h-11", option.value === value ? "plate" : "text-fg-2 hover:bg-sunk hover:text-fg")}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
+    <>
+      <div role="group" aria-label={ariaLabel} className={clsx("inline-flex shrink-0 rounded-sm ring-1 ring-line-2 ring-inset", className)}>
+        {options.map((option) => (
+          <button
+            key={String(option.value)}
+            type="button"
+            aria-pressed={option.value === shown}
+            onClick={() => choose(option.value)}
+            className={clsx("h-8 rounded-sm px-2.5 whitespace-nowrap transition-colors touch:h-11", option.value === shown ? "plate" : "text-fg-2 hover:bg-sunk hover:text-fg")}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+      <ErrorText error={error} />
+    </>
   );
 }

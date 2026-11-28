@@ -12,8 +12,10 @@ above the target PlainBoard trims the big ones itself, oldest entries first, and
 projects that use them hear what went.
 
 A folder of the shared home (or of ``~/.cache``) is a project's when its name names the project or one
-of its repositories, when the project's commands, setup script or the files in its clones name its
-path, or when its clones are all of the project's repositories; and of no other project. Else shared.
+of its repositories, when the project's commands, setup script, the files in its clones, its members'
+tool calls and jobs (``home_refs``) name its path or their processes work in it, or when its clones are
+all of the project's repositories; and of no other project. Else shared. A folder at the top of the home
+that holds the work of several (``~/scratch``) is offered folder by folder, each with its own owner.
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ from ..config import get_config
 from ..models import Agent, Project, Repository, utcnow
 from ..schemas import StorageNoticeOut, StorageOut
 from . import cleanup as cleanup_service
-from . import flow_log
+from . import flow_log, home_refs
 from . import settings as settings_service
 from .timing import duration
 from .util import format_bytes
@@ -216,6 +218,7 @@ class Item:
     project_id: int | None  # None: shared, nobody's (no manager may delete it)
     agent: Agent | None = None  # whose folder it is in
     reason: str = ""  # home and cache: why it is the project's, or why it is shared
+    users: set[int] = field(default_factory=set)  # home: the agents that work with it (their commands name it, their processes are in it)
 
 
 @dataclass
@@ -261,12 +264,16 @@ def mention_pattern(rel: str, home: str) -> str:
     return rf"(?:{prefix})/{re.escape(rel)}(?![\w.-])"
 
 
-def _home_rel(path: str) -> tuple[str, str]:
-    """(home, path below it) of a home folder or a part of ``~/.cache``."""
-    parent, _, name = path.rstrip("/").rpartition("/")
-    if parent.endswith("/.cache"):
-        return parent.removesuffix("/.cache"), f".cache/{name}"
-    return parent, name
+def _home_rel(path: str, parent: str = "") -> tuple[str, str]:
+    """(home, path below it) of a home folder, a folder in one (``parent``, ``~/scratch/x``) or a part of ``~/.cache``."""
+    path = path.rstrip("/")
+    if parent:
+        home = parent.rstrip("/").rpartition("/")[0]
+        return home, path[len(home) + 1 :]
+    up, _, name = path.rpartition("/")
+    if up.endswith("/.cache"):
+        return up.removesuffix("/.cache"), f".cache/{name}"
+    return up, name
 
 
 def _names(name: str, token: str) -> bool:
@@ -283,6 +290,18 @@ class Owners:
     repos: list[Repository]
     keys: dict[str, int | None]  # repository → its project (None: in two projects)
     root: str
+    agents: list[Agent] = field(default_factory=list)
+    refs: home_refs.Refs | None = None
+
+
+UNKNOWN = "whose is unknown (no name, script, file, job or command of a project names it)"
+
+
+def users(c: CleanupCandidate, o: Owners) -> set[int]:
+    """The agents (of the projects on this runner) that work with a home folder: their tool calls or jobs name it, or their processes are in it."""
+    _, rel = _home_rel(c.path, c.parent)
+    found = set(c.agents) | (o.refs.agents(rel) if o.refs else set())
+    return found & {a.id for a in o.agents}
 
 
 def owner(c: CleanupCandidate, o: Owners) -> tuple[int | None, str]:
@@ -297,7 +316,7 @@ def owner(c: CleanupCandidate, o: Owners) -> tuple[int | None, str]:
     for p in o.projects:
         if any(_names(name, t) for t in (p.slug, *(r.name for r in o.repos if r.project_id == p.id))):
             strong[p.id].append("its name")
-    home, rel = _home_rel(c.path)
+    home, rel = _home_rel(c.path, c.parent)
     named = re.compile(mention_pattern(rel, home))
     for r in o.repos:
         for label, text in (("check", r.check_command), ("quick check", r.quick_check_command)):
@@ -309,6 +328,12 @@ def owner(c: CleanupCandidate, o: Owners) -> tuple[int | None, str]:
     for folder in c.mentioned:
         if (p := cleanup_service.project_of(folder, o.root, o.projects)) is not None:
             strong[p.id].append("named in files in your workspaces")
+    by_project: dict[int, list[str]] = defaultdict(list)
+    for a in o.agents:
+        if a.id in users(c, o):
+            by_project[a.project_id].append(a.name)
+    for pid, names in by_project.items():
+        strong[pid].append("used by " + ", ".join(sorted(names)[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else ""))
     remote = {o.keys.get(_repo_key(r)) for r in c.remotes}
     if len(remote) == 1 and None not in remote:
         strong[remote.pop()].append("its clones are of your repositories")  # type: ignore[index]
@@ -339,7 +364,8 @@ async def listing(session: AsyncSession, runner, machine: MachineUsage | None = 
     for r in all_repos:
         key = _repo_key(r.url)
         repos[key] = r.project_id if repos.get(key, r.project_id) == r.project_id else None  # in two projects: nobody's
-    owners = Owners(projects, all_repos, repos, root)
+    refs = await home_refs.scan(session)
+    owners = Owners(projects, all_repos, repos, root, agents, refs)
     busy = await cleanup_service.busy_agents(session)
     turns = await cleanup_service.last_turns(session)
     await session.commit()  # no transaction stays open while the runner works
@@ -351,16 +377,51 @@ async def listing(session: AsyncSession, runner, machine: MachineUsage | None = 
     found = await runner.cleanup_candidates(CandidatesSpec(folders=folders))
     by_folder = {f"{root}/{p.slug}/{a.slug}": a for a in agents for p in projects if p.id == a.project_id and not p.workspace_path}
     items = []
+    homes = home_owners([c for c in found if c.what in ("home", "cache")], owners)
     for c in found:
-        if c.what in ("build", "folder", "workdir"):
+        if c.what == "build" and c.parent:  # in a folder of the shared home: whose that folder is
+            holder = max((p for p in homes if c.path.startswith(p + "/")), key=len, default=None)
+            pid, reason, used = homes.get(holder, (None, UNKNOWN, set())) if holder else (None, UNKNOWN, set())
+            items.append(Item(c, pid, reason=f"in {holder}: {reason}" if holder and reason else reason, users=used))
+        elif c.what in ("build", "folder", "workdir"):
             project = cleanup_service.project_of(c.path, root, projects)
             agent = next((a for path, a in by_folder.items() if c.path == path or c.path.startswith(path + "/")), None)
             items.append(Item(c, project.id if project else None, agent))
-        else:
-            pid, reason = owner(c, owners)
-            items.append(Item(c, pid, reason=reason))
+        elif c.path in homes:
+            pid, reason, used = homes[c.path]
+            items.append(Item(c, pid, reason=reason, users=used))
     items.sort(key=lambda i: -i.candidate.bytes)
     return Listing(items, projects, agents, busy, machine, folders)
+
+
+def home_owners(found: list[CleanupCandidate], o: Owners) -> dict[str, tuple[int | None, str, set[int]]]:
+    """Path → (project, why, its agents) of the home and cache folders that are offered. A folder at the top of the home
+    and the folders in it (``parent``) are offered either as a whole, when all of it is one project's (or nobody's), or
+    folder by folder, when the folders in it are of different ones; a folder in it nothing names is its parent's."""
+    homes = {}
+    for c in found:
+        pid, reason = owner(c, o)
+        homes[c.path] = (pid, reason or ("" if c.tool else UNKNOWN), users(c, o))
+    kids: dict[str, list[str]] = defaultdict(list)
+    for c in found:
+        if c.parent and c.parent in homes:
+            kids[c.parent].append(c.path)
+    for parent, paths in kids.items():
+        top, why, used = homes[parent]
+        owners = {homes[p][0] for p in paths}
+        if top is None and why == UNKNOWN and len(owners) == 1 and None not in owners:  # nothing names it, but each folder in it is one project's
+            top, why = owners.pop(), "all folders in it are yours"
+            homes[parent] = (top, why, used.union(*(homes[p][2] for p in paths)))
+        for path in paths:
+            pid, reason, used = homes[path]
+            if pid is None and top is not None and not reason.startswith("unclear"):
+                homes[path] = (top, f"in {parent.rpartition('/')[2]}: {why}", used)
+        if any(homes[p][0] != top for p in paths):
+            del homes[parent]
+        else:
+            for p in paths:
+                del homes[p]
+    return homes
 
 
 def routine_items(listing: Listing, project_id: int, now: float) -> list[Item]:
@@ -372,11 +433,11 @@ def routine_items(listing: Listing, project_id: int, now: float) -> list[Item]:
     out = []
     for i in listing.visible(project_id):
         c = i.candidate
-        if c.safety != "safe" or c.bytes < SMALL or c.tool:
+        if c.safety != "safe" or c.bytes < SMALL or c.tool or i.users & listing.busy:
             continue
         if c.what in ("workdir", "folder"):
             out.append(i)
-        elif c.what == "build":
+        elif c.what == "build" and not c.parent:
             since = next((f.idle_since for f in listing.folders if c.path.startswith(f.path.rstrip("/") + "/")), 0.0)
             if now - since >= idle:
                 out.append(i)
@@ -417,7 +478,7 @@ def item_line(item: Item, project_id: int, busy: set[int]) -> str:
     if item.agent is not None and c.what in ("build", "workdir"):
         what += f" of {item.agent.name}"
     details = []
-    if c.what in ("home", "cache"):
+    if c.what in ("home", "cache") or c.parent:
         whose = "yours" if item.project_id == project_id else "shared"
         what += f", {whose}: {item.reason}" if item.reason else f", {whose}"
         if c.modified:

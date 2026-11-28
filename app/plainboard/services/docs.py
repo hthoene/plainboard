@@ -85,7 +85,7 @@ def clean_languages(values: list[str], language: str) -> list[str]:
 
 def site_out(site: DocSite, pages: int = 0, stale: int = 0, agent: Agent | None = None, releases: list | None = None) -> DocSiteOut:
     return DocSiteOut(
-        releases=releases or [], versioned=site.versioned, restructure_check=site.restructure_check,
+        releases=releases or [], versioned=site.versioned, restructure_check=site.restructure_check, check_budget=site.check_budget,
         id=site.id, project_id=site.project_id, name=site.name, slug=site.slug, description=site.description, spec=site.spec,
         published=site.published, public=site.public, language=site.language, languages=list(site.languages or []),
         translator=site.translator, translate_provider=site.translate_provider, translate_model=site.translate_model,
@@ -188,6 +188,9 @@ AGENT_GUIDE = """You are the doc agent of the doc site "{name}" (slug {slug}, /d
   meaning and its concrete terms (settings, commands, endpoints, UI labels) for other pages that describe what changed,
   also pages nobody marked; change them only where they now describe it wrongly. A new feature without a page: add one
   per the doc spec. Don't read all pages.
+- To find what a change made wrong: doc_grep the OLD value (a version, setting, flag, name) over all pages, doc_search
+  its meaning by section, changes_since (page) for the commits, releases and decisions since a page was last checked,
+  releases for the repositories' tags.
 - Keep a short overview of your site in your own notes (remember: which page covers what) and update it when you add,
   move or remove pages.
 - Keep pages short and find before you write (list_docs query): change a page rather than add a second one.
@@ -242,7 +245,7 @@ ASSISTANT_FIELDS = (
     "assistant_enabled", "assistant_provider", "assistant_model", "assistant_effort", "assistant_code", "assistant_daily_messages",
     "assistant_daily_cost", "assistant_max_tokens",
 )  # fmt: skip
-SITE_FIELDS = ("name", "description", "spec", "published", "public", "versioned", "restructure_check", "translator", "translate_provider", "translate_model", *ASSISTANT_FIELDS)
+SITE_FIELDS = ("name", "description", "spec", "published", "public", "versioned", "restructure_check", "check_budget", "translator", "translate_provider", "translate_model", *ASSISTANT_FIELDS)
 ASSISTANT_PROVIDERS = ("", "claude_code")  # a provider whose runs can go without any built-in tool (toolset "none")
 ASSISTANT_WARNING = (
     "With this on, the assistant reads the project's code and the public texts of its tickets to answer visitors. "

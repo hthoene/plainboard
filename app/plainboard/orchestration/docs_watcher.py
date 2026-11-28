@@ -10,6 +10,13 @@ A page is concerned when
 - with semantic search, the change (branch and ticket, the report of its assignment, the commit messages and paths)
   is close in meaning to one of the page's chunks: at least ``ModelCard.hint_similarity`` less ``NEAR_MARGIN``
   (the hint's threshold is calibrated for ticket against ticket; a change against prose reads a little lower).
+- a changed literal of the change (services/docs_changes.py, #190): the diff's old value of a version, number, config
+  key, flag or identifier is still written on it (any page of the working version, linked or not); the line and its
+  section are named, or
+- a hunk or commit message of the change is close in meaning to one of its sections.
+Beyond landings, the same goes for commits pushed directly (their old values, daily), a new tag of any repository
+(``TAGS_EVERY``: the previous tag -> the new one and what changed between them) and, with semantic search, decisions
+made and text files attached to tickets (by meaning). Nothing found: no message, no model.
 Such a page is marked (``flagged_at``, ``flag_reason``) until someone edits it or confirms it is still right.
 The message also sums up what landed (tickets, report excerpts, commit subjects; bounded): the terms the doc agent
 searches its site for (list_docs query) to find the places nobody marked.
@@ -22,6 +29,8 @@ linked code changed a lot since their last edit (``DRIFT_STALE`` commits) or tha
 once of pages that link to a deleted page (``docs.DEAD_LINK``, marked by services/docs.delete_page).
 Each look also translates what is missing or outdated in the sites' further languages (services/docs_translate.py):
 at most ``docs_translate.BATCH`` pages per site and ``TRANSLATE_SECONDS`` per look; ``translate_soon`` looks at once.
+Each day the doc agent also gets the pages most likely outdated within the site's ``check_budget`` (tokens of their
+text, docs_changes.risky): the longest unconfirmed, weighted by the commits on their code and the releases since.
 Once a site grew, the daily look asks its doc agent at most weekly to check whether a larger restructuring would help
 (services/docs_proposals.py, #156): it proposes, the user decides.
 Everything is bounded: commits read, texts embedded, pages named and pages translated. Only pages with linked
@@ -31,26 +40,29 @@ code paths are read for the paths; a site's other thousands of pages cost nothin
 from __future__ import annotations
 
 import asyncio
-import fnmatch
 import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from plainboard_protocol import CompletionResult, CompletionSpec, GitCommit, GitLogSpec, GitPresentSpec
+from plainboard_protocol import CompletionResult, CompletionSpec, GitCommit, GitLogSpec, GitPresentSpec, GitTagsSpec
 from sqlalchemy import String, and_, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from ..models import Account, Agent, Assignment, AssignmentStatus, DocPage, DocPageVersion, DocSite, DocWatch, Landing, LandingStatus, Project, Repository, Run, RunStatus, RunTrigger, Task, utcnow
+from ..models import (
+    Account, Agent, Assignment, AssignmentStatus, Attachment, Decision, DecisionStatus, DocPage, DocPageVersion, DocSite, DocWatch, Landing, LandingStatus, Project, RepoTag,
+    Repository, Run, RunStatus, RunTrigger, Task, utcnow,
+)  # fmt: skip
+from ..config import get_config
 from ..services import accounts as account_service
 from ..services import docs as docs_service
-from ..services import docs_proposals, docs_translate
+from ..services import docs_changes, docs_proposals, docs_translate
 from ..services import settings as settings_service
 from ..services import flow_log
 from ..services import landings as landing_service
 from ..services import permissions
 from ..services import search as search_service
-from ..services.search import store
+from ..services.search import indexers
 from ..services.util import truncate
 from . import inbox, questions
 from .run_manager import RunManager
@@ -61,7 +73,15 @@ log = logging.getLogger(__name__)
 QUIET = timedelta(minutes=10)  # a burst of landings is over when nothing landed for this long
 MAX_WAIT = timedelta(hours=1)  # ... or this long after its first landing
 COMMITS = 200  # read at most per repository and look
-TEXTS = 8  # landed changes embedded at most per look
+TEXTS = 24  # texts of changes searched by meaning at most per look (landings, commit messages, hunks, events)
+HUNKS = 8  # of a change's hunks searched by meaning
+COMMIT_DIFFS = 50  # newest commits read with their changed lines
+DIFF_CHARS = 8000  # of each
+PROBES = 60  # old values searched in the pages per look
+PLACES = 3  # lines named per page
+TAGS_EVERY = timedelta(hours=3)
+EVENTS = 6  # decisions and files a look
+EVENT_CHARS = 1500
 NEAR = 3  # nearest pages per landed change
 NEAR_MARGIN = 0.05
 PAGES_NAMED = 12  # in one message
@@ -88,19 +108,10 @@ def linked():
 class Concern:
     page: DocPage
     reasons: list[str] = field(default_factory=list)
+    places: list[str] = field(default_factory=list)  # its lines and sections concerned
 
 
-def matches(path: str, patterns: list[str]) -> bool:
-    for pattern in patterns:
-        pattern = pattern.strip().lstrip("./")
-        if not pattern:
-            continue
-        if any(ch in pattern for ch in "*?["):
-            if fnmatch.fnmatch(path, pattern) or fnmatch.fnmatch(path, pattern.rstrip("/") + "/*"):
-                return True
-        elif path == pattern or path.startswith(pattern.rstrip("/") + "/"):
-            return True
-    return False
+matches = docs_changes.matches
 
 
 @dataclass
@@ -147,6 +158,7 @@ class DocsWatcher:
         self._daily: dict[int, datetime] = {}  # project -> its last daily look
         self._rechecked: set[int] = set()  # sites whose LLM translations were checked for their Markdown skeleton
         self._bases: dict[int, str] = {}  # repository -> its base branch, as its commits were last read
+        self._tags_at: dict[int, datetime] = {}  # project -> when its repositories' tags were last read
         self._soon = asyncio.Event()
 
     def start(self) -> None:
@@ -193,6 +205,8 @@ class DocsWatcher:
         landed: list[str] = []
         changes: list[str] = []  # what landed, in short: the terms the doc agent searches for
         daily = now - self._daily.get(project.id, datetime.min) >= DAILY
+        tags = now - self._tags_at.get(project.id, datetime.min) >= TAGS_EVERY
+        texts: list[tuple[str, str]] = []  # what else changed, searched by meaning
         repos = list(await s.scalars(select(Repository).where(Repository.project_id == project.id).order_by(Repository.id)))
         for repo in repos:
             watch = await s.get(DocWatch, (project.id, repo.id))
@@ -218,17 +232,29 @@ class DocsWatcher:
             await self._follow_renames(s, project, repo, commits)
             await self._drift(s, project, commits)
             if not landings:
+                before = len(concerns)
+                await self._literals(s, project, [(_where(repo, c), c.diff) for c in commits if c.diff], concerns)  # old values only: no landing, no search by meaning
+                if len(concerns) > before:
+                    landed.append(f"{repo.name}: {len(commits)} commit{'s' if len(commits) != 1 else ''} pushed directly")
                 continue
             watch = await s.get(DocWatch, (project.id, repo.id))
             watch.landed_at = landings[-1].merged_at
             await s.commit()
-            labels = await self._concerned(s, project, repo, landings, commits, concerns, changes)
+            labels = await self._concerned(s, project, repo, landings, commits, concerns, changes, texts)
             landed.append(f"{repo.name}: {'; '.join(labels)}")
+        if tags:
+            self._tags_at[project.id] = now
+            for repo in repos:
+                if label := await self._tags(s, project, repo, now, concerns, changes, texts):
+                    landed.append(label)
+            landed += await self._events(s, project, now, texts)
+        await self._near(s, project, texts[:TEXTS], concerns)
         if concerns:
             await self._tell(s, project, landed, list(concerns.values()), now, changes)
         if daily:
             self._daily[project.id] = now
             await self._remind(s, project, now, await self._dead_paths(s, project, repos))
+            await self._rolling(s, project, now)
             await self._structure(s, project, now)
         await self.translate(s, project, now)
 
@@ -303,6 +329,7 @@ class DocsWatcher:
         spec = GitLogSpec(
             credentials=await permissions.credentials(s, project), key=landing_service.train_key(repo), remote=landing_service.remote(repo),
             base=repo.default_branch or None, since=watch.head or None, limit=COMMITS if watch.head else 1,
+            diffs=COMMIT_DIFFS if watch.head else 0, diff_chars=DIFF_CHARS,
         )  # fmt: skip
         first = not watch.head
         await s.commit()  # nothing of the database is held while the runner reads
@@ -402,9 +429,18 @@ class DocsWatcher:
         await s.commit()
 
     async def _concerned(
-        self, s: AsyncSession, project: Project, repo: Repository, landings: list[Landing], commits: list[GitCommit], concerns: dict[int, Concern], changes: list[str]
+        self,
+        s: AsyncSession,
+        project: Project,
+        repo: Repository,
+        landings: list[Landing],
+        commits: list[GitCommit],
+        concerns: dict[int, Concern],
+        changes: list[str],
+        all_texts: list[tuple[str, str]],
     ) -> list[str]:
-        """Adds the pages these landings concern and to ``changes`` what landed, in short; returns how the landings are named."""
+        """Adds the pages these landings concern, to ``changes`` what landed, in short, and to ``all_texts`` what to search
+        by meaning; returns how the landings are named."""
         labels, texts = [], []
         for landing in landings:
             task = await s.get(Task, landing.task_id) if landing.task_id else None
@@ -435,10 +471,110 @@ class DocsWatcher:
                 concerns.setdefault(page.id, Concern(page)).reasons.append(
                     f"its linked code changed: {', '.join(files[:4])}{more} ({len(touched)} commit{'s' if len(touched) != 1 else ''})"
                 )
-        await self._near(s, project, texts[:TEXTS], concerns)
+        if len(commits) > 1:  # each commit message on its own too: a small change is not drowned by the others
+            texts += [(f"commit {_where(repo, c)}", c.message) for c in commits[:HUNKS] if c.message.strip()]
+        texts += await self._literals(s, project, [(_where(repo, c), c.diff) for c in commits if c.diff], concerns)
+        all_texts.extend(texts)
         return labels
 
+    async def _literals(self, s: AsyncSession, project: Project, diffs: list[tuple[str, str]], concerns: dict[int, Concern], extra: list | None = None) -> list[tuple[str, str]]:
+        """Pages that still name an old value these diffs changed (and ``extra`` probes) are concerned, with their
+        lines. Returns the diffs' hunks, one per file, for the search by meaning."""
+        found = list(extra or [])
+        texts: list[tuple[str, str]] = []
+        files: set[str] = set()
+        for where, diff in diffs:
+            parts = docs_changes.hunks(diff)
+            found += docs_changes.probes(docs_changes.changed_tokens(parts), where)
+            for h in parts:
+                if h.path not in files and len(texts) < HUNKS:
+                    files.add(h.path)
+                    texts.append((f"the change of {h.path} in {where}", h.text()))
+        named = await docs_changes.mentions(s, project.id, found[:PROBES], PLACES)
+        for page_id, lines in named.items():
+            concern = concerns.setdefault(page_id, Concern(lines[0].page))
+            for said in dict.fromkeys(m.probe.says() for m in lines if m.probe):
+                concern.reasons.append(said)
+            concern.places += [m.place() for m in lines]
+        if found:
+            await flow_log.record(s, project.id, "docs.literals", searched=[p.old for p in found[:PROBES]][:40], pages=list(named)[:50])
+        return texts if diffs else []
+
+    async def _tags(self, s: AsyncSession, project: Project, repo: Repository, now: datetime, concerns: dict[int, Concern], changes: list[str], texts: list[tuple[str, str]]) -> str:
+        """The repository's tags: new ones are kept, and (once its tags were read before) what each changed is searched
+        for like a landing's commits. Returns how they are named, or ""."""
+        if not self._runs.runners.ready(project.id):
+            return ""
+        known = list(await s.scalars(select(RepoTag.name).where(RepoTag.repository_id == repo.id).order_by(RepoTag.id.desc()).limit(1000)))
+        spec = GitTagsSpec(credentials=await permissions.credentials(s, project), key=landing_service.train_key(repo), remote=landing_service.remote(repo), known=known, diff_chars=DIFF_CHARS * 3)
+        await s.commit()
+        try:
+            result = await self._runs.runners.of(project.id).git_tags(spec)
+        except (RunnerError, AttributeError) as exc:
+            log.info("Docs watcher: the tags of repository %s could not be read: %s", repo.id, exc)
+            return ""
+        have = set(known)
+        new = [t for t in result.tags if t.name not in have]
+        for t in reversed(new):  # oldest first: ids follow their order
+            s.add(RepoTag(project_id=project.id, repository_id=repo.id, name=t.name[:250], sha=t.sha[:64], tagged_at=indexers._utc(t.date) if t.date else None, subject=truncate(t.subject, 300), seen_at=now))
+        await s.commit()
+        if not known or not new:
+            return ""  # the first read: where its releases stand, nothing to tell
+        named = []
+        for t in new[:5]:
+            where = f"release {t.name} of {repo.name}"
+            extra = docs_changes.probes([(t.previous, t.name)], where) if t.previous else []
+            texts += await self._literals(s, project, [(where, t.diff)] if t.diff else [], concerns, extra)
+            if t.subjects:
+                texts.append((where, f"{t.name}: {t.subject}\n" + "\n".join(t.subjects[:40])))
+            if len(changes) < CHANGES:
+                since = f" (after {t.previous})" if t.previous else ""
+                changes.append(f"- {where}{since}: " + truncate("; ".join(t.subjects[:COMMIT_SUBJECTS]) or t.subject or "no commits named", REPORT_CHARS))
+            named.append(t.name)
+        return f"{repo.name}: new tag{'s' if len(named) != 1 else ''} {', '.join(named)}"
+
+    async def _events(self, s: AsyncSession, project: Project, now: datetime, texts: list[tuple[str, str]]) -> list[str]:
+        """Decisions made and text files attached to tickets since the last look (every ``TAGS_EVERY``): searched by
+        meaning (with semantic search only). The project's sites keep how far they were read (``DocSite.changes_at``)."""
+        sites = list(await s.scalars(select(DocSite).where(DocSite.project_id == project.id)))
+        since = min((site.changes_at for site in sites if site.changes_at), default=None)
+        for site in sites:
+            site.changes_at = now
+        await s.commit()
+        if since is None or not await search_service.enabled(s, project):
+            return []
+        named: list[str] = []
+        decided = (
+            await s.execute(
+                select(Decision, Task.number)
+                .join(Task, Task.id == Decision.task_id)
+                .where(Decision.project_id == project.id, Decision.status == DecisionStatus.ANSWERED, Decision.answered_at > since, Decision.answered_at <= now)
+                .order_by(Decision.answered_at)
+                .limit(EVENTS)
+            )
+        ).all()
+        for d, number in decided:
+            answer = docs_changes.decision_answer(d.options, d.answer_option, d.answer_text)
+            texts.append((f"the decision on #{number}", truncate(f"{d.question}\n{answer}\n{d.details}", EVENT_CHARS)))
+            named.append(f"decision on #{number}")
+        files = (
+            await s.execute(
+                select(Attachment, Task.number)
+                .join(Task, Task.id == Attachment.task_id)
+                .where(Attachment.project_id == project.id, Attachment.created_at > since, Attachment.created_at <= now, Attachment.purged_at.is_(None), indexers._texty())
+                .order_by(Attachment.created_at)
+                .limit(EVENTS)
+            )
+        ).all()
+        for a, number in files:
+            body = await asyncio.to_thread(indexers.read_text, get_config().uploads_dir / a.storage_name)
+            if body:
+                texts.append((f'the file "{a.filename}" on #{number}', truncate(f"{a.filename}\n{body}", EVENT_CHARS)))
+                named.append(f'file "{truncate(a.filename, 60)}" on #{number}')
+        return [f"board: {', '.join(named)}"] if named else []
+
     async def _near(self, s: AsyncSession, project: Project, texts: list[tuple[str, str]], concerns: dict[int, Concern]) -> None:
+        """Pages with a section close in meaning to one of these texts are concerned, with that section."""
         if not texts or not await search_service.enabled(s, project):
             return
         model = await search_service.embedder(s)
@@ -447,12 +583,16 @@ class DocsWatcher:
         threshold = model.card.hint_similarity - NEAR_MARGIN
         found = []
         for label, text in texts:
-            for hit in await store.nearest_of_kind(s, project.id, await model.query(text), model.name, "doc", NEAR):
-                found.append({"ref": hit.ref, "sim": round(hit.similarity or 0, 4), "to": label})
-                if (hit.similarity or 0) >= threshold and hit.source_id.isdigit():
-                    page = await s.get(DocPage, int(hit.source_id))
-                    if page is not None and page.project_id == project.id and page.until_seq is None and not page.human_only:
-                        concerns.setdefault(page.id, Concern(page)).reasons.append(f"close in meaning to {label} ({hit.similarity:.2f})")
+            seen: set[int] = set()
+            for hit in await docs_changes.near(s, project.id, text, NEAR):
+                found.append({"page": hit.page.id, "sim": round(hit.similarity, 4), "to": label})
+                if hit.similarity < threshold or hit.page.human_only:
+                    continue
+                concern = concerns.setdefault(hit.page.id, Concern(hit.page))
+                if hit.page.id not in seen:
+                    seen.add(hit.page.id)
+                    concern.reasons.append(f"close in meaning to {label} ({hit.similarity:.2f})")
+                concern.places.append(f'section "{hit.section}" is close in meaning to {label}')
         await flow_log.record(s, project.id, "docs.near", model=model.name, threshold=threshold, nearest=found)
 
     async def _tell(self, s: AsyncSession, project: Project, landed: list[str], concerns: list[Concern], now: datetime, changes: list[str] | None = None) -> None:
@@ -466,19 +606,21 @@ class DocsWatcher:
         await flow_log.record(s, project.id, "docs.outdated", pages=[c.page.id for c in concerns], landed=landed)
         for site_id, mine in _by_site([c.page for c in concerns]).items():
             reasons = {c.page.id: "; ".join(c.reasons) for c in concerns}
-            lines = [_line(p, reasons[p.id]) for p in mine[:PAGES_NAMED]]
+            places = {c.page.id: c.places for c in concerns}
+            lines = [_line(p, reasons[p.id], places[p.id]) for p in mine[:PAGES_NAMED]]
             more = f"\n(and {len(mine) - PAGES_NAMED} more marked pages: list_docs marked=true)" if len(mine) > PAGES_NAMED else ""
             text = (
-                f"Pages of your doc site may be outdated after what landed ({' | '.join(landed)}). Pages to check:\n" + "\n".join(lines) + more + "\n"
+                f"Pages of your doc site may be outdated after what changed ({' | '.join(landed)}). Pages to check (with the lines and sections concerned):\n"
+                + "\n".join(lines) + more + "\n"
                 "Check whether each is really wrong or missing something; only then change it, and only the sentences or sections concerned "
                 "(write_doc_page with a reason, no rewording or restructuring), else confirm it (write_doc_page still_current).\n"
-                "Then search your site yourself (list_docs query, a few searches: the change's meaning and its terms: settings, commands, endpoints, "
-                "UI labels) for other pages that now describe what changed wrongly and fix just that, add a page for a new feature that has none, "
+                "Then search your site yourself (doc_grep for the old values, doc_search or list_docs query for the change's meaning: settings, commands, "
+                "endpoints, UI labels) for other pages that now describe what changed wrongly and fix just that, add a page for a new feature that has none, "
                 "check the code paths of the pages you touch, and keep your site overview in your notes current."
             )
             if changes:
                 text += "\n\n" + truncate("What landed:\n" + "\n".join(changes), CHANGE_CHARS)
-            await self._send(s, sites[site_id], "Update docs after landings", text)
+            await self._send(s, sites[site_id], "Update docs after changes", text)
 
     async def _remind(self, s: AsyncSession, project: Project, now: datetime, dead: dict[int, list[str]] | None = None) -> None:
         dead = dead or {}
@@ -518,6 +660,29 @@ class DocsWatcher:
             )
             await self._send(s, site, "Bring stale doc pages up to date", text)
 
+    async def _rolling(self, s: AsyncSession, project: Project, now: datetime) -> None:
+        """The daily check of each site: its riskiest pages within ``check_budget`` (docs_changes.risky), none when
+        nothing is due. Each is named at most once per ``REMIND_EVERY``."""
+        for site in list(await s.scalars(select(DocSite).where(DocSite.project_id == project.id, DocSite.check_budget > 0).order_by(DocSite.id))):
+            picked = await docs_changes.risky(s, site, now, now - REMIND_EVERY)
+            if not picked:
+                continue
+            lines = []
+            for r in picked:
+                page = await s.get(DocPage, r.page_id)
+                if page is not None:
+                    page.reminded_at = now
+                    lines.append(_line(page, r.why))
+            await s.commit()
+            await flow_log.record(s, project.id, "docs.rolling_check", site=site.id, pages=[r.page_id for r in picked], tokens=sum(r.tokens for r in picked))
+            text = (
+                f"Today's check of your doc site (a small daily budget of {site.check_budget} tokens): these pages went longest without a check, "
+                "weighted by the code changes and releases since.\n" + "\n".join(lines) + "\n"
+                "For each: changes_since (page) shows the commits, releases and decisions since it was last confirmed; read only what concerns it. "
+                "Fix just what is wrong now (write_doc_page with a reason), else confirm it (write_doc_page still_current). Only these pages."
+            )
+            await self._send(s, site, "Check a few doc pages", text)
+
     async def _structure(self, s: AsyncSession, project: Project, now: datetime) -> None:
         """Asks a doc agent to check its site's structure once the site grew (services/docs_proposals.due, #156)."""
         for site in list(await s.scalars(select(DocSite).where(DocSite.project_id == project.id, DocSite.restructure_check.is_(True)).order_by(DocSite.id))):
@@ -554,5 +719,11 @@ def _by_site(pages: list[DocPage]) -> dict[int, list[DocPage]]:
     return out
 
 
-def _line(page: DocPage, why: str) -> str:
-    return f'- doc page {page.page_key} "{page.title}" (/{page.path}): {why}'
+def _line(page: DocPage, why: str, places: list[str] | None = None) -> str:
+    lines = [f'- doc page {page.page_key} "{page.title}" (/{page.path}): {why}']
+    lines += [f"  - {p}" for p in list(dict.fromkeys(places or []))[:PLACES]]
+    return "\n".join(lines)
+
+
+def _where(repo: Repository, commit: GitCommit) -> str:
+    return f'{commit.sha[:10]} "{truncate(commit.message.split(chr(10), 1)[0].strip(), 60)}" in {repo.name}'

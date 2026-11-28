@@ -352,8 +352,50 @@ def test_sizes_kept_but_measured_again_where_a_cleanup_touched(monkeypatch):
     a, b, c = Path("/w/a"), Path("/w/a/target"), Path("/w/b")
     cleanup._measure([a, b, c])
     cleanup._measure([a, b, c])
-    assert measured == [a, b, c]  # kept
+    assert measured == [a, c, b]  # kept (a folder and one in it in separate walks)
     cleanup.forget_sizes(["/w/a/target/debug"])
     cleanup._measure([a, b, c])
-    assert measured == [a, b, c, a, b]  # what holds the deleted path, not the rest
+    assert measured == [a, c, b, a, b]  # what holds the deleted path, not the rest
     assert cleanup._measured[str(c)] <= cleanup._measured[str(a)]
+
+
+def test_folders_in_a_home_folder_are_offered_one_by_one_with_their_build_outputs(ws, tmp_path, monkeypatch):
+    from plainboard_protocol import SCRATCH, CandidatesSpec, DeleteSpec
+
+    home = tmp_path / "home"
+    scratch = home / "scratch"
+    (scratch / "k483").mkdir(parents=True)
+    (scratch / "k483" / "notes.md").write_text("findings")
+    clone(tmp_path, scratch / "k483", "rel")
+    for tagged in (scratch / "hil" / "target-pf7", scratch / "a88-fp-target"):  # cargo's target, whatever it is called
+        tagged.mkdir(parents=True)
+        (tagged / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55\n")
+        (tagged / "blob").write_bytes(os.urandom(5000))
+    (scratch / "hil" / "run.sh").write_text("cargo build\n")
+    dev = agent(ws, "dev")
+    clone(tmp_path, dev)
+    (dev / SCRATCH / "target-x").mkdir(parents=True)
+    (dev / SCRATCH / "target-x" / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55\n")
+    monkeypatch.setattr(cleanup, "_sizes", {})
+    monkeypatch.setattr(cleanup, "_home_agents", lambda home: [(str(scratch / "k483" / "rel"), 7)])
+
+    folders = [CleanupFolder(path=str(dev), clones=["repo"])]
+    found = {os.path.relpath(c.path, tmp_path): c for c in cleanup.candidates(CandidatesSpec(folders=folders))}
+    safety = {p: (c.what, c.safety, c.why) for p, c in found.items()}
+    assert safety["home/scratch"][0] == "home" and not found["home/scratch"].parent
+    assert safety["home/scratch/k483"] == ("home", "unsure", "k483/notes.md is not in a clone")
+    assert found["home/scratch/k483"].parent == str(scratch) and found["home/scratch/k483"].agents == [7]
+    assert safety["home/scratch/k483/rel/target"] == ("build", "safe", "") and found["home/scratch/k483/rel/target"].parent == str(scratch)
+    assert safety["home/scratch/hil/target-pf7"] == ("build", "safe", "")
+    assert safety["home/scratch/a88-fp-target"] == ("home", "safe", "") and found["home/scratch/a88-fp-target"].bytes > 0
+    assert sum(1 for p in found if p == "home/scratch/a88-fp-target") == 1  # not as a build output too
+    assert safety[f"ws/p/dev/{SCRATCH}"][0] == "workdir" and safety[f"ws/p/dev/{SCRATCH}/target-x"] == ("build", "safe", "")
+
+    result = cleanup.delete(DeleteSpec(paths=[str(scratch / "hil" / "target-pf7"), str(scratch / "k483")], folders=folders))
+    assert [i.path for i in result.items] == [str(scratch / "hil" / "target-pf7")]
+    assert (scratch / "hil" / "run.sh").exists() and (scratch / "k483" / "notes.md").exists()
+
+
+def test_nested_paths_are_measured_in_separate_walks():
+    a, b, c, d = map(cleanup.Path, ("/h/s", "/h/s/k", "/h/s/k/t", "/h/w"))
+    assert cleanup._layers([c, a, b, d]) == [[a, d], [b], [c]]

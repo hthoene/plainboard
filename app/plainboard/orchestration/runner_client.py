@@ -8,7 +8,7 @@ import time
 from collections.abc import AsyncIterator
 
 import httpx
-from plainboard_protocol import GitLogResult, GitLogSpec, GitPresentResult, GitPresentSpec, PromotePlan, PromotePushSpec, PromoteResult, PromoteSpec, ProjectFiles, TidyResult, TidySpec, CandidatesSpec, CheckResult, CleanupCandidate, CleanupResult, CleanupSpec, CompletionResult, CompletionSpec, Credentials, DeleteSpec, JobPort, JobSpec, JobState, LeftoverResult, LeftoverSpec, JobTiming, LimitsEvent, MachineUsage, ProviderAccount, ProviderInfo, SignInAck, SignInFiles, SignInRefresh, PullRequestCheck, PullRequestState, RepoSpec, RunEvent, RunSpec, SkillFetch, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, TrimSpec, UnpushedSpec, UnpushedWork, UpstreamState, parse_event
+from plainboard_protocol import GitLogResult, GitLogSpec, GitPresentResult, GitPresentSpec, GitTagsResult, GitTagsSpec, PromotePlan, PromotePushSpec, PromoteResult, PromoteSpec, ProjectFiles, TidyResult, TidySpec, CandidatesSpec, CheckResult, CleanupCandidate, CleanupResult, CleanupSpec, CompletionResult, CompletionSpec, Credentials, DeleteSpec, JobPort, JobSpec, JobState, LeftoverResult, LeftoverSpec, JobTiming, LimitsEvent, MachineUsage, ProviderAccount, ProviderInfo, SignInAck, SignInFiles, SignInRefresh, PullRequestCheck, PullRequestState, RepoSpec, RunEvent, RunSpec, SkillFetch, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, TrimSpec, UnpushedSpec, UnpushedWork, UpstreamState, parse_event
 
 from ..services.errors import ServiceError
 
@@ -356,6 +356,15 @@ class RunnerClient:
         if resp.status_code >= 400:
             raise RunnerError(resp.text[:600])  # also a runner of a version without it (404)
         return GitLogResult.model_validate(resp.json())
+
+    async def git_tags(self, spec: GitTagsSpec) -> GitTagsResult:
+        try:
+            resp = await self._client.post("/git/tags", json=spec.model_dump(mode="json"), timeout=600)
+        except httpx.HTTPError as exc:
+            raise RunnerError(unreachable(exc)) from exc
+        if resp.status_code >= 400:
+            raise RunnerError(resp.text[:600])  # also a runner of a version without it (404)
+        return GitTagsResult.model_validate(resp.json())
 
     async def git_present(self, spec: GitPresentSpec) -> GitPresentResult:
         try:

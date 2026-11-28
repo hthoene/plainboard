@@ -270,3 +270,21 @@ async def nearest_of_kind(s: AsyncSession, project_id: int, vector: list[float],
         seen.add(row.source_id)
         hits.append(_hit(row, float(row.sim)))
     return hits[:limit]
+
+
+@dataclass
+class Section:
+    source_id: str
+    chunk: int
+    body: str
+    similarity: float
+
+
+async def nearest_chunks(s: AsyncSession, project_id: int, vector: list[float], model: str, kind: str, limit: int) -> list[Section]:
+    """By meaning only, among one kind: the nearest chunks, several of one item too (the sections of doc pages, #190)."""
+    params = {"project": project_id, "model": model, "vector": vector_literal(vector), "limit": limit, "kind": kind}
+    sql = """SELECT d.source_id, d.chunk, d.body, 1 - (v.embedding <=> CAST(:vector AS vector)) AS sim
+        FROM search_documents d JOIN search_vectors v ON v.document_id = d.id AND v.model = :model
+        WHERE d.project_id = :project AND d.kind = :kind
+        ORDER BY v.embedding <=> CAST(:vector AS vector) LIMIT :limit"""
+    return [Section(row.source_id, row.chunk, row.body, float(row.sim)) for row in await s.execute(text(sql), params)]

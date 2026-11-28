@@ -6,6 +6,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
+from plainboard_protocol import SCRATCH
+
 from ..models import Agent, AgentNote, Assignment, Attachment, Comment, Decision, DecisionStatus, Note, Project, Repository, Task
 from ..services import customer_texts as customer_text_service
 from ..services.timing import duration
@@ -332,11 +334,12 @@ How you work:
 ENV_GUIDE = """\
 Environment: Linux container with full shell access and passwordless sudo. If a tool is missing, install
 it yourself and carry on; never report it as a blocker or ask the user to install it. Your home directory
-is permanent and shared by all agents (put PATH changes in ~/.profile); system packages are lost when the
-container is rebuilt. Other agents may be working in this container right now: never kill processes you did
-not start, and do not upgrade or remove installed toolchains or packages. Add what you need alongside them.
-The disk is shared: once your assignment is done, remove the extra clones, worktrees and big temporary files
-(/tmp, scratch folders) you made for it.
+is permanent and shared by all agents: only for what must survive, tools and their PATH (in ~/.profile); system
+packages are lost when the container is rebuilt. Work data (build and target folders, job outputs, logs,
+downloads, extra clones and worktrees, notes) goes into your scratch folder (named below), never into the home.
+Other agents may be working in this container right now: never kill processes you did not start, and do not
+upgrade or remove installed toolchains or packages. Add what you need alongside them. The disk is shared: once
+your assignment is done, remove the extra clones, worktrees and big temporary files you made for it.
 `du` over big folders takes minutes here: for disk use read list_cleanup (manager) or measure only the folders
 you need, several at once (`ls -d DIR/* | xargs -P8 -n1 du -sxh`).
 For anything that takes more than about a minute (builds, installs, long test runs) use start_job instead of
@@ -533,10 +536,11 @@ def system_prompt_sections(
     if project.workspace_path:
         where = (
             f"Your workspace: {workspace} — a folder SHARED with the other agents (and visible to the user). "
-            "Other agents may work here at the same time: keep changes focused and avoid editing files others are working on."
+            "Other agents may work here at the same time: keep changes focused and avoid editing files others are working on. "
+            f"Your scratch folder: /tmp/{project.slug}-{agent.slug}."
         )
     else:
-        where = f"Your workspace: {workspace}."
+        where = f"Your workspace: {workspace}; your scratch folder: {workspace}/{SCRATCH}."
     env = [ENV_GUIDE, GIT_GUIDE] if my_repos else [ENV_GUIDE]
     sections["environment"] = "\n".join(env) + f"\n{where} Ticket attachments are readable under /uploads."
     if my_repos:

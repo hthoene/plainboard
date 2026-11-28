@@ -38,7 +38,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from plainboard_protocol import CandidatesSpec, CleanedItem, CleanupCandidate, CleanupFolder, CleanupResult, CleanupSpec, DeleteSpec, TrimSpec, UnpushedSpec, UnpushedWork
+from plainboard_protocol import SCRATCH, CandidatesSpec, CleanedItem, CleanupCandidate, CleanupFolder, CleanupResult, CleanupSpec, DeleteSpec, TrimSpec, UnpushedSpec, UnpushedWork
 
 from . import config, disk, jobs
 from .usage import folder_of
@@ -120,6 +120,11 @@ def _marked(path: Path) -> bool:
     return (path / marker).exists() if marker else path.name in UNMARKED_OK
 
 
+def _tagged(path: Path) -> bool:
+    """A cache or build folder by the standard tag its tool leaves (cargo's ``target``, whatever it is called)."""
+    return (path / "CACHEDIR.TAG").is_file()
+
+
 def build_outputs(folder: Path, level: str) -> list[Path]:
     """What can be built again in an agent's folder: in a clone what git ignores, elsewhere what its tool marked."""
     names = HARD_BUILD if level == "hard" else SOFT_BUILD
@@ -131,9 +136,9 @@ def build_outputs(folder: Path, level: str) -> list[Path]:
         except (subprocess.SubprocessError, OSError):
             continue
         for rel in listed.split("\0"):
-            if rel.endswith("/") and Path(rel).name in names:
+            if rel.endswith("/"):
                 path = repo / rel.rstrip("/")
-                if path.is_dir() and not path.is_symlink():
+                if (path.name in names or _tagged(path)) and path.is_dir() and not path.is_symlink():
                     found.append(path)
 
     def outside(path: Path, depth: int) -> None:
@@ -146,9 +151,9 @@ def build_outputs(folder: Path, level: str) -> list[Path]:
         for child in children:
             if child in clones:
                 continue
-            if child.name in names and _marked(child):
+            if (child.name in names and _marked(child)) or _tagged(child):
                 found.append(child)
-            elif not child.name.startswith("."):
+            elif not child.name.startswith(".") or child.name == SCRATCH:
                 outside(child, depth - 1)
 
     outside(folder, SEARCH_DEPTH)
@@ -167,7 +172,7 @@ def unpushed(folder: Path) -> str | None:
         if not entry.is_dir():
             return f"{entry.name} is not in a clone"
         if not _is_repo(entry):
-            if entry.name in HARD_BUILD and _marked(entry):
+            if (entry.name in HARD_BUILD and _marked(entry)) or _tagged(entry):
                 continue
             return f"{entry.name} is not a clone"
         try:
@@ -411,14 +416,30 @@ def _survey(paths: list[Path]) -> dict[Path, tuple[int, float]]:
 _RANK = {"safe": 0, "busy": 1, "unsure": 2, "keep": 3}
 
 
+def _layers(paths: list[Path]) -> list[list[Path]]:
+    """The paths in batches in which none is inside another: du counts what it walked once per call, so a folder
+    and one in it measured together would leave one of them short."""
+    left = list(dict.fromkeys(paths))
+    batches = []
+    while left:
+        names = {str(p) for p in left}
+        outer = [p for p in left if not any(str(a) in names for a in p.parents)]
+        batches.append(outer)
+        taken = {str(p) for p in outer}
+        left = [p for p in left if str(p) not in taken]
+    return batches
+
+
 def _measure(paths: list[Path]) -> dict[str, tuple[int, float]]:
     global _sizes, _measured, _mentions, _sized_at
     if time.time() - _sized_at > SIZES_TTL:
         _sizes, _measured, _mentions, _sized_at = {}, {}, {}, time.time()
     missing = [p for p in paths if str(p) not in _sizes]
     now = time.time()
-    for p, n in _survey(missing).items():
-        _sizes[str(p)], _measured[str(p)] = n, now
+    for batch in _layers(missing):
+        for p, n in _survey(batch).items():
+            if str(p) not in _sizes or p in batch:
+                _sizes[str(p)], _measured[str(p)] = n, now
     return _sizes
 
 
@@ -542,12 +563,16 @@ def _clone_state(repo: Path, name: str) -> tuple[str, str]:
 
 def extra_folders(folder: Path, clones: list[str]) -> list[Path]:
     """Folders at the top of an agent's folder besides its clones of the project's repositories: worktrees,
-    more clones, scratch folders. Never hidden ones (tool settings) nor build outputs (listed as such)."""
+    more clones, scratch folders (its ``SCRATCH`` too). Never other hidden ones (tool settings) nor build outputs (listed as such)."""
     try:
         children = sorted(p for p in folder.iterdir() if p.is_dir() and not p.is_symlink())
     except OSError:
         return []
-    return [p for p in children if p.name not in clones and not p.name.startswith(".") and not (p.name in HARD_BUILD and _marked(p))]
+    return [
+        p
+        for p in children
+        if p.name not in clones and (not p.name.startswith(".") or p.name == SCRATCH) and not (p.name in HARD_BUILD and _marked(p)) and not _tagged(p)
+    ]
 
 
 def _work_state(folder: Path, busy: bool, cwds: set[str]) -> tuple[str, str]:
@@ -611,6 +636,48 @@ def assess(folder: Path, top: Path | None = None, depth: int = SEARCH_DEPTH) -> 
     return worst
 
 
+MAX_CHILDREN = 500  # a folder of the home with more folders in it: only these are offered one by one
+
+
+def _children(folder: Path) -> list[Path]:
+    """The folders in a folder of the home, each offered on its own (``~/scratch/<ticket>``): such a folder
+    often holds the work of several agents and projects."""
+    try:
+        found = sorted(p for p in folder.iterdir() if p.is_dir() and not p.is_symlink() and not p.name.startswith("."))
+    except OSError:
+        return []
+    return found[:MAX_CHILDREN]
+
+
+def _home_agents(home: Path, proc: Path = Path("/proc")) -> list[tuple[str, int]]:
+    """(working directory, agent id) of the processes working in the home that carry an agent's mark (PLAINBOARD_AGENT)."""
+    found = []
+    try:
+        entries = [e for e in proc.iterdir() if e.name.isdigit()]
+    except OSError:
+        return found
+    for entry in entries:
+        try:
+            cwd = os.readlink(entry / "cwd").removesuffix(" (deleted)")
+            if not _within(cwd, str(home)) or cwd == str(home):
+                continue
+            environ = (entry / "environ").read_bytes()
+        except OSError:
+            continue
+        for item in environ.split(b"\0"):
+            if item.startswith(b"PLAINBOARD_AGENT=") and item[17:].isdigit():
+                found.append((cwd, int(item[17:])))
+    return found
+
+
+def _home_state(path: Path, home: Path, cwds: set[str]) -> tuple[str, str]:
+    if _on_path(path, home):
+        return "keep", "holds tools on PATH"
+    if any(_within(c, str(path)) for c in cwds):
+        return "busy", "a process works in it"
+    return assess(path)
+
+
 def _remotes(folder: Path) -> list[str]:
     found = []
     for repo in repos(folder):
@@ -655,6 +722,14 @@ def candidates(spec: CandidatesSpec, only: set[str] | None = None, sizes: bool =
 
     home = Path.home()
     tools = {str(home / rel): tool for rel, (tool, _) in TOOL_CACHES.items()}
+    def exact(path: Path) -> bool:
+        return only is None or any(_within(str(path), p) for p in only)
+
+    marks = _home_agents(home) if spec.home else []
+
+    def agents_in(path: Path) -> list[int]:
+        return sorted({a for cwd, a in marks if _within(cwd, str(path))})
+
     for path, what in home_folders(home) if spec.home else []:
         if not wanted(path):
             continue
@@ -662,13 +737,23 @@ def candidates(spec: CandidatesSpec, only: set[str] | None = None, sizes: bool =
             why = NEEDED_CACHES.get(path.name, "")
             found.append(CleanupCandidate(path=str(path), what="cache", safety="unsure" if why else "safe", why=why, tool=tools.get(str(path), "")))
             continue
-        if _on_path(path, home):
-            safety, why = "keep", "holds tools on PATH"
-        elif any(_within(c, str(path)) for c in cwds):
-            safety, why = "busy", "a process works in it"
-        else:
-            safety, why = assess(path)
-        found.append(CleanupCandidate(path=str(path), what="home", safety=safety, why=why, remotes=_remotes(path)))  # type: ignore[arg-type]
+        if exact(path):
+            safety, why = _home_state(path, home, cwds)
+            found.append(CleanupCandidate(path=str(path), what="home", safety=safety, why=why, remotes=_remotes(path), agents=agents_in(path)))  # type: ignore[arg-type]
+        if _on_path(path, home) or _tagged(path):
+            continue
+        # Its parts on their own: the folders in it (whose each may be), and what in them is built again when needed.
+        units = [path] if _is_repo(path) else [c for c in _children(path) if wanted(c)]
+        for unit in units:
+            if unit != path and exact(unit):
+                safety, why = _home_state(unit, home, cwds)
+                found.append(CleanupCandidate(path=str(unit), what="home", safety=safety, why=why, remotes=_remotes(unit), parent=str(path), agents=agents_in(unit)))  # type: ignore[arg-type]
+            if unit != path and _tagged(unit):
+                continue  # the unit itself is the build output
+            busy = any(_within(c, str(unit)) for c in cwds)
+            for out in build_outputs(unit, "hard"):
+                if exact(out):
+                    found.append(CleanupCandidate(path=str(out), what="build", safety="busy" if busy else "safe", why="a process works in it" if busy else "", parent=str(path)))
 
     if sizes:
         measured = _measure([Path(c.path) for c in found])

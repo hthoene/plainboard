@@ -15,7 +15,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket
 from fastapi.responses import Response, StreamingResponse
-from plainboard_protocol import ACCOUNT_KEY_PATTERN, DEFAULT_ACCOUNT, BranchRef, CandidatesSpec, CheckResult, CleanupCandidate, CleanupResult, CleanupSpec, CommitRef, CompletionResult, CompletionSpec, Credentials, DeleteSpec, ErrorEvent, GitLogResult, GitLogSpec, GitPresentResult, GitPresentSpec, PromotePlan, PromotePushSpec, PromoteResult, PromoteSpec, JobPort, JobTiming, JobSpec, JobState, LeftoverResult, LeftoverSpec, LimitsEvent, MachineUsage, ProjectFiles, ProviderAccount, ProviderInfo, SignInAck, SignInFiles, SignInRefresh, files_digest, PullRequestCheck, PullRequestRef, PullRequestState, RepoSpec, RerunRef, RunSpec, SkillFetch, TidyResult, TidySpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, TrimSpec, UnpushedSpec, UnpushedWork, UpstreamRef, UpstreamState
+from plainboard_protocol import ACCOUNT_KEY_PATTERN, DEFAULT_ACCOUNT, BranchRef, CandidatesSpec, CheckResult, CleanupCandidate, CleanupResult, CleanupSpec, CommitRef, CompletionResult, CompletionSpec, Credentials, DeleteSpec, ErrorEvent, GitLogResult, GitLogSpec, GitPresentResult, GitPresentSpec, GitTagsResult, GitTagsSpec, PromotePlan, PromotePushSpec, PromoteResult, PromoteSpec, JobPort, JobTiming, JobSpec, JobState, LeftoverResult, LeftoverSpec, LimitsEvent, MachineUsage, ProjectFiles, ProviderAccount, ProviderInfo, SignInAck, SignInFiles, SignInRefresh, files_digest, PullRequestCheck, PullRequestRef, PullRequestState, RepoSpec, RerunRef, RunSpec, SkillFetch, TidyResult, TidySpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, TrimSpec, UnpushedSpec, UnpushedWork, UpstreamRef, UpstreamState
 from pydantic import BaseModel, Field
 
 from . import cleanup
@@ -700,6 +700,15 @@ async def git_log(spec: GitLogSpec) -> GitLogResult:
     """The newest commits of a repository's base branch, for the project's searchable history."""
     try:
         return await trains.commit_log(spec)
+    except (WorkspaceError, ValueError, OSError) as exc:
+        raise HTTPException(502, str(exc)[:600]) from exc
+
+
+@app.post("/git/tags", response_model=GitTagsResult)
+async def git_tags(spec: GitTagsSpec) -> GitTagsResult:
+    """A repository's tags (releases), and what changed since the tag before each new one (the docs watcher)."""
+    try:
+        return await trains.tags(spec)
     except (WorkspaceError, ValueError, OSError) as exc:
         raise HTTPException(502, str(exc)[:600]) from exc
 

@@ -1099,3 +1099,193 @@ def test_a_page_written_by_people_only_is_read_but_never_changed_or_handed_to_th
     wait_for(lambda: idle(client, pid))
     stale = [t for t in db(client, orders) if t.startswith("Pages of your doc site that are probably stale")]
     assert len(stale) == 1 and f'doc page {other["id"]} "Orders"' in stale[0] and "Payments" not in stale[0]
+
+
+def _orders(client, agent_id: int) -> list[str]:
+    from plainboard.models import Assignment
+    from sqlalchemy import select
+
+    async def run(s):
+        return [a.instructions for a in await s.scalars(select(Assignment).where(Assignment.agent_id == agent_id).order_by(Assignment.id))]
+
+    return db(client, run)
+
+
+def _land(client, pid: int, repo_id: int, at, branch: str = "be/change") -> None:
+    from plainboard.models import Landing, LandingStatus
+
+    async def run(s):
+        s.add(Landing(project_id=pid, repository_id=repo_id, branch=branch, title="A change", status=LandingStatus.MERGED, merged_at=at))
+        await s.commit()
+
+    db(client, run)
+
+
+def test_old_values_of_a_change_and_of_a_new_release_are_found_on_every_page_with_their_lines(client, project):
+    from plainboard.models import utcnow
+    from plainboard_protocol import GitTag
+
+    pid = project["id"]
+    client.patch(f"/api/projects/{pid}", json={"auto_wake_manager": False})
+    repo = client.post(f"/api/projects/{pid}/repositories", json={"name": "api", "url": "https://github.com/acme/api.git"}).json()
+    s = site(client, pid)
+    writer = s["agent"]["id"]
+    install = page(client, pid, s["id"], title="Install", body="# Install\n\n## Download\n\nGet Vanillite 0.1.0-beta.2 from the releases.\n\nBeta 2 needs Java 21.")
+    config = page(client, pid, s["id"], title="Config", body="## Limits\n\nThe `timeout_seconds` default is 300.\n")
+    page(client, pid, s["id"], title="Changelog", body="Upgrade from beta 2 to beta 3: nothing to do.")  # names the new value too: right already
+    fake = runner(client)
+    fake.commits = [GitCommit(sha="a" * 40, message="Start", files=["README.md"])]
+    now = utcnow()
+    fake.tags = [GitTag(name="v0.1.0-beta.2+mc26.3", sha="a" * 40, date=(now - timedelta(days=9)).isoformat(), subject="Beta 2")]
+    watcher = client.app_ref.state.docs_watcher
+    client.portal.call(watcher.tick, now)  # where history and releases stand: nothing to tell
+    assert fake.tag_specs[-1].known == [] and not _orders(client, writer)
+
+    # A landing changes a default: the page that still names the old value is named with its line and section (no code paths needed).
+    _land(client, pid, repo["id"], now + timedelta(minutes=1))
+    diff = "diff --git a/app/config.py b/app/config.py\n--- a/app/config.py\n+++ b/app/config.py\n@@ -3 +3 @@\n-TIMEOUT = 300  # timeout_seconds\n+TIMEOUT = 600  # timeout_seconds\n"
+    fake.commits = [GitCommit(sha="c" * 40, message="Longer timeout", files=["app/config.py"], diff=diff), *fake.commits]
+    client.portal.call(watcher.tick, now + timedelta(minutes=20))
+    wait_for(lambda: idle(client, pid))
+    texts = _orders(client, writer)
+    assert len(texts) == 1 and fake.git_log_specs[-1].diffs == 50
+    assert f'doc page {config["id"]} "Config" (/config): mentions "300", now "600" (cccccccccc "Longer timeout" in api)' in texts[0]
+    assert '\n  - line 3 in "Limits": The `timeout_seconds` default is 300.' in texts[0] and "Install" not in texts[0] and "doc_grep" in texts[0]
+
+    # A new release: the previous tag -> the new one, also as docs write it ("0.1.0-beta.2", "Beta 2").
+    fake.tags = [GitTag(name="v0.1.0-beta.3+mc26.3", sha="d" * 40, date=(now + timedelta(hours=3)).isoformat(), subject="Beta 3", previous="v0.1.0-beta.2+mc26.3", subjects=["Fix the crash"]), *fake.tags]
+    client.portal.call(watcher.tick, now + timedelta(hours=4))
+    wait_for(lambda: idle(client, pid))
+    texts = _orders(client, writer)
+    assert len(texts) == 2 and fake.tag_specs[-1].known == ["v0.1.0-beta.2+mc26.3"]
+    assert "api: new tag v0.1.0-beta.3+mc26.3" in texts[1] and "- release v0.1.0-beta.3+mc26.3 of api (after v0.1.0-beta.2+mc26.3): Fix the crash" in texts[1]
+    assert f'doc page {install["id"]} "Install" (/install): mentions "0.1.0-beta.2", now "0.1.0-beta.3" (release v0.1.0-beta.3+mc26.3 of api)' in texts[1]
+    assert '\n  - line 5 in "Install › Download": Get Vanillite 0.1.0-beta.2 from the releases.\n  - line 7 in "Install › Download": Beta 2 needs Java 21.' in texts[1]
+    assert "Changelog" not in texts[1] and "Config" not in texts[1]
+    assert client.get(f"/api/projects/{pid}/docs/pages/{install['id']}").json()["flagged_at"]
+
+    # The doc agent's own tools.
+    for line in (
+        "TOOL doc_grep " + json.dumps({"pattern": "beta[ .]2", "regex": True}),
+        "TOOL releases {}",
+        "TOOL changes_since " + json.dumps({"page": install["id"], "since": f"{now:%Y-%m-%d}"}),
+    ):
+        chat(client, writer, line)
+        wait_for(lambda: idle(client, pid))
+    grep, tags, since = tool_results(client, writer)[-3:]
+    assert grep.startswith("3 line(s) in handbook:") and f'- {install["id"]} /install "Install" line 7 in "Install › Download": Beta 2 needs Java 21.' in grep, grep
+    assert tags.splitlines()[0] == "- api v0.1.0-beta.3+mc26.3 (" + f"{now + timedelta(hours=3):%Y-%m-%d}" + ", dddddddddd): Beta 3" and len(tags.splitlines()) == 2
+    assert "Releases (tags) since" in since and "v0.1.0-beta.3+mc26.3" in since, since
+    assert ("Commits since" in since) if POSTGRES else ("be/change" in since), since  # by path from the search index, else the landings
+
+
+def test_a_hunk_close_in_meaning_to_a_section_names_that_section(client, project, monkeypatch):
+    from types import SimpleNamespace
+
+    from plainboard.models import utcnow
+    from plainboard.services import search as search_service
+    from plainboard.services.search import store
+
+    pid = project["id"]
+    client.patch(f"/api/projects/{pid}", json={"auto_wake_manager": False})
+    repo = client.post(f"/api/projects/{pid}/repositories", json={"name": "api", "url": "https://github.com/acme/api.git"}).json()
+    s = site(client, pid)
+    writer = s["agent"]["id"]
+    hooks = page(client, pid, s["id"], title="Webhooks", body="## Retries\n\nStripe retries webhooks three times.")
+    queries: list[str] = []
+
+    class Model:
+        state, name, card = "ready", "fake", SimpleNamespace(hint_similarity=0.5)
+
+        async def query(self, text):
+            queries.append(text)
+            return [0.0]
+
+    async def enabled(session, project):
+        return True
+
+    async def embedder(session):
+        return Model()
+
+    async def nearest_chunks(session, project_id, vector, model, kind, limit):
+        hit = "webhooks.py" in queries[-1] or "webhooks" in queries[-1].lower()
+        return [store.Section(str(hooks["id"]), 0, "Retries\nStripe retries webhooks three times.", 0.9 if hit else 0.1)]
+
+    monkeypatch.setattr(search_service, "enabled", enabled)
+    monkeypatch.setattr(search_service, "embedder", embedder)
+    monkeypatch.setattr(store, "nearest_chunks", nearest_chunks)
+    fake = runner(client)
+    fake.commits = [GitCommit(sha="a" * 40, message="Start", files=["README.md"])]
+    watcher = client.app_ref.state.docs_watcher
+    now = utcnow()
+    client.portal.call(watcher.tick, now)
+    _land(client, pid, repo["id"], now + timedelta(minutes=1))
+    diff = "diff --git a/app/pay/webhooks.py b/app/pay/webhooks.py\n--- a/app/pay/webhooks.py\n+++ b/app/pay/webhooks.py\n@@ -1 +1 @@\n-RETRIES = 3\n+RETRIES = 5\n"
+    fake.commits = [GitCommit(sha="c" * 40, message="More retries", files=["app/pay/webhooks.py"], diff=diff), *fake.commits]
+    client.portal.call(watcher.tick, now + timedelta(minutes=20))
+    wait_for(lambda: idle(client, pid))
+    texts = _orders(client, writer)
+    assert len(texts) == 1
+    assert '\n  - section "Retries Stripe retries webhooks three times." is close in meaning to the change of app/pay/webhooks.py in cccccccccc "More retries" in api' in texts[0], texts[0]
+    assert any(q.startswith("app/pay/webhooks.py\n- RETRIES = 3\n+ RETRIES = 5") for q in queries)
+
+    chat(client, writer, "TOOL doc_search " + json.dumps({"query": "how often are webhooks retried"}))
+    wait_for(lambda: idle(client, pid))
+    assert tool_results(client, writer)[-1] == f'- {hooks["id"]} /webhooks "Webhooks" (0.90): Retries Stripe retries webhooks three times.'
+
+
+def test_each_day_the_riskiest_pages_within_the_sites_budget_go_to_the_doc_agent(client, project):
+    from plainboard.models import DocPage, utcnow
+
+    pid = project["id"]
+    client.patch(f"/api/projects/{pid}", json={"auto_wake_manager": False})
+    s = site(client, pid)
+    assert s["check_budget"] == 4000
+    writer = s["agent"]["id"]
+    churned = page(client, pid, s["id"], title="Churned", body="x" * 400)
+    old = page(client, pid, s["id"], title="Old", body="y" * 400)
+    huge = page(client, pid, s["id"], title="Huge", body="z" * 40000)  # older still, but beyond the budget
+    page(client, pid, s["id"], title="Fresh", body="checked lately")
+    now = utcnow()
+
+    async def age(s):
+        for pid_, days, drift in ((churned["id"], 30, 3), (old["id"], 60, 0), (huge["id"], 90, 0)):
+            row = await s.get(DocPage, pid_)
+            row.edited_at, row.drift = now - timedelta(days=days), drift
+        await s.commit()
+
+    db(client, age)
+    runner(client)
+    watcher = client.app_ref.state.docs_watcher
+    client.portal.call(watcher.tick, now)
+    wait_for(lambda: idle(client, pid))
+    texts = [t for t in _orders(client, writer) if t.startswith("Today's check of your doc site")]
+    assert len(texts) == 1, _orders(client, writer)
+    lines = [line for line in texts[0].splitlines() if line.startswith("- doc page")]
+    assert lines[0].startswith(f'- doc page {churned["id"]} "Churned"') and "3 commits changed its code since" in lines[0]
+    assert lines[1].startswith(f'- doc page {old["id"]} "Old"') and len(lines) == 2 and "changes_since" in texts[0]
+
+    assert client.patch(f"/api/projects/{pid}/docs/sites/{s['id']}", json={"check_budget": 0}).json()["check_budget"] == 0
+    client.portal.call(watcher.tick, now + timedelta(days=9))  # the pages are due again, but the site checks none
+    assert len([t for t in _orders(client, writer) if t.startswith("Today's check")]) == 1
+
+
+def test_changed_literals_are_paired_old_to_new_and_versions_searched_as_docs_write_them():
+    from plainboard.services import docs_changes as d
+
+    diff = (
+        "diff --git a/gradle.properties b/gradle.properties\n--- a/gradle.properties\n+++ b/gradle.properties\n@@ -3 +3 @@\n"
+        "-mod_version=0.1.0-beta.2+mc26.3\n+mod_version=0.1.0-beta.3+mc26.3\n@@ -10,2 +10,2 @@\n"
+        '-    parser.add_argument("--old-flag", default=self.max_items)\n+    parser.add_argument("--new-flag", default=self.max_items)\n'
+        "diff --git a/old.py b/old.py\ndeleted file mode 100644\n--- a/old.py\n+++ /dev/null\n@@ -1 +0,0 @@\n-REMOVED_SETTING = 1\n"
+    )
+    pairs = d.changed_tokens(d.hunks(diff))
+    assert pairs == [("0.1.0-beta.2+mc26.3", "0.1.0-beta.3+mc26.3"), ("--old-flag", "--new-flag")]
+    found = d.probes(pairs, "x")
+    hits = {line: [p.old for p in found if p.pattern.search(line) and not (p.new_pattern and p.new_pattern.search(line))][:1] for line in (
+        "Download v0.1.0-beta.2+mc26.3", "Beta 2 is out", "from beta 2 to beta 3", "see 0.1.0-beta.20", "run with --old-flag", "max_items",
+    )}  # fmt: skip
+    assert hits == {
+        "Download v0.1.0-beta.2+mc26.3": ["0.1.0-beta.2+mc26.3"], "Beta 2 is out": ["beta 2"], "from beta 2 to beta 3": [], "see 0.1.0-beta.20": [],
+        "run with --old-flag": ["--old-flag"], "max_items": [],
+    }  # fmt: skip

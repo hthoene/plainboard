@@ -8,6 +8,7 @@ so new providers or services can reuse it.
 from .models import (
     ACCOUNT_KEY_PATTERN,
     DEFAULT_ACCOUNT,
+    SCRATCH,
     AssistantTextEvent,
     BranchRef,
     CheckResult,
@@ -117,6 +118,7 @@ __all__ = [
     "PromoteSpec",
     "ACCOUNT_KEY_PATTERN",
     "DEFAULT_ACCOUNT",
+    "SCRATCH",
     "AssistantTextEvent",
     "BranchRef",
     "UpstreamRef",

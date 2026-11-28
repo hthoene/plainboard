@@ -124,7 +124,7 @@ def test_at_the_target_without_a_usable_cleanup_run_the_manager_is_told_once_wit
     assert f"- 30.0 GB /workspaces/{slug}/manager/repo/target: build output of Manager; busy\n" in prompt
     assert "Shared, not yours (47.0 GB; PlainBoard trims the shared tool caches itself" in prompt and "admin" not in prompt
     assert "- 21.0 GB /home/agent/.cache/sccache: cache, shared: sccache's shared cache, PlainBoard trims it itself; safe" in prompt
-    assert "26.0 GB /home/agent/fw-jobs: home folder, shared; unsure: fw-jobs/run.log is not in a clone" in prompt
+    assert "26.0 GB /home/agent/fw-jobs: home folder, shared: whose is unknown (no name, script, file, job or command of a project names it); unsure: fw-jobs/run.log is not in a clone" in prompt
     view = client.get("/api/usage").json()["storage"]
     assert view["notify_percent"] == 80 and view["emergency_percent"] == 97 and round(view["percent"]) == 85
     assert [n["reason"] for n in view["notices"]] == ["over"]
@@ -267,7 +267,7 @@ def test_the_manager_lists_and_deletes_only_his_projects_data_by_the_safety_rule
     assert "Safe (made again when needed):\n- 5.0 GB " + safe in listed and "Kept (work that is nowhere else, or tools; delete_cleanup won't" in listed
     assert f"- 6.0 GB {workdir}: extra work folder of Manager; busy: Manager works now" in listed
     assert theirs not in listed  # another project's data is not even shown
-    assert "Shared, not yours (4.0 GB;" in listed and "- 4.0 GB /home/agent/scratch: home folder, shared; safe" in listed
+    assert "Shared, not yours (4.0 GB;" in listed and "- 4.0 GB /home/agent/scratch: home folder, shared: whose is unknown (no name, script, file, job or command of a project names it); safe" in listed
     assert first.startswith("Deleted 5.0 GB: " + safe) and f"{busy}: busy" in first and f"{kept}: keep" in first
     refused = f"Refused, not in your project's folders (only its own data can be deleted; give the paths as list_cleanup shows them): {theirs}, {shared}, /etc."
     assert refused in first and f"{gone}: gone already" in first  # in its own folders, but no candidate (any more): the runner says why
@@ -446,3 +446,39 @@ def test_the_regular_cleanup_after_an_assignment_deletes_only_that_agents_extra_
     _tick(client, utcnow() + timedelta(minutes=10))
     client.portal.call(watcher.wait_regular)
     assert len(fake.deletes) == deletes + 1  # each ended assignment once
+
+
+def test_folders_of_the_home_go_to_the_project_whose_members_name_them_and_a_mixed_one_is_split():
+    from plainboard.services import home_refs
+
+    assert home_refs.named('{"command": "cd ~/scratch/k483 && cargo build --target-dir $HOME/work/a88-fp-target"}') == {"scratch", "scratch/k483", "work", "work/a88-fp-target"}
+    assert home_refs.named("ls /home/agent/dt-jobs/b434/x ~/.cache/pp ~/.ssh/id /workspaces/p/home/x/y") == {"dt-jobs", "dt-jobs/b434", ".cache/pp"}
+    mine, paw = Project(id=1, name="Mine", slug="mine"), Project(id=2, name="PaperPaw", slug="paperpaw")
+    dev, fw = Agent(id=11, project_id=1, name="Dev"), Agent(id=21, project_id=2, name="Firmware")
+    refs = home_refs.Refs()
+    refs.add({"scratch", "scratch/k1", "dt-jobs/b1", "dt-jobs/b2"}, fw.id, utcnow())
+    refs.add({"scratch"}, dev.id, utcnow())
+    refs.add({"scratch/old"}, dev.id, utcnow() - timedelta(days=home_refs.DAYS + 1))  # too long ago
+    o = storage.Owners([mine, paw], [], {}, "/workspaces", [dev, fw], refs)
+
+    def home(path, parent="", **kw):
+        return CleanupCandidate(path=f"/home/agent/{path}", what="home", safety="unsure", parent=f"/home/agent/{parent}" if parent else "", **kw)
+
+    found = [
+        home("scratch"),
+        home("scratch/k1", "scratch"),
+        home("scratch/k2", "scratch", agents=[dev.id]),  # a process of Dev works in it
+        home("scratch/old", "scratch"),
+        home("paperpaw-jobs"),
+        home("paperpaw-jobs/x", "paperpaw-jobs"),
+        home("dt-jobs"),
+        home("dt-jobs/b1", "dt-jobs"),
+        home("dt-jobs/b2", "dt-jobs"),
+    ]
+    homes = {p.removeprefix("/home/agent/"): (pid, why, used) for p, (pid, why, used) in storage.home_owners(found, o).items()}
+    assert "scratch" not in homes  # of several projects: offered folder by folder
+    assert homes["scratch/k1"] == (2, "used by Firmware", {fw.id})
+    assert homes["scratch/k2"] == (1, "used by Dev", {dev.id})
+    assert homes["scratch/old"] == (None, storage.UNKNOWN, set())
+    assert homes["paperpaw-jobs"][0] == 2 and "paperpaw-jobs/x" not in homes  # all of it one project's: as a whole
+    assert homes["dt-jobs"] == (2, "all folders in it are yours", {fw.id}) and "dt-jobs/b1" not in homes  # nothing else names it

@@ -11,7 +11,7 @@ import shutil
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from plainboard_protocol import Credentials, RepoSpec, WorkspaceSpec
+from plainboard_protocol import SCRATCH, Credentials, RepoSpec, WorkspaceSpec
 
 from .config import WORKSPACES_ROOT
 
@@ -214,6 +214,8 @@ async def prepare_workspace(spec: WorkspaceSpec, creds: Credentials) -> tuple[Pa
     """
     path = resolve_workspace(spec)
     path.mkdir(parents=True, exist_ok=True)
+    if not spec.shared:
+        (path / SCRATCH).mkdir(exist_ok=True)  # its work data, instead of the shared home (counted to its project)
     problems: list[str] = []
     for repo in spec.repos:
         target = (path / repo.name).resolve()

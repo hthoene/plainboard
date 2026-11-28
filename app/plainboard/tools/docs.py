@@ -17,9 +17,9 @@ from sqlalchemy import func, select
 from ..models import Assignment, DocPage, DocSite, utcnow
 from ..services import board as board_service
 from ..services import docs as docs_service
-from ..services import docs_api, docs_areas, docs_proposals, docs_public, docs_releases
+from ..services import docs_api, docs_areas, docs_changes, docs_proposals, docs_public, docs_releases
 from ..services.util import truncate
-from .registry import ALL, DOC_AGENT, DOCS, MANAGER, ToolContext, ToolError, local_tool, tool
+from .registry import ALL, DOC_AGENT, DOCS, MANAGER, SEARCH, ToolContext, ToolError, local_tool, tool
 
 _spec_seen: OrderedDict[tuple[int, int], None] = OrderedDict()  # (run, site): the spec was in a result of this turn
 
@@ -515,3 +515,82 @@ class AttachDocFileArgs(BaseModel):
 
 
 local_tool("attach_doc_file", "Add a file or image from your workspace to your doc site; kept for good. Returns how to use it in a page.", AttachDocFileArgs, roles=(DOC_AGENT,))
+
+
+# --- finding what a change made wrong (#190) ----------------------------------------------------------------------
+
+
+async def _my_site(ctx: ToolContext) -> DocSite:
+    site = await ctx.session.get(DocSite, ctx.agent.doc_site_id) if ctx.agent.doc_site_id else None
+    if site is None:
+        raise ToolError("Only a doc agent searches its site this way.")
+    return site
+
+
+def _place(m: docs_changes.Mention) -> str:
+    return f'- {m.page.page_key} /{m.page.path} "{truncate(m.page.title, 60)}" {m.place()}'
+
+
+class DocGrepArgs(BaseModel):
+    pattern: str = Field(min_length=1, max_length=200, description="Exact text (e.g. an old version, setting or flag), or a regex")
+    regex: bool = False
+    case: bool = Field(default=False, description="Case-sensitive")
+    limit: int = Field(default=30, ge=1, le=100)
+
+
+@tool("doc_grep", "Every line of your site's pages (working version) with this text or regex: page, section, line.", DocGrepArgs, roles=(DOC_AGENT,))
+async def doc_grep(ctx: ToolContext, args: DocGrepArgs) -> str:
+    site = await _my_site(ctx)
+    found, total = await docs_changes.grep(ctx.session, ctx.project.id, site.id, args.pattern, args.regex, args.case, args.limit)
+    if not found:
+        return f"No page of {site.slug} has {args.pattern!r}."
+    more = f"\n(and {total - len(found)} more lines: a narrower pattern)" if total > len(found) else ""
+    return f"{total} line(s) in {site.slug}:\n" + "\n".join(_place(m) for m in found) + more
+
+
+class DocSearchArgs(BaseModel):
+    query: str = Field(min_length=2, max_length=500, description="What it is about, in any language")
+    limit: int = Field(default=8, ge=1, le=20)
+
+
+@tool("doc_search", "The sections of your site's pages closest in meaning to a text (e.g. a change), best first.", DocSearchArgs, roles=(DOC_AGENT,), feature=SEARCH)
+async def doc_search(ctx: ToolContext, args: DocSearchArgs) -> str:
+    site = await _my_site(ctx)
+    hits = await docs_changes.near(ctx.session, ctx.project.id, args.query, args.limit, site_id=site.id)
+    if not hits:
+        return "Nothing found by meaning (the index may still be building): try doc_grep or list_docs query."
+    return "\n".join(f'- {h.page.page_key} /{h.page.path} "{truncate(h.page.title, 60)}" ({h.similarity:.2f}): {h.section}' for h in hits)
+
+
+class ChangesSinceArgs(BaseModel):
+    page: int | None = Field(default=None, description="Page id: its code paths, since it was last confirmed or edited")
+    path: str | None = Field(default=None, max_length=500, description="Or a code path (prefix or glob)")
+    since: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$", description="YYYY-MM-DD; default: the page's last check, else 30 days")
+
+
+@tool("changes_since", "What changed since a page was last checked: commits on its code paths, releases (tags), decisions on their tickets.", ChangesSinceArgs, roles=(DOC_AGENT,))
+async def changes_since(ctx: ToolContext, args: ChangesSinceArgs) -> str:
+    from datetime import datetime
+
+    paths: list[str] = [args.path] if args.path else []
+    since = datetime.strptime(args.since, "%Y-%m-%d") if args.since else utcnow() - timedelta(days=30)
+    head = f"Since {since:%Y-%m-%d}"
+    if args.page is not None:
+        page = await docs_service.get_page(ctx.session, ctx.project.id, args.page, None)
+        paths = paths or list(page.paths or [])
+        since = since if args.since else page.edited_at
+        head = f"Doc page {page.page_key} (last confirmed or edited {page.edited_at:%Y-%m-%d}" + (f", paths {', '.join(paths[:6])}" if paths else ", no code paths: all commits") + ")"
+    return head + "\n" + await docs_changes.changes_since(ctx.session, ctx.project, paths, since)
+
+
+class ReleasesArgs(BaseModel):
+    repo: str | None = Field(default=None, max_length=100, description="Repository name; empty = all")
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+@tool("releases", "The tags (releases) of the project's repositories with their dates, newest first.", ReleasesArgs, roles=(DOC_AGENT,))
+async def releases(ctx: ToolContext, args: ReleasesArgs) -> str:
+    tags = await docs_changes.releases(ctx.session, ctx.project.id, args.repo, limit=args.limit)
+    if not tags:
+        return "No tags read yet (PlainBoard reads them every few hours)."
+    return "\n".join(docs_changes.release_line(repo, tag) for repo, tag in tags)

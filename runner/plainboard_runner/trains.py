@@ -10,7 +10,7 @@ import fnmatch
 import time
 from pathlib import Path
 
-from plainboard_protocol import CheckResult, Credentials, GitCommit, GitLogResult, GitLogSpec, GitPresentResult, GitPresentSpec, JobSpec, JobState, RepoSpec, TidyBranch, TidyResult, TidySpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec
+from plainboard_protocol import CheckResult, Credentials, GitCommit, GitLogResult, GitLogSpec, GitPresentResult, GitPresentSpec, GitTag, GitTagsResult, GitTagsSpec, JobSpec, JobState, RepoSpec, TidyBranch, TidyResult, TidySpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec
 
 from . import jobs
 from .workspace import WorkspaceError, config_args, git_env, run_cmd
@@ -297,6 +297,47 @@ async def commit_log(spec: GitLogSpec) -> GitLogResult:
                     if len(commit.files) < LOG_FILES:
                         commit.files.append(name)
             result.commits.append(commit)
+        for commit in result.commits[: spec.diffs]:
+            commit.diff = await _diff(git, commit.sha, spec.diff_chars) if spec.diff_chars else ""
+        return result
+
+
+# Lock files and the like: version bumps of dependencies, never what docs describe (and the bulk of many diffs).
+DIFF_EXCLUDE = ("*.lock", "*-lock.json", "*-lock.yaml", "*.lock.json", "go.sum", "*.min.js", "*.min.css", "*.svg", "*.snap")
+
+
+async def _diff(git: Git, span: str, chars: int) -> str:
+    """The changed lines of ``span`` (a commit, or "a..b"), without context, cut at ``chars``."""
+    args = ["diff" if ".." in span else "show", "--no-color", "--no-ext-diff", "-U0", "-M", "--diff-filter=ACDMR", *(() if ".." in span else ("--format=",))]
+    try:
+        out = await git(*args, span, "--", ".", *[f":(exclude,glob)**/{p}" for p in DIFF_EXCLUDE], timeout=120)
+    except WorkspaceError:
+        return ""  # a span git can't read: no lines
+    return out[:chars]
+
+
+async def tags(spec: GitTagsSpec) -> GitTagsResult:
+    """The repository's tags, newest first; each new one (not in ``spec.known``, when that is not empty) with the
+    commit subjects and changed lines since the tag before it."""
+    async with _lock(spec.key):
+        git = await _clone(spec.credentials, spec.remote, folder(spec.key))
+        await git("fetch", "-q", "--force", "--prune", "origin", "+refs/tags/*:refs/tags/*", timeout=300)
+        fmt = "%(refname:strip=2)%1f%(*objectname)%1f%(objectname)%1f%(creatordate:iso-strict)%1f%(contents:subject)"
+        out = await git("for-each-ref", "--sort=-v:refname", "--sort=-creatordate", f"--count={spec.limit + 1}", f"--format={fmt}", "refs/tags")
+        result = GitTagsResult()
+        for line in out.splitlines():
+            name, peeled, sha, date, subject = (line.split("\x1f") + [""] * 5)[:5]
+            if name:
+                result.tags.append(GitTag(name=name, sha=peeled or sha, date=date, subject=subject.strip()))
+        known = set(spec.known)
+        new = [i for i, t in enumerate(result.tags) if known and t.name not in known and i + 1 < len(result.tags)]
+        for i in new[: spec.diffs]:
+            tag, before = result.tags[i], result.tags[i + 1]
+            tag.previous = before.name
+            span = f"{before.sha}..{tag.sha}"
+            tag.subjects = [line.strip() for line in (await git("log", "--no-merges", "-n100", "--format=%s", span)).splitlines() if line.strip()]
+            tag.diff = await _diff(git, span, spec.diff_chars) if spec.diff_chars else ""
+        result.tags = result.tags[: spec.limit]
         return result
 
 

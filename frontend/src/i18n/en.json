@@ -2330,6 +2330,8 @@
       "agentPaused": "paused",
       "restructure": "Propose restructurings",
       "restructureHint": "Now and then, as the site grows, the doc agent checks whether a larger restructuring would help (a new outline, merging or splitting pages) and proposes it as a ticket. You decide; it never restructures without your approval.",
+      "checkBudget": "Daily check (tokens)",
+      "checkBudgetHint": "Each day the doc agent re-reads the pages most likely outdated (longest unchecked, with code changes and releases since), up to this much page text. 0: no daily check. Changes and new releases are always followed up.",
       "domain": "Own domain",
       "domainHint": "Serve the site at a domain of its own, e.g. docs.example.com. Nothing else of PlainBoard answers there.",
       "delete": "Delete",

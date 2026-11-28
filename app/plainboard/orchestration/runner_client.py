@@ -8,7 +8,7 @@ import time
 from collections.abc import AsyncIterator
 
 import httpx
-from plainboard_protocol import GitLogResult, GitLogSpec, GitPresentResult, GitPresentSpec, PromotePlan, PromotePushSpec, PromoteResult, PromoteSpec, ProjectFiles, TidyResult, TidySpec, CandidatesSpec, CheckResult, CleanupCandidate, CleanupResult, CleanupSpec, CompletionResult, CompletionSpec, Credentials, DeleteSpec, JobPort, JobSpec, JobState, JobTiming, LimitsEvent, MachineUsage, ProviderAccount, ProviderInfo, SignInAck, SignInFiles, SignInRefresh, PullRequestCheck, PullRequestState, RepoSpec, RunEvent, RunSpec, SkillFetch, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, TrimSpec, UnpushedSpec, UnpushedWork, UpstreamState, parse_event
+from plainboard_protocol import GitLogResult, GitLogSpec, GitPresentResult, GitPresentSpec, PromotePlan, PromotePushSpec, PromoteResult, PromoteSpec, ProjectFiles, TidyResult, TidySpec, CandidatesSpec, CheckResult, CleanupCandidate, CleanupResult, CleanupSpec, CompletionResult, CompletionSpec, Credentials, DeleteSpec, JobPort, JobSpec, JobState, LeftoverResult, LeftoverSpec, JobTiming, LimitsEvent, MachineUsage, ProviderAccount, ProviderInfo, SignInAck, SignInFiles, SignInRefresh, PullRequestCheck, PullRequestState, RepoSpec, RunEvent, RunSpec, SkillFetch, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, TrimSpec, UnpushedSpec, UnpushedWork, UpstreamState, parse_event
 
 from ..services.errors import ServiceError
 
@@ -167,6 +167,15 @@ class RunnerClient:
 
     async def stop_job(self, runner_id: str) -> bool:
         return (await self._post_job(f"/jobs/{runner_id}/stop", {})).json()["stopped"]
+
+    async def leftovers(self, spec: LeftoverSpec) -> LeftoverResult:
+        """What agents left running outside their jobs (processes, containers); stopped with ``spec.stop``."""
+        try:
+            resp = await self._client.post("/leftovers", json=spec.model_dump(mode="json"), timeout=60)
+            resp.raise_for_status()
+            return LeftoverResult.model_validate(resp.json())
+        except (httpx.HTTPError, ValueError) as exc:
+            raise RunnerError(unreachable(exc)) from exc
 
     async def notify_run(self, run_id: int, text: str, urgent: bool = False) -> bool:
         """Give a running turn a message it sees after the agent's current step. If urgent, a long step gets interrupted."""

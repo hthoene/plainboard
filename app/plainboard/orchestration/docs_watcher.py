@@ -179,7 +179,9 @@ class DocsWatcher:
             return
         async with self._sm() as s:
             ids = list(await s.scalars(select(DocSite.project_id).distinct()))
-            for project in list(await s.scalars(select(Project).where(Project.id.in_(ids)).order_by(Project.id))):
+            # A paused project (by a person, or before its limits): no translations on its subscriptions, no git reads.
+            resting = Project.paused_at.is_not(None) | Project.limit_paused_at.is_not(None)
+            for project in list(await s.scalars(select(Project).where(Project.id.in_(ids), ~resting).order_by(Project.id))):
                 try:
                     await self._project(s, project, now)
                 except Exception:

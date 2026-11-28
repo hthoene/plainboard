@@ -82,7 +82,7 @@ async def start(spec: JobSpec, cwd: Path | None = None) -> JobState:
             "-c",
             spec.command,
             cwd=str(cwd),
-            env={**os.environ, **tool_env(spec.credentials)},
+            env={**os.environ, **tool_env(spec.credentials), **spec.env, "PLAINBOARD_JOB": spec.id},  # what it leaves running is found by these (leftovers.py)
             stdin=asyncio.subprocess.DEVNULL,
             stdout=out,
             stderr=asyncio.subprocess.STDOUT,
@@ -116,6 +116,10 @@ def status(ids: list[str]) -> dict[str, JobState]:
 def is_running(job_id: str) -> bool:
     job = _jobs.get(job_id)
     return job is not None and job.finished_at is None
+
+
+def running_ids() -> list[str]:
+    return [job_id for job_id in _jobs if is_running(job_id)]
 
 
 def sessions(ids: list[str]) -> dict[int, str]:

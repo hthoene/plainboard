@@ -15,7 +15,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket
 from fastapi.responses import Response, StreamingResponse
-from plainboard_protocol import ACCOUNT_KEY_PATTERN, DEFAULT_ACCOUNT, BranchRef, CandidatesSpec, CheckResult, CleanupCandidate, CleanupResult, CleanupSpec, CommitRef, CompletionResult, CompletionSpec, Credentials, DeleteSpec, ErrorEvent, GitLogResult, GitLogSpec, GitPresentResult, GitPresentSpec, PromotePlan, PromotePushSpec, PromoteResult, PromoteSpec, JobPort, JobTiming, JobSpec, JobState, LimitsEvent, MachineUsage, ProjectFiles, ProviderAccount, ProviderInfo, SignInAck, SignInFiles, SignInRefresh, files_digest, PullRequestCheck, PullRequestRef, PullRequestState, RepoSpec, RerunRef, RunSpec, SkillFetch, TidyResult, TidySpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, TrimSpec, UnpushedSpec, UnpushedWork, UpstreamRef, UpstreamState
+from plainboard_protocol import ACCOUNT_KEY_PATTERN, DEFAULT_ACCOUNT, BranchRef, CandidatesSpec, CheckResult, CleanupCandidate, CleanupResult, CleanupSpec, CommitRef, CompletionResult, CompletionSpec, Credentials, DeleteSpec, ErrorEvent, GitLogResult, GitLogSpec, GitPresentResult, GitPresentSpec, PromotePlan, PromotePushSpec, PromoteResult, PromoteSpec, JobPort, JobTiming, JobSpec, JobState, LeftoverResult, LeftoverSpec, LimitsEvent, MachineUsage, ProjectFiles, ProviderAccount, ProviderInfo, SignInAck, SignInFiles, SignInRefresh, files_digest, PullRequestCheck, PullRequestRef, PullRequestState, RepoSpec, RerunRef, RunSpec, SkillFetch, TidyResult, TidySpec, TrainCheckSpec, TrainLandSpec, TrainResult, TrainSpec, TrimSpec, UnpushedSpec, UnpushedWork, UpstreamRef, UpstreamState
 from pydantic import BaseModel, Field
 
 from . import cleanup
@@ -26,6 +26,7 @@ from . import errors
 from . import github
 from .browser import browsers
 from . import jobs
+from . import leftovers
 from . import notices
 from . import ports
 from . import promote
@@ -245,6 +246,7 @@ async def sign_ins_ack(body: list[SignInAck]) -> None:
 
 async def _execute(spec: RunSpec, queue: asyncio.Queue[str | None]) -> None:
     bridge: ToolBridge | None = None
+    spec = spec.model_copy(update={"env": {**spec.env, "PLAINBOARD_RUN": spec.run_id}})  # what it leaves running is found by it (leftovers.py)
     try:
         provider = get_provider(spec.provider)
         workspace, problems = await prepare_workspace(spec.workspace, spec.credentials)
@@ -468,6 +470,12 @@ async def job_ports(ids: list[str]) -> dict[str, list[JobPort]]:
 async def job_listening(ids: list[str]) -> dict[str, list[int]]:
     """Every port these jobs listen on, web server or not: the app opens a preview only on one of them."""
     return await ports.listening_of_jobs(ids)
+
+
+@app.post("/leftovers", response_model=LeftoverResult)
+async def find_leftovers(spec: LeftoverSpec) -> LeftoverResult:
+    """What agents left running outside their jobs (processes, containers); stopped with ``stop``."""
+    return await leftovers.leftovers(spec, set(_active))
 
 
 @app.post("/jobs/{job_id}/stop")

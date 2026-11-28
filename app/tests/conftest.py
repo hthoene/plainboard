@@ -114,6 +114,8 @@ class FakeRunner:
         self.active: set[int] = set()  # turns streaming right now
         self.forgotten: set[int] = set()  # turns the runner lost although the app still waits for them
         self.jobs: dict[str, JobState] = {}
+        self.strays: list = []  # Leftover: what agents left running outside their jobs; ``leftovers`` with stop takes them away
+        self.leftover_specs: list = []
         self.job_specs: list[JobSpec] = []
         self.ports: dict[str, list] = {}  # job id -> the web servers it has started (JobPort)
         self.listening: dict[str, list[int]] = {}  # job id -> further ports it listens on (no web server)
@@ -265,6 +267,16 @@ class FakeRunner:
     async def stop_job(self, runner_id: str) -> bool:
         job = self.jobs.get(runner_id)
         return bool(job and job.running)
+
+    async def leftovers(self, spec):
+        from plainboard_protocol import LeftoverResult
+
+        self.leftover_specs.append(spec)
+        owners = {o.agent for o in spec.owners}
+        found = [item for item in self.strays if item.agent in owners]
+        if spec.stop:
+            self.strays = [item for item in self.strays if item not in found]
+        return LeftoverResult(found=found)
 
     async def branch_head(self, credentials, remote, branch: str) -> str | None:
         return self.branches.get(branch)

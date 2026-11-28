@@ -50,7 +50,7 @@ def test_a_project_pauses_before_its_subscriptions_run_out_and_goes_on_when_one_
     assert tick(client) == (0, 0)  # once
     body = client.get(f"/api/projects/{pid}").json()
     assert body["limit_paused_at"] and body["limit_resumes_at"] and body["paused_at"] is None  # not the person's pause
-    wait_for(lambda: any("You are being paused" in text and "nearly used up" in text and "leave your background jobs running" in text for _, text in fake.notices))
+    wait_for(lambda: any("You are being paused" in text and "nearly used up" in text and "PlainBoard stops the ones still running" in text for _, text in fake.notices))
     fake.released = True
     wait_for(lambda: not any(r["status"] == "running" for r in runs_of(client, pid)))
     (assignment,) = client.get(f"/api/projects/{pid}/assignments").json()
@@ -74,6 +74,32 @@ def test_a_project_pauses_before_its_subscriptions_run_out_and_goes_on_when_one_
     assert any("has room again" in s.prompt for s in fake.specs[specs + 1 :])
     kinds = [e["kind"] for e in flow_events(client, pid) if e["kind"].startswith("project.")]
     assert kinds == ["project.limit_paused", "project.limit_resumed"]
+
+
+def test_the_limit_pause_stops_the_background_jobs_on_this_instance_but_not_those_of_a_chat_meanwhile(client, project):
+    """#187: an idle project paused for its limits kept its builds and servers running on this instance."""
+    pid = project["id"]
+    two_subscriptions(client)
+    dev = make_dev(client, pid)
+    manager = agents_by_slug(client, pid)["manager"]
+    fake = runner(client)
+    chat(client, dev["id"], 'TOOL start_job {"command": "npm run dev"}')
+    wait_for(lambda: idle(client, pid) and agents_by_slug(client, pid)["dev"]["running_jobs"] == 1)
+
+    record(client, Claude=0.99, Second=0.96)
+    assert tick(client) == (1, 0)
+    assert agents_by_slug(client, pid)["dev"]["running_jobs"] == 0
+    assert "pause.jobs_stopped" in [e["kind"] for e in flow_events(client, pid)]
+
+    # The member reads it with its next turn; a job a chat starts during the pause is the user's wish and stays.
+    chat(client, dev["id"], 'TOOL start_job {"command": "npm run preview"}')
+    wait_for(lambda: idle(client, pid))
+    assert "nearly used up; PlainBoard stopped what you still had running in the background" in fake.specs[-1].prompt and "npm run dev" in fake.specs[-1].prompt
+    assert agents_by_slug(client, pid)["dev"]["running_jobs"] == 1
+    # The manager's note says which, without a turn of its own.
+    chat(client, manager["id"], "SAY ok")
+    wait_for(lambda: idle(client, pid))
+    assert "It stopped what members still had running in the background: Dev 1." in fake.specs[-1].prompt
 
 
 def test_the_limit_pause_ends_with_the_reset_and_never_holds_with_an_api_key(client, project):

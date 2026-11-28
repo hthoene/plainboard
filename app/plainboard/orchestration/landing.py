@@ -281,7 +281,7 @@ class LandingWatcher:
             if not over:
                 await self._again(s, r, train, now)
                 return
-        if self._runs.paused or project.paused_at is not None:
+        if self._runs.paused or project.paused_at is not None or project.limit_paused_at is not None:
             return  # paused (everything, or this project): the train on its way is watched to its end, no new one leaves
         if not self._runs.runners.accepts(project.id):
             return  # its runner is about to restart for its self-update: a check run started now would be cut
@@ -823,7 +823,7 @@ class LandingWatcher:
             return
         self._looked[repository_id] = now
         r = await self._repo(s, repository_id)
-        if r is None or self._runs.paused or r.project.paused_at is not None:
+        if r is None or self._runs.paused or r.project.paused_at is not None or r.project.limit_paused_at is not None:
             return
         await self._remind(s, r, now)
         if r.slug is None:

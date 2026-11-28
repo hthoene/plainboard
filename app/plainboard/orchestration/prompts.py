@@ -897,12 +897,18 @@ def wind_down_notice(reason: str = "", jobs_end: bool = False, jobs_keep: bool =
 LIMIT_PAUSE_REASON = "every subscription this project may use is nearly used up. Your open work goes on by itself when one has room again."
 
 
-def limit_paused(until: str) -> str:
-    """For the manager: the project paused by itself before its subscriptions ran out."""
+def limit_paused(until: str, jobs: dict[str, int] | None = None) -> str:
+    """For the manager: the project paused by itself before its subscriptions ran out. ``jobs``: on this
+    instance's runner its background jobs were stopped (per member, how many); None: they go on."""
     when = f"around {until} UTC" if until else "as soon as one has room again"
+    if jobs is None:
+        held = ""
+    else:
+        listed = f" It stopped these background jobs: {', '.join(f'{name} {count}' for name, count in jobs.items())}." if jobs else ""
+        held = f"{listed} Jobs of turns still running stop when they end; each member reads which of its jobs stopped and starts again what it needs."
     return (
         "PlainBoard paused this project by itself: every subscription it may use is nearly used up. No new turn starts "
-        f"(a chat with the user still does), running ones wrap up, open assignments stay open. It goes on by itself {when}."
+        f"(a chat with the user still does), running ones wrap up, open assignments stay open.{held} It goes on by itself {when}."
     )
 
 
@@ -914,9 +920,10 @@ LIMIT_PAUSE_OVER = (
 LIMIT_RESUMED = "A subscription of this project has room again: PlainBoard ended its pause, and open assignments go on by themselves."
 
 
-def jobs_stopped_for_pause(jobs: list[str]) -> str:
+def jobs_stopped_for_pause(jobs: list[str], limits: bool = False) -> str:
+    why = "This project was paused because its subscriptions were nearly used up; PlainBoard" if limits else "PlainBoard was paused for maintenance and"
     return (
-        f"PlainBoard was paused for maintenance and stopped these background jobs of yours before they ended: {'; '.join(jobs)}. "
+        f"{why} stopped these background jobs of yours before they ended: {'; '.join(jobs)}. "
         "Start again what you still need: the servers of a preview, a check you waited for."
     )
 

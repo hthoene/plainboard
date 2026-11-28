@@ -259,3 +259,25 @@ async def test_the_commit_log_names_renames_and_present_tells_patterns_that_matc
     there = await trains.present(GitPresentSpec(key="p1-r1", base="main", patterns=["app/pay", "app/payments", "app/payments/hooks.py", "lib/*.py", "app/*/*.py", "a.txt", "app/"]))
     assert there.unmatched == ["app/pay", "lib/*.py", "a.txt"]
     assert trains.renamed("x/{a => b}/c.py") == ("x/a/c.py", "x/b/c.py") and trains.renamed("x/{ => b}/c.py") == ("x/c.py", "x/b/c.py") and trains.renamed("plain.py") is None
+
+
+async def test_tags_come_newest_first_and_a_new_one_with_its_changes_since_the_one_before(remote, tmp_path):
+    from plainboard_protocol import GitLogSpec, GitTagsSpec
+
+    work = tmp_path / "work"
+    commit(work, "VERSION", "0.1.0-beta.2\n", "Beta 2")
+    git(work, "tag", "-a", "v0.1.0-beta.2", "-m", "Beta 2")
+    git(work, "push", "-q", "origin", "main", "--tags")
+    tag_spec = GitTagsSpec(credentials=Credentials(), key="p1-r1", remote=RepoSpec(name="api", url=str(remote)))
+    first = await trains.tags(tag_spec)
+    assert [t.name for t in first.tags] == ["v0.1.0-beta.2"] and first.tags[0].sha == heads(remote)["main"] and not first.tags[0].diff
+    commit(work, "VERSION", "0.1.0-beta.3\n", "Beta 3")
+    commit(work, "yarn.lock", "lots\n", "Lock")
+    git(work, "tag", "v0.1.0-beta.3")
+    git(work, "push", "-q", "origin", "main", "--tags")
+    later = await trains.tags(tag_spec.model_copy(update={"known": ["v0.1.0-beta.2"]}))
+    new = later.tags[0]
+    assert new.name == "v0.1.0-beta.3" and new.previous == "v0.1.0-beta.2" and new.subjects == ["Lock", "Beta 3"]
+    assert "-0.1.0-beta.2" in new.diff and "+0.1.0-beta.3" in new.diff and "yarn.lock" not in new.diff and not later.tags[1].diff
+    log = await trains.commit_log(GitLogSpec(credentials=Credentials(), key="p1-r1", remote=RepoSpec(name="api", url=str(remote)), diffs=2))
+    assert "+0.1.0-beta.3" in log.commits[1].diff and log.commits[0].diff == "" and log.commits[2].diff == ""

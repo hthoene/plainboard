@@ -295,6 +295,8 @@ function DocAgent({ pid, site }: { pid: number; site: DocSite }) {
   const providers = meta.data?.providers ?? [];
   const info = providers.find((p) => p.name === provider);
   const dirty = provider !== (agent?.provider ?? "") || model !== (agent?.model ?? "") || effort !== (agent?.effort ?? "");
+  const [budget, setBudget] = useState(String(site.check_budget));
+  const budgetValue = Math.max(0, Math.round(Number(budget) || 0));
   return (
     <div className="space-y-4">
       {agent && (
@@ -335,6 +337,10 @@ function DocAgent({ pid, site }: { pid: number; site: DocSite }) {
         <Toggle checked={site.restructure_check} onChange={(v) => patch({ restructure_check: v })} label={t("docs.settings.restructure")} />
         <p className="text-fg-3">{t("docs.settings.restructureHint")}</p>
       </div>
+      <Field label={t("docs.settings.checkBudget")} hint={t("docs.settings.checkBudgetHint")}>
+        <Input type="number" inputMode="numeric" min={0} max={200000} step={500} value={budget} onChange={(e) => setBudget(e.target.value)} />
+      </Field>
+      <SaveRow dirty={budget !== "" && budgetValue !== site.check_budget} onSave={() => patch({ check_budget: budgetValue })} />
     </div>
   );
 }

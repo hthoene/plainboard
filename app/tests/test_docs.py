@@ -1175,7 +1175,8 @@ def test_old_values_of_a_change_and_of_a_new_release_are_found_on_every_page_wit
     grep, tags, since = tool_results(client, writer)[-3:]
     assert grep.startswith("3 line(s) in handbook:") and f'- {install["id"]} /install "Install" line 7 in "Install › Download": Beta 2 needs Java 21.' in grep, grep
     assert tags.splitlines()[0] == "- api v0.1.0-beta.3+mc26.3 (" + f"{now + timedelta(hours=3):%Y-%m-%d}" + ", dddddddddd): Beta 3" and len(tags.splitlines()) == 2
-    assert "Releases (tags) since" in since and "v0.1.0-beta.3+mc26.3" in since and "be/change" in since, since
+    assert "Releases (tags) since" in since and "v0.1.0-beta.3+mc26.3" in since, since
+    assert ("Commits since" in since) if POSTGRES else ("be/change" in since), since  # by path from the search index, else the landings
 
 
 def test_a_hunk_close_in_meaning_to_a_section_names_that_section(client, project, monkeypatch):

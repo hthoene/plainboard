@@ -15,6 +15,7 @@ Toolset = Literal["full", "board", "read", "none"]
 # A provider account's key on the runner. The default account keeps the sign-in from before accounts existed.
 DEFAULT_ACCOUNT = "default"
 ACCOUNT_KEY_PATTERN = r"^[A-Za-z0-9_-]{1,40}$"
+SCRATCH = ".scratch"  # an agent's folder for work data, in its workspace (made by the runner, counted to its project)
 
 
 class ModelInfo(BaseModel):
@@ -380,6 +381,8 @@ class CleanupCandidate(BaseModel):
     tool: str = ""  # a shared tool cache (sccache, cargo, npm, pip, ...): nobody's, PlainBoard trims it itself
     modified: float = 0  # unix time of the newest change anywhere in it
     entries: dict[str, int] = Field(default_factory=dict)  # home and cache: its biggest top-level entries, bytes
+    parent: str = ""  # home: the folder at the top of the home it is in (a folder of several agents' work); build: the home folder it is in
+    agents: list[int] = Field(default_factory=list)  # home: the agents (PLAINBOARD_AGENT) whose processes work in it now
 
 
 class CandidatesSpec(BaseModel):

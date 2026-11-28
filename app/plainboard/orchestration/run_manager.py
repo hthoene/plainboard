@@ -248,6 +248,7 @@ class RunManager:
         self._sign_in_tasks: set[asyncio.Task[None]] = set()
         self._state_tasks: dict[int, asyncio.Task[None]] = {}  # tickets whose state is being rewritten
         self._resting: set[asyncio.Task[None]] = set()  # paused projects whose turns and jobs are being stopped
+        self._rest_lock = asyncio.Lock()  # one stop of jobs and leftovers at a time: pauses in quick succession neither stop nor tell twice
         self._run_tasks: set[asyncio.Task[None]] = set()  # every turn's task until it is done
         self._state_tried: dict[int, float] = {}  # closed tickets whose last rewrite was started then (see refresh_closed_tickets)
         self._unread: dict[int, set[int]] = {}  # running turn -> waiting chat messages (runs) it was told about and has not read yet
@@ -1179,7 +1180,24 @@ class RunManager:
         return running
 
     async def resume(self, s: AsyncSession, agent: Agent) -> None:
-        """An agent was enabled again: what it had open when it was paused goes on by itself."""
+        """An agent was enabled again: what it had open when it was paused goes on by itself. Unless its
+        project still rests, the stop its pause asked for is over: a turn told to wrap up may go on (and
+        what it left running is not stopped when it ends), a turn queued only to stop its jobs is dropped."""
+        if not self.paused and not await s.scalar(
+            select(Project.id).where(Project.id == agent.project_id, Project.paused_at.is_not(None) | Project.limit_paused_at.is_not(None))
+        ):
+            told = select(Run).where(Run.agent_id == agent.id, Run.stop_requested_at.is_not(None), Run.status.in_((RunStatus.QUEUED, RunStatus.RUNNING)))
+            for run in list(await s.scalars(told)):
+                if run.status == RunStatus.QUEUED:  # wind_down's turn to stop its jobs
+                    await self.cancel_run(run.id)
+                    continue
+                try:
+                    await self.runners.of(run.project_id).notify_run(run.id, prompts.AGENT_RESUMED)
+                except Exception:
+                    log.exception("Resume: turn %s was not told", run.id)
+                run.stop_requested_at = None
+                await s.commit()
+                bus.publish(run.project_id, "run.upserted", RunOut.model_validate(run))
         held = await self._held_assignment(s, agent.id)
         await flow_log.record(s, agent.project_id, "agent.resumed", agent_id=agent.id, assignment_id=held.id if held else None)
         if held:
@@ -1321,6 +1339,12 @@ class RunManager:
     async def _rest_jobs(
         self, s: AsyncSession, agent_id: int | None = None, project_id: int | None = None, *, limits: bool = False, before: datetime | None = None
     ) -> dict[int, list[str]]:
+        async with self._rest_lock:
+            return await self._rest_jobs_locked(s, agent_id, project_id, limits=limits, before=before)
+
+    async def _rest_jobs_locked(
+        self, s: AsyncSession, agent_id: int | None = None, project_id: int | None = None, *, limits: bool = False, before: datetime | None = None
+    ) -> dict[int, list[str]]:
         """Everything is paused: stop the background jobs of agents that have no turn (of one agent, or
         of all). A restart would end them anyway, and nobody should have to decide it: no turn is spent.
         The agent reads which ones with its next turn and starts again what it still needs.
@@ -1380,14 +1404,22 @@ class RunManager:
 
     async def _stop_leftovers(self, s: AsyncSession, agent_id: int) -> None:
         """An agent was stopped or paused and has no turn: what it left running outside its jobs stops, and it reads which."""
-        if items := (await self.leftovers(s, [agent_id])).get(agent_id):
+        async with self._rest_lock:
+            items = (await self.leftovers(s, [agent_id])).get(agent_id)
+        if items:
             await inbox.push(s, agent_id, prompts.leftovers_stopped(items))
             await flow_log.record(s, (await s.get(Agent, agent_id)).project_id, "agent.leftovers_stopped", agent_id=agent_id, count=len(items))
 
     async def resume_all(self, s: AsyncSession) -> None:
-        """End the pause: the members it switched off work on with what they had open, and what waited starts."""
+        """End the pause: the members it switched off work on with what they had open, and what waited starts.
+        The turns it told to wrap up (the managers') may go on, as after a project's pause (#181)."""
+        since = (await pause_service.state(s) or {}).get("at")
         members = await pause_service.end(s)
         self.paused = False
+        if since:
+            resting = Project.paused_at.is_not(None) | Project.limit_paused_at.is_not(None)
+            for project_id in list(await s.scalars(select(Project.id).where(~resting))):
+                await self._end_stops(s, project_id, datetime.fromisoformat(since), prompts.PAUSE_EVERYTHING_OVER)
         for member in members:
             await self.resume(s, member)
         self._wake.set()

@@ -43,6 +43,10 @@ DOCKER_SECONDS = 20
 MAX_LABEL = 160
 
 _tasks: set[asyncio.Task[None]] = set()
+# What is being stopped right now (pid, start time; container ids): a second pause in quick succession neither
+# finds nor reports it again.
+_stopping: set[tuple[int, int]] = set()
+_stopping_containers: set[str] = set()
 
 
 @dataclass
@@ -172,7 +176,7 @@ def find_processes(owners: list[LeftoverOwner], active_runs: set[str], before: f
     agents = {o.agent for o in owners}
     found = []
     for proc in procs:
-        if proc.pid in spared or proc.session in job_sessions:
+        if proc.pid in spared or proc.session in job_sessions or (proc.pid, int(proc.started)) in _stopping:
             continue
         env = proc.env or {}
         if env.get(RUN) in active_runs or (env.get(JOB) and jobs.is_running(env[JOB])):
@@ -207,10 +211,15 @@ def _same(proc: Proc, boot: float, ticks: int) -> bool:
 
 
 async def _stop(procs: list[Proc]) -> None:
-    _signal(procs, signal.SIGTERM)
-    await asyncio.sleep(STOP_GRACE_SECONDS)
-    boot, ticks = _boot(), os.sysconf("SC_CLK_TCK")
-    _signal([p for p in procs if _same(p, boot, ticks)], signal.SIGKILL)
+    keys = {(p.pid, int(p.started)) for p in procs}
+    _stopping.update(keys)
+    try:
+        _signal(procs, signal.SIGTERM)
+        await asyncio.sleep(STOP_GRACE_SECONDS)
+        boot, ticks = _boot(), os.sysconf("SC_CLK_TCK")
+        _signal([p for p in procs if _same(p, boot, ticks)], signal.SIGKILL)
+    finally:
+        _stopping.difference_update(keys)
 
 
 # --- Docker ------------------------------------------------------------------------------------------
@@ -272,7 +281,7 @@ async def find_containers(owners: list[LeftoverOwner], before: float | None = No
     found = []
     host = socket.gethostname()
     for info in json.loads(out or "[]"):
-        if (agent := container_owner(info, owners, host)) is None:
+        if info.get("Id") in _stopping_containers or (agent := container_owner(info, owners, host)) is None:
             continue
         started = _started((info.get("State") or {}).get("StartedAt", ""))
         if before is not None and started is not None and started >= before:
@@ -283,7 +292,11 @@ async def find_containers(owners: list[LeftoverOwner], before: float | None = No
 
 
 async def _stop_containers(ids: list[str]) -> None:
-    code, out = await _docker("stop", "-t", str(STOP_GRACE_SECONDS), *ids)
+    _stopping_containers.update(ids)
+    try:
+        code, out = await _docker("stop", "-t", str(STOP_GRACE_SECONDS), *ids)
+    finally:
+        _stopping_containers.difference_update(ids)
     if code:
         log.warning("Stopping containers %s failed: %s", ids, out[:300])
 
@@ -303,9 +316,11 @@ async def leftovers(spec: LeftoverSpec, active_runs: set[str]) -> LeftoverResult
     containers, docker = await find_containers(owners, spec.before)
     if spec.stop:
         if processes:
+            _stopping.update((f.proc.pid, int(f.proc.started)) for f in processes if f.proc)
             _spawn(_stop([f.proc for f in processes if f.proc]))
             log.info("Stopping leftover processes %s", [f.proc.pid for f in processes if f.proc])
         if containers:
+            _stopping_containers.update(f.container for f in containers)
             _spawn(_stop_containers([f.container for f in containers]))
             log.info("Stopping leftover containers %s", [f.container[:12] for f in containers])
     found = [Leftover(agent=f.agent, kind="process", id=str(f.proc.pid), label=f.label) for f in processes if f.proc]

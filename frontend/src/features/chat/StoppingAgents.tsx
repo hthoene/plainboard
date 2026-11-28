@@ -11,7 +11,7 @@ type Row = { key: string; agent: Agent | undefined; inTurn: boolean; busy: boole
 
 /** One row per agent: its latest turn that was asked to stop, while that stop still matters. A turn that
  *  started after it means the agent works again. Its background jobs are stopped only while the project
- *  rests (``resting``: a person's pause, "pause everything"); otherwise they go on by design. */
+ *  rests (``resting``: a person's pause, "pause everything", the limit pause on this instance); otherwise they go on by design. */
 function currentStop(runs: Run[], agents: Agent[], now: number, resting: boolean): Row[] {
   const sorted = [...runs].sort((a, b) => a.id - b.id);
   const latestRun = new Map(sorted.map((r) => [r.agent_id, r.id]));
@@ -31,7 +31,8 @@ export function StoppingAgents() {
   const { t } = useTranslation();
   const { project, agents } = useShell();
   const pausedAll = !!usePause().data?.paused;
-  const resting = !!project.paused_at || pausedAll;
+  // Before its limits, the jobs stop too where the project runs on this instance (#187).
+  const resting = !!project.paused_at || pausedAll || (!!project.limit_paused_at && !project.runner_id);
   const stop = currentStop(useRuns(project.id).data ?? [], agents, Date.now(), resting);
   // Paused while idle: no turn was told to stop, but a job can still be running.
   const pausedWithJobs = agents.filter((a) => !a.enabled && a.running_jobs > 0 && !stop.some((r) => r.agent?.id === a.id));

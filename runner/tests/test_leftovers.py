@@ -52,3 +52,29 @@ def test_a_container_is_an_agents_only_if_it_comes_clearly_from_its_workspace():
     assert leftovers.container_owner(container(f"{DEV}/a", f"{OPS}/b"), owners, "host") is None  # two agents'
     assert leftovers.container_owner(container("/srv/data"), owners, "host") is None  # nothing of a workspace
     assert leftovers.container_owner(container(f"{DEV}/app", cid="host123"), owners, "host") is None  # the runner's own
+
+
+def test_what_is_being_stopped_is_not_found_twice(monkeypatch):
+    import asyncio
+
+    procs = [proc(10, {"PLAINBOARD_AGENT": "1"})]
+    signals = []
+    monkeypatch.setattr(leftovers, "_processes", lambda: procs)
+    monkeypatch.setattr(leftovers, "_signal", lambda found, sig: signals.append((sorted(p.pid for p in found), sig.name)))
+    monkeypatch.setattr(leftovers, "STOP_GRACE_SECONDS", 0.05)
+    monkeypatch.setattr(leftovers, "_same", lambda p, boot, ticks: True)
+    monkeypatch.setattr(leftovers.shutil, "which", lambda name: None)  # no docker here
+
+    async def go():
+        from plainboard_protocol import LeftoverSpec
+
+        spec = LeftoverSpec(owners=OWNERS, stop=True)
+        first = await leftovers.leftovers(spec, set())
+        second = await leftovers.leftovers(spec, set())  # a second pause right after
+        await asyncio.sleep(0.2)
+        return first, second
+
+    first, second = asyncio.run(go())
+    assert [f.id for f in first.found] == ["10"] and second.found == []
+    assert signals == [([10], "SIGTERM"), ([10], "SIGKILL")]
+    assert leftovers._stopping == set()

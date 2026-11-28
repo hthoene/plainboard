@@ -2,7 +2,7 @@
 
 import json
 
-from conftest import idle, runs_of, wait_for
+from conftest import agents_by_slug, idle, runs_of, wait_for
 from plainboard_protocol import Leftover
 from test_flow import flow_events, make_member, manager_of, runner, tool_results
 from test_limit_pause import record, tick, two_subscriptions
@@ -76,3 +76,92 @@ def test_pausing_or_stopping_one_agent_stops_only_its_leftovers(client, project)
     assert len(fake.strays) == 2  # not while its turn runs
     fake.released = True
     wait_for(lambda: idle(client, pid) and fake.strays == [])
+
+
+def told(client, pid: int, agent_id: int):
+    return next(r for r in runs_of(client, pid) if r["agent_id"] == agent_id and r["status"] == "running")
+
+
+def test_pausing_and_resuming_a_project_quickly_stops_only_what_the_pause_still_holds(client, project):
+    pid = project["id"]
+    dev = make_member(client, pid, "Dev")
+    fake = runner(client)
+    fake.strays = [stray(dev, 10)]
+
+    # A turn told to wrap up, the pause over before it ends, twice: nothing is stopped when it ends.
+    chat(client, dev["id"], "HOLD\nSAY saved")
+    wait_for(lambda: any(r["status"] == "running" for r in runs_of(client, pid)))
+    for _ in range(2):
+        client.post(f"/api/projects/{pid}/pause")
+        wait_for(lambda: told(client, pid, dev["id"])["stop_requested_at"])
+        client.delete(f"/api/projects/{pid}/pause")
+        assert told(client, pid, dev["id"])["stop_requested_at"] is None
+    fake.released = True
+    wait_for(lambda: idle(client, pid))
+    assert len(fake.strays) == 1 and agents_by_slug(client, pid)["dev"]["running_jobs"] == 0
+    fake.released = False
+
+    # Idle with a job: each pause stops what runs then, each once; a job of the time in between only by the later pause.
+    chat(client, dev["id"], 'TOOL start_job {"command": "npm run first"}')
+    wait_for(lambda: idle(client, pid) and agents_by_slug(client, pid)["dev"]["running_jobs"] == 1)
+    client.post(f"/api/projects/{pid}/pause")
+    client.post(f"/api/projects/{pid}/pause")  # pressed twice
+    wait_for(lambda: agents_by_slug(client, pid)["dev"]["running_jobs"] == 0 and not fake.strays)
+    client.delete(f"/api/projects/{pid}/pause")
+    chat(client, dev["id"], 'TOOL start_job {"command": "npm run second"}')
+    wait_for(lambda: idle(client, pid) and agents_by_slug(client, pid)["dev"]["running_jobs"] == 1)
+    prompt = fake.specs[-1].prompt
+    assert prompt.count("npm run first") == 1 and prompt.count("process 10 ") == 1
+    client.post(f"/api/projects/{pid}/pause")
+    wait_for(lambda: agents_by_slug(client, pid)["dev"]["running_jobs"] == 0)
+    client.delete(f"/api/projects/{pid}/pause")
+    chat(client, dev["id"], "SAY back")
+    wait_for(lambda: idle(client, pid))
+    prompt = fake.specs[-1].prompt
+    assert prompt.count("npm run second") == 1 and "npm run first" not in prompt
+    assert sum(e["kind"] == "pause.jobs_stopped" for e in flow_events(client, pid)) == 2
+
+
+def test_an_agent_enabled_again_before_its_turn_ends_keeps_what_it_runs(client, project):
+    pid = project["id"]
+    dev = make_member(client, pid, "Dev")
+    fake = runner(client)
+    fake.strays = [stray(dev, 10)]
+    chat(client, dev["id"], "HOLD\nSAY saved")
+    wait_for(lambda: any(r["status"] == "running" for r in runs_of(client, pid)))
+    client.patch(f"/api/agents/{dev['id']}", json={"enabled": False})
+    assert told(client, pid, dev["id"])["stop_requested_at"]
+    client.patch(f"/api/agents/{dev['id']}", json={"enabled": True})
+    assert told(client, pid, dev["id"])["stop_requested_at"] is None
+    assert any("You were enabled again" in text for _, text in fake.notices)
+    fake.released = True
+    wait_for(lambda: idle(client, pid))
+    assert len(fake.strays) == 1
+
+
+def test_a_turn_told_by_pause_everything_or_the_limit_pause_keeps_what_it_runs_once_resumed(client, project):
+    pid = project["id"]
+    two_subscriptions(client)
+    manager = manager_of(client, pid)
+    fake = runner(client)
+    fake.strays = [stray(manager, 10)]
+    chat(client, manager["id"], "HOLD\nSAY saved")
+    wait_for(lambda: any(r["status"] == "running" for r in runs_of(client, pid)))
+    assert client.post("/api/pause").json()["paused"]
+    wait_for(lambda: told(client, pid, manager["id"])["stop_requested_at"])
+    assert client.delete("/api/pause").json()["paused"] is False
+    assert told(client, pid, manager["id"])["stop_requested_at"] is None
+
+    # The limit pause does not tell a chat to wrap up; a turn of a delegated assignment it does.
+    dev = make_member(client, pid, "Dev")
+    fake.strays.append(stray(dev, 20))
+    chat(client, dev["id"], "SAY nothing")  # a first turn of its own
+    wait_for(lambda: not any(r["status"] == "queued" for r in runs_of(client, pid)) and any(r["agent_id"] == dev["id"] and r["status"] == "succeeded" for r in runs_of(client, pid)))
+    record(client, Claude=0.99, Second=0.96)
+    assert tick(client) == (1, 0)
+    record(client, Second=0.2)
+    assert tick(client) == (0, 1)
+    fake.released = True
+    wait_for(lambda: idle(client, pid))
+    # Stopped by the limit pause (dev had no turn); the manager's chat ran through it and its stray stays.
+    assert [s.id for s in fake.strays] == ["10"]

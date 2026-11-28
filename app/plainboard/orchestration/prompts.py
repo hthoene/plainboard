@@ -920,6 +920,9 @@ LIMIT_PAUSE_OVER = (
     "[PlainBoard] The pause is over: a subscription of this project has room again. Forget the request to wrap up and go on with your work as usual."
 )
 
+PAUSE_EVERYTHING_OVER = "[PlainBoard] The pause is over: PlainBoard was resumed. Forget the request to wrap up and go on with your work as usual."
+AGENT_RESUMED = "[PlainBoard] You were enabled again: forget the request to wrap up and go on with your work as usual."
+
 LIMIT_RESUMED = "A subscription of this project has room again: PlainBoard ended its pause, and open assignments go on by themselves."
 
 

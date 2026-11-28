@@ -239,6 +239,32 @@ class JobSpec(BaseModel):
     command: str
     workspace: str
     credentials: Credentials
+    env: dict[str, str] = Field(default_factory=dict)  # e.g. PLAINBOARD_AGENT: whose it is (LeftoverSpec)
+
+
+class LeftoverOwner(BaseModel):
+    agent: str  # as in PLAINBOARD_AGENT, which its turns and jobs carry in their environment
+    workspace: str = ""  # its own folder (not one the team shares): what runs in it, or a container mounts from it, is its too
+
+
+class LeftoverSpec(BaseModel):
+    """What these agents left running outside their jobs: detached processes and Docker containers."""
+
+    owners: list[LeftoverOwner]
+    stop: bool = False
+    before: float | None = None  # unix time: only what started before then
+
+
+class Leftover(BaseModel):
+    agent: str
+    kind: Literal["process", "container"]
+    id: str  # the pid, or the container's id
+    label: str  # its command line, or the container's name and image
+
+
+class LeftoverResult(BaseModel):
+    found: list[Leftover] = Field(default_factory=list)
+    docker: str = ""  # why containers were not looked at ("": they were, or there is no Docker here)
 
 
 class JobState(BaseModel):

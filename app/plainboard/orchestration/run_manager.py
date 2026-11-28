@@ -26,10 +26,10 @@ import secrets
 import time
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
-from plainboard_protocol import CompletionSpec, JobSpec, JobState, ResultEvent, RunEvent, RunSpec, ToolBridgeSpec, ToolCallResult, WorkspaceSpec
+from plainboard_protocol import CompletionSpec, JobSpec, JobState, LeftoverOwner, LeftoverSpec, ResultEvent, RunEvent, RunSpec, ToolBridgeSpec, ToolCallResult, WorkspaceSpec
 from sqlalchemy import delete as sql_delete
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -1173,6 +1173,8 @@ class RunManager:
         if not running and (jobs := [job for job in await job_service.running(s) if job.agent_id == agent.id]):
             await self.enqueue(s, agent, RunTrigger.WAKE, prompts.wind_down_jobs_prompt(reason, [job_service.label(job) for job in jobs]), stopping=True)
             running = True
+        if not running and agent.id not in self._busy_agents:
+            await self._stop_leftovers(s, agent.id)
         await flow_log.record(s, agent.project_id, "agent.wound_down", agent_id=agent.id, paused=not agent.enabled, turns=len(rows), still_running=running, reason=reason)
         return running
 
@@ -1324,7 +1326,8 @@ class RunManager:
         The agent reads which ones with its next turn and starts again what it still needs.
         ``limits``: the project's limit pause (#187); an assignment that waited for a job gets the turn
         that goes on with it, which starts when the pause is over. ``before``: only jobs started before then.
-        Returns the labels of the stopped jobs per agent."""
+        What they left running outside their jobs is stopped too (``leftovers``).
+        Returns the labels of what was stopped per agent."""
         stopped: dict[int, list[str]] = {}
         for job in await job_service.running(s):
             if (agent_id is not None and job.agent_id != agent_id) or (project_id is not None and job.project_id != project_id) or job.agent_id in self._busy_agents:
@@ -1336,12 +1339,50 @@ class RunManager:
                     stopped.setdefault(job.agent_id, []).append(job_service.label(job))
             except ServiceError as exc:
                 log.warning("Pause: job %s was not stopped: %s", job.id, exc)
+        scope = (
+            [agent_id] if agent_id is not None else list(await s.scalars(select(Agent.id).where(Agent.project_id == project_id) if project_id is not None else select(Agent.id)))
+        )
+        for owner, items in (await self.leftovers(s, [a for a in scope if a not in self._busy_agents], before=before)).items():
+            stopped.setdefault(owner, []).extend(items)
         for owner, jobs in stopped.items():
             await inbox.push(s, owner, prompts.jobs_stopped_for_pause(jobs, limits=limits))
             await flow_log.record(s, (await s.get(Agent, owner)).project_id, "pause.jobs_stopped", agent_id=owner, jobs=len(jobs), limits=limits)
             if limits:
                 await self._settle(s, owner)
         return stopped
+
+    async def leftovers(self, s: AsyncSession, agent_ids: list[int], *, stop: bool = True, before: datetime | None = None) -> dict[int, list[str]]:
+        """What these agents left running outside their jobs on this instance's runner (#187): detached
+        processes and the Docker containers they started (runner leftovers.py). Stopped with ``stop``.
+        External runners are left alone. Returns their labels per agent."""
+        if not agent_ids:
+            return {}
+        rows = (await s.execute(select(Agent, Project).join(Project, Project.id == Agent.project_id).where(Agent.id.in_(agent_ids)))).all()
+        owners = [
+            LeftoverOwner(agent=str(agent.id), workspace="" if project.workspace_path else workspace_path(project, agent))
+            for agent, project in rows
+            if self.runners.runner_id(project.id) is None
+        ]
+        if not owners:
+            return {}
+        spec = LeftoverSpec(owners=owners, stop=stop, before=before.replace(tzinfo=UTC).timestamp() if before else None)
+        try:
+            result = await self.runners.builtin.leftovers(spec)
+        except (RunnerError, AttributeError) as exc:
+            log.warning("Leftover processes of agents %s were not looked at: %s", agent_ids, exc)
+            return {}
+        if result.docker:
+            log.info("Leftovers: %s", result.docker)
+        found: dict[int, list[str]] = {}
+        for item in result.found:
+            found.setdefault(int(item.agent), []).append(f"{item.kind} {item.id} ({truncate(item.label, 100)})")
+        return found
+
+    async def _stop_leftovers(self, s: AsyncSession, agent_id: int) -> None:
+        """An agent was stopped or paused and has no turn: what it left running outside its jobs stops, and it reads which."""
+        if items := (await self.leftovers(s, [agent_id])).get(agent_id):
+            await inbox.push(s, agent_id, prompts.leftovers_stopped(items))
+            await flow_log.record(s, (await s.get(Agent, agent_id)).project_id, "agent.leftovers_stopped", agent_id=agent_id, count=len(items))
 
     async def resume_all(self, s: AsyncSession) -> None:
         """End the pause: the members it switched off work on with what they had open, and what waited starts."""
@@ -1368,6 +1409,8 @@ class RunManager:
         for job in await job_service.running(s):
             if job.agent_id == agent.id:
                 stopped += await self.stop_job(s, job, settle=False)
+        if agent.id not in self._busy_agents:  # else when its cancelled turn has ended
+            await self._stop_leftovers(s, agent.id)
         return stopped
 
     async def check_turns(self) -> None:
@@ -1651,6 +1694,11 @@ class RunManager:
                         chat = (await s.execute(select(Run.trigger, Run.parent_run_id).where(Run.id == run_id))).one_or_none()
                         by_chat = chat is not None and (chat.trigger == RunTrigger.CHAT or chat.parent_run_id is not None)
                         await self._rest_jobs(s, agent_id, limits=True, before=limit_paused_at if by_chat else None)
+                    else:  # the agent was stopped or paused: what it left running outside its jobs stops (#187)
+                        ended = (await s.execute(select(Run.status, Run.stop_requested_at).where(Run.id == run_id))).one_or_none()
+                        enabled = await s.scalar(select(Agent.enabled).where(Agent.id == agent_id))
+                        if not enabled or (ended is not None and (ended.stop_requested_at is not None or ended.status == RunStatus.CANCELLED)):
+                            await self._stop_leftovers(s, agent_id)
                     await self._settle(s, agent_id)
                     await agent_service.publish_by_id(s, agent_id)
             except Exception:
@@ -1824,6 +1872,7 @@ class RunManager:
                 ),
                 mcp_servers=await mcp_service.specs_for_agent(s, agent),
                 skills=await skill_service.specs_for_agent(s, agent),
+                env={"PLAINBOARD_AGENT": str(agent.id)},  # what the turn leaves running is found by it (_leftovers)
             )
             return spec, ctx
 
@@ -2183,6 +2232,7 @@ class RunManager:
             command=command,
             workspace=workspace_path(project, agent),
             credentials=await permissions.credentials(s, project, values),
+            env={"PLAINBOARD_AGENT": str(agent.id)},
         )
         if not self.runners.ready(project.id):  # at once, not after the connect timeout
             raise ServiceError("Could not start the job: the runner this project runs on is not connected")

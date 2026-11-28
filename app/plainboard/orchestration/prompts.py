@@ -904,8 +904,11 @@ def limit_paused(until: str, jobs: dict[str, int] | None = None) -> str:
     if jobs is None:
         held = ""
     else:
-        listed = f" It stopped these background jobs: {', '.join(f'{name} {count}' for name, count in jobs.items())}." if jobs else ""
-        held = f"{listed} Jobs of turns still running stop when they end; each member reads which of its jobs stopped and starts again what it needs."
+        listed = f" It stopped what members still had running in the background: {', '.join(f'{name} {count}' for name, count in jobs.items())}." if jobs else ""
+        held = (
+            f"{listed} What turns still running started (jobs, processes, containers) stops when they end; each member reads what of it "
+            "stopped and starts again what it needs."
+        )
     return (
         "PlainBoard paused this project by itself: every subscription it may use is nearly used up. No new turn starts "
         f"(a chat with the user still does), running ones wrap up, open assignments stay open.{held} It goes on by itself {when}."
@@ -923,8 +926,15 @@ LIMIT_RESUMED = "A subscription of this project has room again: PlainBoard ended
 def jobs_stopped_for_pause(jobs: list[str], limits: bool = False) -> str:
     why = "This project was paused because its subscriptions were nearly used up; PlainBoard" if limits else "PlainBoard was paused for maintenance and"
     return (
-        f"{why} stopped these background jobs of yours before they ended: {'; '.join(jobs)}. "
+        f"{why} stopped what you still had running in the background (jobs, processes, containers): {'; '.join(jobs)}. "
         "Start again what you still need: the servers of a preview, a check you waited for."
+    )
+
+
+def leftovers_stopped(items: list[str]) -> str:
+    return (
+        f"You were stopped or paused, so PlainBoard stopped what you had left running in the background outside your jobs: {'; '.join(items)}. "
+        "Start again what you still need when you go on."
     )
 
 

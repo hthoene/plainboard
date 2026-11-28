@@ -53,6 +53,10 @@ from .models import (
     VolumeUsage,
     JobSpec,
     JobState,
+    Leftover,
+    LeftoverOwner,
+    LeftoverResult,
+    LeftoverSpec,
     LimitsEvent,
     LimitWindow,
     McpServerSpec,
@@ -93,6 +97,10 @@ from .models import (
 
 __all__ = [
     "GitCommit",
+    "Leftover",
+    "LeftoverOwner",
+    "LeftoverResult",
+    "LeftoverSpec",
     "GitLogResult",
     "GitLogSpec",
     "GitPresentResult",

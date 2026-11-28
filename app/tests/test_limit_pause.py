@@ -94,12 +94,12 @@ def test_the_limit_pause_stops_the_background_jobs_on_this_instance_but_not_thos
     # The member reads it with its next turn; a job a chat starts during the pause is the user's wish and stays.
     chat(client, dev["id"], 'TOOL start_job {"command": "npm run preview"}')
     wait_for(lambda: idle(client, pid))
-    assert "nearly used up; PlainBoard stopped these background jobs of yours" in fake.specs[-1].prompt and "npm run dev" in fake.specs[-1].prompt
+    assert "nearly used up; PlainBoard stopped what you still had running in the background" in fake.specs[-1].prompt and "npm run dev" in fake.specs[-1].prompt
     assert agents_by_slug(client, pid)["dev"]["running_jobs"] == 1
     # The manager's note says which, without a turn of its own.
     chat(client, manager["id"], "SAY ok")
     wait_for(lambda: idle(client, pid))
-    assert "It stopped these background jobs: Dev 1." in fake.specs[-1].prompt
+    assert "It stopped what members still had running in the background: Dev 1." in fake.specs[-1].prompt
 
 
 def test_the_limit_pause_ends_with_the_reset_and_never_holds_with_an_api_key(client, project):

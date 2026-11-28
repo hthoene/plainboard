@@ -90,12 +90,17 @@ async def list_jobs(ctx: ToolContext, _args) -> str:
     for job in jobs:
         code = f", exit {job.exit_code}" if job.exit_code is not None else ""
         lines.append(f"#{job.id} {job.status}{code}: {truncate(job.command, 100)} · log: {job.log_path}")
+    names = {a.id: a.name for a in await agent_service.list_for_project(ctx.session, ctx.project.id)} if ctx.agent.is_manager else {}
     if ctx.agent.is_manager:
-        names = {a.id: a.name for a in await agent_service.list_for_project(ctx.session, ctx.project.id)}
         team = [j for j in await job_service.running_for_project(ctx.session, ctx.project.id) if j.agent_id != ctx.agent.id]
         if team:
             lines.append("Running in the team:")
             lines += [f"#{j.id} {names.get(j.agent_id, '?')}, since {_age(j)}: {truncate(j.command, 100)}" for j in team]
+    # Detached processes and containers of earlier turns (#187): they stop when their agent is paused or stopped.
+    left = await ctx.runs.leftovers(ctx.session, list(names) or [ctx.agent.id], stop=False)
+    if left:
+        lines.append("Left running outside jobs by earlier turns (stopped when paused or stopped):")
+        lines += [f"{names[agent_id] + ': ' if names else ''}{item}" for agent_id, items in left.items() for item in items]
     return "\n".join(lines) or "No jobs."
 
 

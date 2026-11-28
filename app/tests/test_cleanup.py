@@ -9,7 +9,7 @@ from plainboard_protocol import CleanedItem, CleanupCandidate, CleanupResult, Co
 from sqlalchemy import select
 
 from plainboard.db import sessionmaker
-from plainboard.models import Agent, FlowEvent, InboxItem, Job, Project, Repository, Run, RunTrigger, utcnow
+from plainboard.models import Agent, Assignment, FlowEvent, InboxItem, Job, Project, Repository, Run, RunTrigger, utcnow
 from plainboard.orchestration import prompts
 from plainboard.services import cleanup, storage
 
@@ -211,13 +211,13 @@ def test_a_cleanup_run_of_its_own_decides_and_the_manager_hears_it_without_a_tur
     (spec,) = asked
     assert (spec.provider, spec.model, spec.system_prompt) == ("claude_code", "claude-sonnet-5-5", prompts.CLEANUP_SYSTEM)
     assert spec.prompt.startswith("Disk space: 85 % used") and "free 8.0 GB." in spec.prompt  # to a little below the target
-    assert f"Safe (made again when needed):\n- 30.0 GB {target}: build output of Manager; safe\n" in spec.prompt  # the same lines as list_cleanup
-    assert f"- 6.0 GB {workdir}: extra work folder of Manager; unsure: uncommitted changes" in spec.prompt
+    assert f"Safe (made again when needed):\n- 30.0 GB {target}: build output of Manager; safe" in spec.prompt  # the same lines as list_cleanup
+    assert workdir not in spec.prompt  # unsure ones are never the model's to delete
     assert kept not in spec.prompt  # kept ones are not even offered
     assert [(d.paths, d.force) for d in fake.deletes] == [([target], False)]  # only what was offered
     (note,) = [t for t in _inbox(client, manager["id"]) if "cleanup run" in t]
     assert "A cleanup run (claude-sonnet-5-5 (Claude)) decided for you" in note and f"Deleted 30.0 GB: {target} 30.0 GB." in note
-    assert f"Left: {workdir} 6.0 GB (may hold work)." in note
+    assert "Unsure, not deleted" in note and f"- 6.0 GB {workdir}: extra work folder of Manager; unsure: uncommitted changes" in note
     assert not _told(fake, "Disk space")  # no turn of the manager
 
     async def runs():
@@ -364,3 +364,85 @@ def test_above_the_target_shared_caches_are_trimmed_and_their_users_hear_it(clie
     assert client.put("/api/settings", json={"values": {"cleanup": False}}).status_code < 300
     _tick(client, utcnow() + timedelta(hours=4))
     assert len(fake.trims) == 1  # switched off
+
+
+def test_the_regular_cleanup_keeps_the_disk_small_below_the_target_and_the_manager_hears_it(client, project):
+    pid, slug = project["id"], project["slug"]
+    wait_for(lambda: idle(client, pid))
+    manager = agents_by_slug(client, pid)["manager"]
+    fake = client.app_ref.state.runner
+    target, gone, extra, unsure, busy = (f"/workspaces/{slug}/manager/repo/target", f"/workspaces/{slug}/gone", f"/workspaces/{slug}/manager/ws-2", f"/workspaces/{slug}/manager/ws-3", f"/workspaces/{slug}/manager/web/node_modules")
+    fake.machine_usage = MachineUsage(volumes=[_volume(60)])
+    fake.cleanup_result = CleanupResult(freed=GB, items=[CleanedItem(path=f"/tmp/{slug}-parity1", what="tmp", bytes=GB)])
+    fake.candidates = [
+        CleanupCandidate(path=target, what="build", bytes=9 * GB, safety="safe"),
+        CleanupCandidate(path=gone, what="folder", bytes=4 * GB, safety="safe"),
+        CleanupCandidate(path=extra, what="workdir", bytes=3 * GB, safety="safe"),
+        CleanupCandidate(path=unsure, what="workdir", bytes=2 * GB, safety="unsure", why="notes.txt is not in a clone"),
+        CleanupCandidate(path=busy, what="build", bytes=2 * GB, safety="busy"),
+    ]
+    watcher = client.app_ref.state.cleanup
+    _tick(client)
+    client.portal.call(watcher.wait_regular)
+    (spec,) = fake.cleanups
+    assert spec.tmp_days == storage.TMP_DAYS and not spec.folders  # logs, old cache files, temp leftovers: no agent folder
+    (trim,) = fake.trims
+    assert trim.need == storage.ROUTINE_TRIM and trim.large == storage.TRIM_LARGE  # whatever the disk
+    assert [d.paths for d in fake.deletes] == [[gone, extra]]  # the build output's agent worked just now: it stays for now
+    assert not any(d.force for d in fake.deletes)
+    (note,) = [t for t in _inbox(client, manager["id"]) if "Regular cleanup" in t]
+    assert f"{gone} 4.0 GB" in note and f"{extra} 3.0 GB" in note and f"/tmp/{slug}-parity1 1.0 GB" in note
+    assert f"- 2.0 GB {unsure}: extra work folder of Manager; unsure: notes.txt is not in a clone" in note and busy not in note
+    assert not _told(fake, "Regular cleanup")  # no turn
+    (done,) = client.get("/api/usage").json()["cleanups"]
+    assert done["level"] == "routine" and done["freed"] == 8 * GB
+
+    _tick(client, utcnow() + timedelta(hours=2))
+    client.portal.call(watcher.wait_regular)
+    assert len(fake.trims) == 1  # once a day
+
+    _tick(client, utcnow() + timedelta(hours=25))
+    client.portal.call(watcher.wait_regular)
+    assert len(fake.trims) == 2 and fake.deletes[-1].paths == [target]  # idle long enough now
+    note = [t for t in _inbox(client, manager["id"]) if "Regular cleanup" in t][-1]
+    assert unsure not in note  # named once
+
+    assert client.put("/api/settings", json={"values": {"cleanup": False}}).status_code < 300
+    _tick(client, utcnow() + timedelta(hours=50))
+    client.portal.call(watcher.wait_regular)
+    assert len(fake.trims) == 2  # switched off
+
+
+def test_the_regular_cleanup_after_an_assignment_deletes_only_that_agents_extra_work_folders(client, project):
+    pid, slug = project["id"], project["slug"]
+    wait_for(lambda: idle(client, pid))
+    manager = agents_by_slug(client, pid)["manager"]
+    fake = client.app_ref.state.runner
+    watcher = client.app_ref.state.cleanup
+    fake.machine_usage = MachineUsage(volumes=[_volume(50)])
+    _tick(client)  # the daily one
+    client.portal.call(watcher.wait_regular)
+    extra, kept, target = f"/workspaces/{slug}/manager/wt", f"/workspaces/{slug}/manager/ws", f"/workspaces/{slug}/manager/repo/target"
+    fake.candidates = [
+        CleanupCandidate(path=extra, what="workdir", bytes=GB, safety="safe"),
+        CleanupCandidate(path=kept, what="workdir", bytes=GB, safety="keep", why="ws has unpushed commits"),
+        CleanupCandidate(path=target, what="build", bytes=5 * GB, safety="safe"),
+    ]
+
+    async def ended():
+        async with sessionmaker()() as s:
+            s.add(Assignment(project_id=pid, agent_id=manager["id"], title="Done", instructions="x", status="done", finished_at=utcnow() + timedelta(minutes=1)))
+            await s.commit()
+
+    client.portal.call(ended)
+    deletes = len(getattr(fake, "deletes", []))
+    _tick(client, utcnow() + timedelta(minutes=5))
+    client.portal.call(watcher.wait_regular)
+    assert not fake.candidate_specs[-1].home and [f.path for f in fake.candidate_specs[-1].folders] == [f"/workspaces/{slug}/manager"]
+    assert [d.paths for d in fake.deletes[deletes:]] == [[extra]]  # not the build output, not what is kept
+    (note,) = [t for t in _inbox(client, manager["id"]) if "assignment ended" in t]
+    assert f"{extra} 1.0 GB" in note and "Nothing to do." in note
+    assert client.get("/api/usage").json()["cleanups"][0]["level"] == "after"
+    _tick(client, utcnow() + timedelta(minutes=10))
+    client.portal.call(watcher.wait_regular)
+    assert len(fake.deletes) == deletes + 1  # each ended assignment once

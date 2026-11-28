@@ -335,6 +335,8 @@ it yourself and carry on; never report it as a blocker or ask the user to instal
 is permanent and shared by all agents (put PATH changes in ~/.profile); system packages are lost when the
 container is rebuilt. Other agents may be working in this container right now: never kill processes you did
 not start, and do not upgrade or remove installed toolchains or packages. Add what you need alongside them.
+The disk is shared: once your assignment is done, remove the extra clones, worktrees and big temporary files
+(/tmp, scratch folders) you made for it.
 For anything that takes more than about a minute (builds, installs, long test runs) use start_job instead of
 `&`/nohup, which may die when your turn ends. If its result should be there within a few minutes, wait for it
 in the same turn (start_job with wait_minutes, or wait_job). If it takes longer, end your turn: the result
@@ -1127,8 +1129,6 @@ CLEANUP_SYSTEM = (
     "- safe: made again when needed. Delete.\n"
     "- busy: a member works there now; deleting makes its next build slower. Delete only build outputs and caches, "
     "and only as far as needed to get below the target.\n"
-    "- unsure: may hold someone's work. Delete only if what it holds and its age show it is only made again "
-    "(build output, cache, downloads, logs); else leave it.\n"
     'Answer only with JSON: {"delete": [paths exactly as listed], "keep": [{"path": "...", "why": "a few words"}]}; '
     "keep lists the busy and unsure ones you leave."
 )

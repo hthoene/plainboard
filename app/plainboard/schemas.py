@@ -246,7 +246,7 @@ class FolderOut(BaseModel):
 
 class CleanedOut(BaseModel):
     path: str
-    what: str  # build | cache | folder | workdir | logs | server
+    what: str  # build | cache | folder | workdir | logs | home | tmp | server
     bytes: int = 0
 
 
@@ -254,7 +254,7 @@ class CleanupOut(BaseModel):
     """A cleanup (services/cleanup.py): by the manager, in an emergency by itself, or servers stopped for memory."""
 
     at: UTCDateTime
-    level: str  # manager | emergency | memory
+    level: str  # manager | emergency | trim | routine | after | memory
     freed: int = 0
     free_before: int = 0
     total: int = 0

@@ -856,14 +856,14 @@ export interface UsageStorage {
   notices: StorageNotice[];
 }
 
-/** What a cleanup removed (by the manager, in an emergency by itself, shared caches trimmed above the target), or which servers it stopped (level "memory"). */
+/** What a cleanup removed (by the manager, in an emergency by itself, shared caches trimmed above the target, the regular cleanup daily or after an assignment), or which servers it stopped (level "memory"). */
 export interface UsageCleanup {
   at: string;
-  level: "manager" | "emergency" | "trim" | "memory";
+  level: "manager" | "emergency" | "trim" | "routine" | "after" | "memory";
   freed: number;
   free_before: number;
   total: number;
-  items: { path: string; what: "build" | "cache" | "folder" | "workdir" | "logs" | "home" | "server"; bytes: number }[];
+  items: { path: string; what: "build" | "cache" | "folder" | "workdir" | "logs" | "home" | "tmp" | "server"; bytes: number }[];
   kept: string[];
   told: boolean;
   by: string;

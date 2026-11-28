@@ -1573,7 +1573,9 @@
     "summary": {
       "manager": "{{when}}: {{by}} ({{project}}) deleted {{freed}}.",
       "emergency": "{{when}}: near full, PlainBoard deleted {{freed}} by itself ({{free}} were free).",
-      "trim": "{{when}}: above the target, PlainBoard trimmed shared tool caches by {{freed}} ({{free}} were free)."
+      "trim": "{{when}}: above the target, PlainBoard trimmed shared tool caches by {{freed}} ({{free}} were free).",
+      "routine": "{{when}}: regular cleanup, PlainBoard deleted {{freed}} of what is made again when needed ({{free}} were free).",
+      "after": "{{when}}: after an assignment of {{by}} ({{project}}), PlainBoard deleted its extra work folders without own work, {{freed}}."
     },
     "lastServers": "Servers stopped last",
     "stoppedSummary_one": "{{when}}: {{count}} server stopped, memory was short.",
@@ -1585,6 +1587,7 @@
       "workdir": "Extra work folder of an agent",
       "home": "Folder in the shared home",
       "logs": "Job logs",
+      "tmp": "Leftover in the temp folder",
       "server": "Server"
     },
     "retention": "Attachments",

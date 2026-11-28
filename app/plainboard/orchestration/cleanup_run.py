@@ -3,7 +3,8 @@
 When the storage watcher (orchestration/cleanup.py) would tell a manager to clean up, this decides instead: one
 completion of the project's cleanup model (``Project.cleanup_*``; default: the small model of the manager's
 provider, never another one) gets the disk state and the project's candidates (only its own, as list_cleanup
-shows them) and answers which to delete. The app deletes them by the same rules as delete_cleanup (only the
+shows them) and answers which to delete (only safe and busy ones: unsure ones are named to the manager, with a turn only when the disk
+is above the target and the run could not free enough). The app deletes them by the same rules as delete_cleanup (only the
 project's data, never what is kept) and the manager hears in its updates what went, what stayed and why,
 without a turn. Nothing runs while one runs for the project, nor when nothing new can go: candidates a run
 left alone are not offered again until the disk is fine again. If the model can't be used or fails, the
@@ -15,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from plainboard_protocol import CompletionResult, CompletionSpec, ProviderInfo
@@ -36,7 +37,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-OFFERED = ("safe", "busy", "unsure")
+OFFERED = ("safe", "busy")  # unsure ones are never the model's to delete: the manager hears them
 MOST = 30  # candidates offered to one run, the biggest first
 
 
@@ -50,6 +51,8 @@ class Order:
     head: str  # the disk state, one line
     need: int  # bytes to free to get a little below the target
     busy: set[int]
+    unsure: list[storage.Item] = field(default_factory=list)  # named to the manager, not offered
+    high: bool = False  # at or above the target: unsure ones left give the manager a turn
 
 
 class CleanupRuns:
@@ -184,9 +187,14 @@ class CleanupRuns:
             lines.append("Left: " + "; ".join(f"{p} {format_bytes(offered[p].candidate.bytes)} ({why.get(p) or offered[p].candidate.safety})" for p in left[:10]) + ".")
         if skipped:
             lines.append("Not deleted: " + "; ".join(skipped[:10]) + ".")
+        if order.unsure:
+            lines.append("Unsure, not deleted (may hold someone's work: delete with delete_cleanup force=true if it is only made again, or have its member clean up):")
+            lines += [storage.item_line(i, order.project_id, order.busy) for i in order.unsure[:10]]
         if order.need > freed:
             lines.append(f"Still about {format_bytes(order.need - freed)} over the target: what is left needs a member (push or drop work) or the user.")
         await inbox.push(s, manager.id, "\n".join(lines))
+        if order.high and order.unsure and order.need > freed:
+            await self.runs.request_wake(s, manager.id)
 
     async def _fallback(self, s: AsyncSession, order: Order, why: str) -> None:
         """The run could not decide: the manager gets the notice and a turn, as before the cleanup runs."""

@@ -327,3 +327,18 @@ def test_extra_work_folders_of_an_agent_are_offered_and_go_only_without_own_work
     listed = subprocess.run(["git", "worktree", "list"], cwd=repo, capture_output=True, text=True).stdout
     assert "ws-b" not in listed and "ws-c" in listed  # the main clone forgot the deleted worktree, and keeps its branch
     assert subprocess.run(["git", "rev-parse", "--verify", "-q", "feature"], cwd=repo, capture_output=True).returncode == 0
+
+
+def test_temp_leftovers_go_only_when_nothing_in_them_changed_for_days_and_nobody_works_there(tmp_path, monkeypatch):
+    tmp = tmp_path / "tmp"
+    old = time.time() - 5 * DAY
+    for name in ("old-dir", "busy-dir", "fresh-dir", "plainboard-signins", ".X11-unix"):
+        (tmp / name).mkdir(parents=True)
+        (tmp / name / "f").write_text("x")
+    (tmp / "old-file.log").write_text("x")
+    (tmp / "fresh-dir" / "new").write_text("x")
+    for path in [*tmp.rglob("*"), tmp]:
+        if path.name != "new":
+            os.utime(path, (old, old))
+    monkeypatch.setattr(cleanup, "_cwds", lambda: {str(tmp / "busy-dir")})
+    assert [p.name for p in cleanup.tmp_leftovers(time.time() - 3 * DAY, tmp)] == ["old-dir", "old-file.log"]

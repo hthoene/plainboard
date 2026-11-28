@@ -657,6 +657,18 @@ def lands_on_red(monkeypatch):
     monkeypatch.setattr(landings, "RED_HOLD_SECONDS", 0)
 
 
+@pytest.fixture(autouse=True)
+def no_regular_cleanup(request, monkeypatch):
+    """The daily cleanup would run at the first look at the disk: only the tests about it ("regular" in their name) have it."""
+    if "regular" not in request.node.name:
+        from plainboard.orchestration.cleanup import CleanupWatcher
+
+        async def skip(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(CleanupWatcher, "_regular", skip)
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("PLAINBOARD_DATA_DIR", str(tmp_path / "data"))

@@ -81,7 +81,8 @@ SETTINGS: dict[str, SettingDef] = {
     "cleanup": SettingDef(True),  # the emergency cleanup and stopping idle servers when memory is short
     "cleanup_memory_free_percent": SettingDef(10),  # below: servers nobody opened for long are stopped
     "storage_notices": SettingDef(None, managed=True),  # the last notices, newest first
-    "storage_cleanups": SettingDef(None, managed=True),  # the last cleanups, by the manager or in an emergency
+    "storage_cleanups": SettingDef(None, managed=True),  # the last cleanups: by the manager, regular, trims, in an emergency
+    "storage_routine_at": SettingDef(None, managed=True),  # per runner ("built-in" or its id): when the daily cleanup ran last
     "cleanup_servers_last": SettingDef(None, managed=True),  # servers the memory cleanup stopped last
     # Everything is paused (services/pause.py): who did it, since when, and which members that switched off.
     "pause": SettingDef(None, managed=True),

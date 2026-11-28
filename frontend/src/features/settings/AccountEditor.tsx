@@ -86,7 +86,7 @@ export function AccountEditor() {
           checked={me.show_mentions}
           onChange={(show_mentions) => {
             if (show_mentions) askToNotify();
-            void run({ show_mentions });
+            return run({ show_mentions });
           }}
           label={t("account.showMentions")}
         />

@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { GitBranch, Plus, RefreshCw, Sparkles, Trash2, Upload } from "lucide-react";
 import { useRef, useState } from "react";
+import { useOptimistic } from "../../lib/hooks";
 import { useTranslation } from "react-i18next";
 import { api } from "../../api/client";
 import { useAgents } from "../../api/queries";
@@ -117,8 +118,9 @@ function SkillRow({
   const file = useRef<HTMLInputElement>(null);
   const path = `${base}/${skill.id}`;
   const patch = (body: Partial<Pick<Skill, "enabled" | "all_agents" | "agent_ids">>) => run(`${path}/patch`, () => api.patch(path, body));
+  const [agentIds, changeAgents] = useOptimistic(skill.agent_ids);
   const toggleAgent = (id: number) =>
-    patch({ agent_ids: skill.agent_ids.includes(id) ? skill.agent_ids.filter((a) => a !== id) : [...skill.agent_ids, id] });
+    void changeAgents(agentIds.includes(id) ? agentIds.filter((a) => a !== id) : [...agentIds, id], (agent_ids) => patch({ agent_ids }));
   const remove = () => confirm(t("skills.confirmDelete", { name: skill.name })) && run(path, () => api.del(path));
   const source = skill.source === "git" ? [skill.source_url, skill.source_path, skill.source_ref].filter(Boolean).join(" · ") : t("skills.uploaded");
 
@@ -163,7 +165,7 @@ function SkillRow({
       {!skill.all_agents && (
         <div className="flex flex-wrap gap-1.5">
           {agents.map((agent) => {
-            const on = skill.agent_ids.includes(agent.id);
+            const on = agentIds.includes(agent.id);
             return (
               <button
                 key={agent.id}
@@ -176,7 +178,7 @@ function SkillRow({
               </button>
             );
           })}
-          {skill.agent_ids.length === 0 && <span className="text-fg-3">{t("skills.noAgents")}</span>}
+          {agentIds.length === 0 && <span className="text-fg-3">{t("skills.noAgents")}</span>}
         </div>
       )}
     </div>

@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import type {
   Account,
@@ -106,6 +106,18 @@ export const useSettings = () => useQuery({ queryKey: qk.settings, queryFn: () =
 export const useAccounts = () => useQuery({ queryKey: qk.accounts, queryFn: () => api.get<Account[]>("/accounts") });
 export const useSecrets = (pid: number | null) =>
   useQuery({ queryKey: qk.secrets(pid), queryFn: () => api.get<Secret[]>(pid === null ? "/secrets" : `/projects/${pid}/secrets`) });
+/** Change a project and put what the server sends back into the list, instead of loading all projects again (#188). */
+export async function patchProject(qc: QueryClient, id: number, body: Record<string, unknown>): Promise<Project> {
+  const fresh = await api.patch<Project>(`/projects/${id}`, body);
+  qc.setQueryData<Project[]>(qk.projects, (list) => list?.map((p) => (p.id === fresh.id ? { ...p, ...fresh } : p)));
+  return fresh;
+}
+/** Save PlainBoard settings and keep what the server sends back: it is what loading them again would give. */
+export async function putSettings(qc: QueryClient, values: Record<string, unknown>): Promise<SettingsResponse> {
+  const fresh = await api.put<SettingsResponse>("/settings", { values });
+  qc.setQueryData(qk.settings, fresh);
+  return fresh;
+}
 export const useProjects = () => useQuery({ queryKey: qk.projects, queryFn: () => api.get<Project[]>("/projects") });
 export const useAgents = (pid: number) =>
   useQuery({ queryKey: qk.agents(pid), queryFn: () => api.get<Agent[]>(`/projects/${pid}/agents`) });

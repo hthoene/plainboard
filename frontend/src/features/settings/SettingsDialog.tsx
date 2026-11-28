@@ -4,7 +4,7 @@ import { CheckCircle2, X, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../../api/client";
-import { qk, useAccounts, useMe, useMeta, useSettings } from "../../api/queries";
+import { putSettings, qk, useAccounts, useMe, useMeta, useSettings } from "../../api/queries";
 import type { CheckResult, RetentionPreview } from "../../api/types";
 import { ApiKeyEditor } from "../../components/ApiKeyEditor";
 import { SaveRow, SavedAtOnce, SettingsLayout, type SettingsSection } from "../../components/SettingsLayout";
@@ -85,8 +85,7 @@ export function SettingsDialog({ open, onClose, section }: { open: boolean; onCl
   const set = (patch: Values) => setValues((v) => ({ ...v, ...patch }));
   const dirty = (...keys: string[]) => keys.some((k) => values[k] !== stored[k]);
   const save = async (keys: string[], more: Values = {}) => {
-    await api.put("/settings", { values: { ...Object.fromEntries(keys.map((k) => [k, values[k]])), ...more } });
-    await qc.invalidateQueries({ queryKey: qk.settings });
+    await putSettings(qc, { ...Object.fromEntries(keys.map((k) => [k, values[k]])), ...more });
   };
   const providers = meta.data?.providers ?? [];
   const provider = providers.find((p) => p.name === (values.default_provider ?? "claude_code"));
@@ -138,8 +137,7 @@ export function SettingsDialog({ open, onClose, section }: { open: boolean; onCl
         enabled={stored.mcp_enabled ?? true}
         admin={me.is_admin}
         onToggle={async (on) => {
-          await api.put("/settings", { values: { mcp_enabled: on } });
-          await qc.invalidateQueries({ queryKey: qk.settings });
+          await putSettings(qc, { mcp_enabled: on });
         }}
       />
     ),

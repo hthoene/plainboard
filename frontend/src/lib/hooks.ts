@@ -143,3 +143,24 @@ export function useDebounced<T>(value: T, ms: number): T {
   }, [value, ms]);
   return out;
 }
+
+/** A value that a control saves at once, shown changed before the server answers (#188): `[shown, change]`.
+ * `change(next, save)` calls `save(next)`; while the promise it returns runs, `next` is shown, after it the
+ * value again (the saved one, or the old one when it failed). A failure is passed on to the caller. A save that
+ * returns no promise changes local state, which shows at once anyway. */
+export function useOptimistic<T>(value: T) {
+  const [pending, setPending] = useState<{ value: T } | null>(null);
+  const last = useRef(0);
+  const change = async (next: T, save: (next: T) => unknown) => {
+    const result = save(next);
+    if (!(result instanceof Promise)) return;
+    const mine = ++last.current;
+    setPending({ value: next });
+    try {
+      await result;
+    } finally {
+      if (last.current === mine) setPending(null);
+    }
+  };
+  return [pending ? pending.value : value, change] as const;
+}

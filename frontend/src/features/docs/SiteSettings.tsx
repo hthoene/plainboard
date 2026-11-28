@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Cloud, Copy, Cpu, ExternalLink, Globe2, KeyRound, Loader2, Plus, RefreshCw, ShieldAlert, Trash2, TriangleAlert, X } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -39,9 +39,12 @@ export function SiteSettings({ pid, site, isOwner, section, onSection, onDeleted
 
 function usePatch(pid: number, site: DocSite) {
   const refresh = useDocsRefresh(pid);
+  const qc = useQueryClient();
+  // The site as the server sends it back is shown at once; what else a change may touch (pages, outline) loads behind it (#188).
   return async (body: Record<string, unknown>) => {
-    await api.patch(`${base(pid)}/sites/${site.id}`, body);
-    await refresh();
+    const fresh = await api.patch<DocSite>(`${base(pid)}/sites/${site.id}`, body);
+    qc.setQueryData<DocSite[]>(dk.sites(pid), (list) => list?.map((s) => (s.id === fresh.id ? fresh : s)));
+    void refresh();
   };
 }
 
@@ -329,7 +332,7 @@ function DocAgent({ pid, site }: { pid: number; site: DocSite }) {
       </FieldRow>
       <SaveRow dirty={dirty} onSave={() => patch({ agent_provider: provider, agent_model: model, agent_effort: effort })} />
       <div className="space-y-1">
-        <Toggle checked={site.restructure_check} onChange={(v) => void patch({ restructure_check: v })} label={t("docs.settings.restructure")} />
+        <Toggle checked={site.restructure_check} onChange={(v) => patch({ restructure_check: v })} label={t("docs.settings.restructure")} />
         <p className="text-fg-3">{t("docs.settings.restructureHint")}</p>
       </div>
     </div>
